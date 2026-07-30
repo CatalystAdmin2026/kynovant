@@ -133,7 +133,7 @@ export default function MissionEntry({ clientName, clientId, onComplete }: Props
       className="fixed inset-0 z-50 bg-[#080909] flex items-center justify-center px-6"
       style={wrapperStyle}
       aria-live="polite"
-      aria-label="Welcome to Catalyst"
+      aria-label="Welcome to Kynovant"
     >
       <div className="flex flex-col items-center text-center w-full max-w-sm gap-10">
 
@@ -210,7 +210,7 @@ export default function MissionEntry({ clientName, clientId, onComplete }: Props
               disabled={step < 4}
               className="w-full bg-[#c9a24d] text-black py-3.5 text-[11px] font-bold tracking-[0.14em] uppercase hover:bg-[#d4b56a] transition-colors disabled:opacity-0 min-h-[44px]"
             >
-              Enter Catalyst &rarr;
+              Enter Kynovant &rarr;
             </button>
           </div>
         </div>

@@ -168,7 +168,7 @@ export default function ProgramsPage() {
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 xl:gap-8 items-start">
 
-              {/* ── Card 1: Catalyst Coaching Elite ── */}
+              {/* ── Card 1: Kynovant Elite ── */}
               <div className="elite-card bg-[#0e0f10] border border-white/[0.07] flex flex-col">
                 {/* Top accent */}
                 <div className="h-px w-full bg-gradient-to-r from-transparent via-white/15 to-transparent" />
