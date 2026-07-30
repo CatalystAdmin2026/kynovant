@@ -182,7 +182,7 @@ export default function ProgramAuditPanel({ programTemplateId }: Props) {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest mb-0.5">
-                Catalyst Insights
+                Kynovant Insights
               </p>
               <h3 className="text-sm font-semibold text-gray-900">Program Intelligence</h3>
               {!result && !loading && (

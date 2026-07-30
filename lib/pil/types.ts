@@ -12,7 +12,7 @@
 // runs. Format: CATEGORY_RULE_QUALIFIER (e.g. VOLUME_HIGH_DIRECT).
 // Do not rename a code after it has been surfaced to coaches.
 //
-// Customer-facing branding: "Catalyst Insights → Training"
+// Customer-facing branding: "Kynovant Insights → Training"
 // Internal architecture name: Programming Intelligence Layer (PIL)
 // These must never appear in the same context.
 // ─────────────────────────────────────────────────────────────

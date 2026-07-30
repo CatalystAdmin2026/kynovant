@@ -1,20 +1,20 @@
-# Catalyst Insights — UI and UX Principles
+# Kynovant Insights — UI and UX Principles
 
-**Scope:** All Catalyst Insights surfaces: Training, Nutrition, Recovery, Check-In.
-**Audience:** Engineers and designers implementing any Catalyst Insights panel.
+**Scope:** All Kynovant Insights surfaces: Training, Nutrition, Recovery, Check-In.
+**Audience:** Engineers and designers implementing any Kynovant Insights panel.
 **Relationship:** This document governs presentation. The Programming Intelligence Doctrine governs calculation. The two must never be confused — how something is determined is separate from how it is shown.
 
 ---
 
 ## The Five-Second Rule
 
-A coach should understand the overall health of a workout or program within five seconds of opening Catalyst Insights.
+A coach should understand the overall health of a workout or program within five seconds of opening Kynovant Insights.
 
 The coach should never have to read the top of the page.
 
 If a coach must parse a sentence before understanding the screen, the hierarchy is wrong. If a coach must scroll before seeing the most important signal, the layout is wrong. If a coach must expand a section before knowing whether anything is wrong, the design has failed its primary job.
 
-This rule is not a guideline. It is the governing constraint for every Catalyst Insights layout decision.
+This rule is not a guideline. It is the governing constraint for every Kynovant Insights layout decision.
 
 ---
 
@@ -45,7 +45,7 @@ The dimensional health of a Blueprint or Program must communicate itself visuall
 
 **Surface one thing that most needs the coach's attention. Not two. Not five. One.**
 
-Every Catalyst Insights panel surfaces a single **Highest Priority** — the finding with the highest severity and coaching consequence across all dimensions. It appears prominently below the status header, as a dedicated element — not as the first item in a list.
+Every Kynovant Insights panel surfaces a single **Highest Priority** — the finding with the highest severity and coaching consequence across all dimensions. It appears prominently below the status header, as a dedicated element — not as the first item in a list.
 
 Why one, not two: Two highlighted findings creates comparison. The coach must decide which to look at first. One highlighted finding creates direction. The coach knows where to look.
 
@@ -105,7 +105,7 @@ Each level is accessible. No level is required before the next. A coach who only
 
 **Color, spacing, grouping, and typography should communicate more than text does.**
 
-A Catalyst Insights panel is not a report. It is a dashboard. Dashboards are read in parallel; reports are read in sequence. The design must support parallel reading.
+A Kynovant Insights panel is not a report. It is a dashboard. Dashboards are read in parallel; reports are read in sequence. The design must support parallel reading.
 
 **Color system for dimension status:**
 
@@ -117,7 +117,7 @@ A Catalyst Insights panel is not a report. It is a dashboard. Dashboards are rea
 | Critical | Red (red-100) | red-700 | Block or address immediately |
 | Unknown | Gray (gray-50) | gray-400 | Not yet analyzed |
 
-This color system applies to: dimension status badges, finding left-borders, and any inline severity indicators. Severity colors must be consistent across every Catalyst Insights surface — coaches learn the system once.
+This color system applies to: dimension status badges, finding left-borders, and any inline severity indicators. Severity colors must be consistent across every Kynovant Insights surface — coaches learn the system once.
 
 **Typography hierarchy:**
 
@@ -137,7 +137,7 @@ The status header, the Highest Priority zone, and the findings section should ea
 
 **Every finding must allow a coach to answer: why? which exercises? what rule? what would change this?**
 
-Catalyst Insights is deterministic analysis, not a black box. Coaches are professionals. They do not need to be told what to do — they need to understand what the analysis observed so they can apply their own judgment.
+Kynovant Insights is deterministic analysis, not a black box. Coaches are professionals. They do not need to be told what to do — they need to understand what the analysis observed so they can apply their own judgment.
 
 This requires two things of every finding:
 
@@ -170,22 +170,22 @@ The following naming conventions are permanent and must be applied consistently 
 |---|---|
 | Internal architecture | Programming Intelligence Layer (PIL) |
 | Internal code | `lib/pil/`, `PilFinding`, `getBlueprintAudit()` |
-| Customer-facing product (umbrella) | Catalyst Insights |
+| Customer-facing product (umbrella) | Kynovant Insights |
 | Domain navigation | Training · Nutrition · Recovery · Check-In |
 
 **Rules:**
 
 - "PIL" and "Programming Intelligence Layer" must never appear in coach-facing UI copy, labels, tooltips, or error messages.
-- "Catalyst Insights" is the umbrella. It should appear in the panel header, the nav item, and the CTA button.
+- "Kynovant Insights" is the umbrella. It should appear in the panel header, the nav item, and the CTA button.
 - "Training" (not "Program") is the navigation label for the programming analysis domain. "Program" already names a product entity in HQ and must not be overloaded.
-- When labeling a specific panel scoped to one Blueprint, use "Blueprint Intelligence" as the contextual sub-label beneath the "Catalyst Insights" umbrella.
+- When labeling a specific panel scoped to one Blueprint, use "Blueprint Intelligence" as the contextual sub-label beneath the "Kynovant Insights" umbrella.
 - Finding codes (`VOLUME_HIGH_DIRECT`, `RECOVERY_SAME_DAY`) must never appear in coach-facing UI — they are internal identity keys for persistence and engineering. Use `finding.title` for display.
 
 ---
 
 ## Surface-Level Checklist
 
-Before shipping any Catalyst Insights UI surface, verify:
+Before shipping any Kynovant Insights UI surface, verify:
 
 **Five-Second Rule**
 - [ ] The status of every dimension is visible without scrolling
@@ -209,5 +209,5 @@ Before shipping any Catalyst Insights UI surface, verify:
 
 **Language**
 - [ ] No finding code appears in UI copy
-- [ ] Customer-facing copy uses "Catalyst Insights" not "PIL"
+- [ ] Customer-facing copy uses "Kynovant Insights" not "PIL"
 - [ ] Domain navigation uses "Training" not "Program"
