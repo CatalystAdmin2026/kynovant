@@ -6,6 +6,7 @@ export default defineConfig({
     "./lib/db/schema-profile.ts",
     "./lib/db/schema-exercise.ts",
     "./lib/db/schema-program.ts",
+    "./lib/db/schema-nutrition.ts",
   ],
   out: "./drizzle",
   dialect: "postgresql",

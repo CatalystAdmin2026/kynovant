@@ -10,9 +10,11 @@ import "server-only";
 import { eq, and, asc, desc, inArray, isNotNull } from "drizzle-orm";
 import { getDb } from "./client";
 import {
+  users,
   programTemplates,
   workoutTemplates,
   clientProfiles,
+  timelineEvents,
 } from "./schema";
 import { clientGoals } from "./schema-profile";
 import {
@@ -141,33 +143,22 @@ export async function assignProgram(
 ): Promise<{ ok: boolean; assignment?: ClientProgram; error?: string }> {
   const db = getDb();
 
-  // Enforce single-active-program rule unless override is set
-  if (!input.overrideAllowMultiple) {
-    const existing = await db
-      .select({ id: clientPrograms.id })
-      .from(clientPrograms)
-      .where(
-        and(
-          eq(clientPrograms.clientId, input.clientId),
-          eq(clientPrograms.status, "active"),
-        ),
-      )
-      .limit(1);
+  // Validate target is a client user
+  const [client] = await db
+    .select({ id: users.id, role: users.role })
+    .from(users)
+    .where(eq(users.id, input.clientId))
+    .limit(1);
 
-    if (existing.length > 0) {
-      return {
-        ok: false,
-        error:
-          "Client already has an active program. Deactivate it first, or use overrideAllowMultiple.",
-      };
-    }
+  if (!client || client.role !== "client") {
+    return { ok: false, error: "Client not found." };
   }
 
-  // Confirm the program template is published (status='active')
+  // Validate template is published
   const [tmpl] = await db
     .select({
-      status: programTemplates.status,
       name: programTemplates.name,
+      status: programTemplates.status,
       version: programTemplates.version,
     })
     .from(programTemplates)
@@ -182,7 +173,7 @@ export async function assignProgram(
     };
   }
 
-  // Fetch template weeks and days for deep copy
+  // Fetch template structure outside the transaction (read-only)
   const templateWeeks = await db
     .select({
       id: programWeeks.id,
@@ -214,52 +205,103 @@ export async function assignProgram(
           )
       : [];
 
-  const [row] = await db
-    .insert(clientPrograms)
-    .values({
-      clientId: input.clientId,
-      programTemplateId: input.programTemplateId,
-      startDate: input.startDate,
-      enrollmentId: input.enrollmentId ?? null,
-      coachNotes: input.coachNotes ?? null,
-      overrideAllowMultiple: input.overrideAllowMultiple ?? false,
-      status: "active",
-      sourceTemplateName: tmpl.name,
-      sourceTemplateVersion: tmpl.version,
-    })
-    .returning();
+  try {
+    const assignment = await db.transaction(async (tx) => {
+      // Archive any existing active program unless override allows coexistence
+      let hadExisting = false;
+      if (!input.overrideAllowMultiple) {
+        const [existing] = await tx
+          .select({ id: clientPrograms.id })
+          .from(clientPrograms)
+          .where(
+            and(
+              eq(clientPrograms.clientId, input.clientId),
+              eq(clientPrograms.status, "active"),
+            ),
+          )
+          .limit(1);
 
-  // Deep-copy scheduling structure into client-owned rows
-  for (const week of templateWeeks) {
-    const [newWeek] = await db
-      .insert(clientProgramWeeks)
-      .values({
-        clientProgramId: row.id,
-        sourceWeekId: week.id,
-        weekNumber: week.weekNumber,
-        label: week.label,
-        notes: week.notes,
-      })
-      .returning({ id: clientProgramWeeks.id });
+        if (existing) {
+          await tx
+            .update(clientPrograms)
+            .set({ status: "cancelled", endDate: input.startDate, updatedAt: new Date() })
+            .where(eq(clientPrograms.id, existing.id));
+          hadExisting = true;
+        }
+      }
 
-    const daysForWeek = templateDays.filter(
-      (d) => d.programWeekId === week.id,
-    );
-    if (daysForWeek.length > 0) {
-      await db.insert(clientProgramWeekDays).values(
-        daysForWeek.map((d) => ({
-          clientProgramWeekId: newWeek.id,
-          sourceDayId: d.id,
-          dayOfWeek: d.dayOfWeek,
-          workoutTemplateId: d.workoutTemplateId,
-          label: d.label,
-          notes: d.notes,
-        })),
-      );
+      // Insert new assignment with lineage snapshot
+      const [row] = await tx
+        .insert(clientPrograms)
+        .values({
+          clientId: input.clientId,
+          programTemplateId: input.programTemplateId,
+          startDate: input.startDate,
+          enrollmentId: input.enrollmentId ?? null,
+          coachNotes: input.coachNotes ?? null,
+          overrideAllowMultiple: input.overrideAllowMultiple ?? false,
+          status: "active",
+          sourceTemplateName: tmpl.name,
+          sourceTemplateVersion: tmpl.version,
+        })
+        .returning();
+
+      // Deep-copy scheduling structure into client-owned rows
+      for (const week of templateWeeks) {
+        const [newWeek] = await tx
+          .insert(clientProgramWeeks)
+          .values({
+            clientProgramId: row.id,
+            sourceWeekId: week.id,
+            weekNumber: week.weekNumber,
+            label: week.label,
+            notes: week.notes,
+          })
+          .returning({ id: clientProgramWeeks.id });
+
+        const daysForWeek = templateDays.filter((d) => d.programWeekId === week.id);
+        if (daysForWeek.length > 0) {
+          await tx.insert(clientProgramWeekDays).values(
+            daysForWeek.map((d) => ({
+              clientProgramWeekId: newWeek.id,
+              sourceDayId: d.id,
+              dayOfWeek: d.dayOfWeek,
+              workoutTemplateId: d.workoutTemplateId,
+              label: d.label,
+              notes: d.notes,
+            })),
+          );
+        }
+      }
+
+      // Record timeline event
+      await tx.insert(timelineEvents).values({
+        clientId: input.clientId,
+        eventType: "program_assigned",
+        actorRole: "coach",
+        title: `Program assigned: ${tmpl.name}`,
+        description: `Started ${input.startDate}${hadExisting ? " · previous program archived" : ""}`,
+        occurredAt: new Date(),
+      });
+
+      return row;
+    });
+
+    return { ok: true, assignment };
+  } catch (err) {
+    // Concurrent assignment race on the unique partial index
+    if (
+      err instanceof Error &&
+      ((err as unknown as Record<string, unknown>).code === "23505" ||
+        err.message.includes("uq_client_active_program"))
+    ) {
+      return {
+        ok: false,
+        error: "A program was just assigned to this client. Refresh and try again.",
+      };
     }
+    throw err;
   }
-
-  return { ok: true, assignment: row };
 }
 
 export async function updateClientProgram(
@@ -362,6 +404,43 @@ export async function listAllActiveAssignments(): Promise<
     clientName:
       r.preferredName ?? r.fullName ?? r.assignment.clientId,
     totalWeeks: r.totalWeeks,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────
+// ACTIVE CLIENT LIST
+//
+// Returns all non-archived, non-suspended clients for the Assign
+// panel. Every active client should be selectable, not just those
+// who already have at least one program assignment.
+// ─────────────────────────────────────────────────────────────
+
+export interface ActiveClientSummary {
+  id: string;
+  name: string;
+}
+
+export async function listActiveClients(): Promise<ActiveClientSummary[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: users.id,
+      fullName: clientProfiles.fullName,
+      preferredName: clientProfiles.preferredName,
+    })
+    .from(users)
+    .innerJoin(clientProfiles, eq(clientProfiles.userId, users.id))
+    .where(
+      and(
+        eq(users.role, "client"),
+        inArray(users.status, ["invited", "active"]),
+      ),
+    )
+    .orderBy(asc(clientProfiles.fullName));
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.preferredName ?? r.fullName,
   }));
 }
 

@@ -3,15 +3,7 @@
 import { useState, useEffect, use } from "react";
 import AdminGate from "@/components/AdminGate";
 import ProgramBuilder from "@/components/ProgramBuilder";
-import type { ProgramBuilderData } from "@/components/ProgramBuilder";
-
-interface BlueprintOption {
-  id: string;
-  name: string;
-  status: string;
-  primaryFocus: string | null;
-  estimatedDurationMinutes: number | null;
-}
+import type { ProgramBuilderData, BlueprintOption } from "@/components/ProgramBuilder";
 
 export default function ProgramEditorPage({
   params,

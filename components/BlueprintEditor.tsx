@@ -73,6 +73,23 @@ interface ExerciseResult {
   movementPattern: string;
   difficulty: string;
   resistanceType: string | null;
+  primaryMuscleGroup: string | null;
+  fatigueCost: number | null;
+  defaultPrescription?: {
+    sets?: number | null;
+    repsMin?: number | null;
+    repsMax?: number | null;
+    targetRpe?: number | null;
+    restSeconds?: number | null;
+  } | null;
+  // Coach override prescription resolved server-side; falls back to defaultPrescription.
+  effectivePrescription?: {
+    sets?: number | null;
+    repsMin?: number | null;
+    repsMax?: number | null;
+    targetRpe?: number | null;
+    restSeconds?: number | null;
+  } | null;
 }
 
 interface ValidationResult {
@@ -139,6 +156,51 @@ const GROUP_COLORS = [
 ];
 function groupColor(groupId: string, groupIndex: number): string {
   return GROUP_COLORS[groupIndex % GROUP_COLORS.length];
+}
+
+// Exercise picker row — used in both Recently Used and search results
+function ExercisePickerRow({
+  exercise,
+  onAdd,
+}: {
+  exercise: ExerciseResult;
+  onAdd: (ex: ExerciseResult) => void;
+}) {
+  const fatigueDots = exercise.fatigueCost != null
+    ? Math.round((exercise.fatigueCost / 10) * 5)
+    : null;
+
+  return (
+    <button
+      onClick={() => onAdd(exercise)}
+      className="w-full text-left px-3 py-2 hover:bg-white/[0.03] transition-colors flex items-center gap-3 border-b border-white/[0.04] last:border-0"
+    >
+      <div className="flex-1 min-w-0">
+        <span className="text-white text-xs font-medium block truncate">{exercise.name}</span>
+        <span className="text-gray-600 text-[10px]">
+          {exercise.primaryMuscleGroup ? fmtLabel(exercise.primaryMuscleGroup) + " · " : ""}
+          {fmtLabel(exercise.classification)}
+        </span>
+      </div>
+      {fatigueDots !== null && (
+        <span className="flex gap-0.5 shrink-0" title={`Fatigue: ${exercise.fatigueCost}/10`}>
+          {Array.from({ length: 5 }, (_, i) => (
+            <span key={i} className={`w-1 h-1 rounded-full ${i < fatigueDots ? "bg-[#C9A24D]/60" : "bg-white/10"}`} />
+          ))}
+        </span>
+      )}
+      <a
+        href={`/hq/exercises/${exercise.id}`}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="text-gray-700 hover:text-gray-400 text-[9px] uppercase tracking-[0.2em] shrink-0"
+        title="Open in Library"
+      >
+        ↗
+      </a>
+    </button>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -583,6 +645,8 @@ function SectionCard({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<ExerciseResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [recentlyUsed, setRecentlyUsed] = useState<ExerciseResult[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const doSearch = useCallback(async (q: string) => {
@@ -604,6 +668,21 @@ function SectionCard({
     debounceRef.current = setTimeout(() => doSearch(searchQuery), 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [searchQuery, doSearch]);
+
+  // Fetch recently used when search panel opens
+  useEffect(() => {
+    if (!showSearch) return;
+    let mounted = true;
+    setRecentLoading(true);
+    fetch("/api/internal/exercises/recently-used")
+      .then((r) => r.json())
+      .then((data: { ok: boolean; exercises?: ExerciseResult[] }) => {
+        if (mounted && data.ok) setRecentlyUsed(data.exercises ?? []);
+      })
+      .catch(() => {})
+      .finally(() => { if (mounted) setRecentLoading(false); });
+    return () => { mounted = false; };
+  }, [showSearch]);
 
   async function handleSaveSection() {
     setSaving(true);
@@ -642,6 +721,7 @@ function SectionCard({
   }
 
   async function handleAddExercise(exercise: ExerciseResult) {
+    const rx = exercise.effectivePrescription ?? exercise.defaultPrescription;
     const res = await fetch(
       `/api/internal/workout-templates/${templateId}/exercises`,
       {
@@ -650,6 +730,14 @@ function SectionCard({
         body: JSON.stringify({
           exerciseId: exercise.id,
           sectionId: section.id,
+          // Apply defaultPrescription scaffold when present
+          ...(rx ? {
+            sets: rx.sets ?? null,
+            repsMin: rx.repsMin ?? null,
+            repsMax: rx.repsMax ?? null,
+            targetRpe: rx.targetRpe != null ? String(rx.targetRpe) : null,
+            restSeconds: rx.restSeconds ?? null,
+          } : {}),
         }),
       },
     );
@@ -846,32 +934,39 @@ function SectionCard({
                   Cancel
                 </button>
               </div>
+
+              {/* Recently Used — shown only when search is empty */}
+              {!searchQuery && (
+                <>
+                  {recentLoading && (
+                    <p className="text-gray-600 text-[10px] py-2 animate-pulse">Loading recent…</p>
+                  )}
+                  {!recentLoading && recentlyUsed.length > 0 && (
+                    <>
+                      <p className="text-[9px] text-white/20 uppercase tracking-[0.45em] mb-1.5 px-1">Recently Used</p>
+                      {recentlyUsed.map((ex) => (
+                        <ExercisePickerRow key={ex.id} exercise={ex} onAdd={handleAddExercise} />
+                      ))}
+                      <div className="h-px bg-white/[0.04] my-2" />
+                      <p className="text-gray-700 text-[10px] py-1 px-1">Type to search the full library.</p>
+                    </>
+                  )}
+                  {!recentLoading && recentlyUsed.length === 0 && (
+                    <p className="text-gray-700 text-xs py-2">Type to search exercises.</p>
+                  )}
+                </>
+              )}
+
+              {/* Search results */}
               {searchLoading && (
                 <p className="text-gray-600 text-xs py-2 animate-pulse">Searching…</p>
               )}
               {!searchLoading && searchQuery && searchResults.length === 0 && (
-                <p className="text-gray-700 text-xs py-2">
-                  No active exercises found.
-                  {" "}<span className="text-gray-600">Seed the exercise library to populate results.</span>
-                </p>
+                <p className="text-gray-700 text-xs py-2">No active exercises found.</p>
               )}
-              {searchResults.map((ex) => (
-                <button
-                  key={ex.id}
-                  onClick={() => handleAddExercise(ex)}
-                  className="w-full text-left px-3 py-2 hover:bg-white/[0.03] transition-colors flex items-center gap-3 border-b border-white/[0.04] last:border-0"
-                >
-                  <span className="text-white text-xs font-medium flex-1">{ex.name}</span>
-                  <span className="text-gray-600 text-[10px]">{fmtLabel(ex.classification)}</span>
-                  <span className="text-gray-700 text-[10px]">{fmtLabel(ex.movementPattern)}</span>
-                  <span className="text-gray-700 text-[10px]">{fmtLabel(ex.difficulty)}</span>
-                </button>
+              {searchQuery && searchResults.map((ex) => (
+                <ExercisePickerRow key={ex.id} exercise={ex} onAdd={handleAddExercise} />
               ))}
-              {!searchQuery && (
-                <p className="text-gray-700 text-xs py-2">
-                  Type to search exercises. The library must be seeded first.
-                </p>
-              )}
             </div>
           ) : (
             <button

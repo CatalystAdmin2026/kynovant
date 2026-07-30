@@ -1,142 +1,282 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
 
 // ─────────────────────────────────────────────────────────────
-// TYPES (mirror API response)
+// TYPES
 // ─────────────────────────────────────────────────────────────
 
 interface ProgramTemplate {
-  id: string;
-  name: string;
-  slug: string;
-  status: string;
-  category: string;
-  experienceLevel: string;
+  id:                     string;
+  name:                   string;
+  slug:                   string;
+  status:                 string;
+  category:               string;
+  experienceLevel:        string;
   recommendedDaysPerWeek: number | null;
-  defaultDurationWeeks: number | null;
-  description: string | null;
-  createdAt: string;
+  defaultDurationWeeks:   number | null;
+  description:            string | null;
+  version:                number;
+  createdAt:              string;
+}
+
+interface DaySlot {
+  id:                  string;
+  programWeekId:       string;
+  dayOfWeek:           number;
+  workoutTemplateId:   string | null;
+  label:               string | null;
+  notes:               string | null;
 }
 
 interface DayData {
-  day: {
-    id: string;
-    programWeekId: string;
-    dayOfWeek: number;
-    workoutTemplateId: string | null;
-    label: string | null;
-    notes: string | null;
-  };
-  workoutName: string | null;
-  workoutStatus: string | null;
+  day:            DaySlot;
+  workoutName:    string | null;
+  workoutStatus:  string | null;
 }
 
 interface WeekData {
   week: {
-    id: string;
-    weekNumber: number;
-    label: string | null;
-    notes: string | null;
+    id:          string;
+    weekNumber:  number;
+    label:       string | null;
+    notes:       string | null;
   };
   days: DayData[];
 }
 
 export interface ProgramBuilderData {
   template: ProgramTemplate;
-  weeks: WeekData[];
+  weeks:    WeekData[];
 }
 
-interface BlueprintOption {
-  id: string;
-  name: string;
-  status: string;
-  primaryFocus: string | null;
-  estimatedDurationMinutes: number | null;
-}
-
-// Coach dashboard assignment shape
-interface ClientOption {
-  id: string;
-  name: string;
+export interface BlueprintOption {
+  id:                         string;
+  name:                       string;
+  status:                     string;
+  primaryFocus:               string | null;
+  estimatedDurationMinutes:   number | null;
+  exerciseCount:              number;
+  description:                string | null;
 }
 
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────
 
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAY_FULL  = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-function statusCls(s: string) {
-  if (s === "active") return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-  if (s === "archived") return "bg-gray-500/10 text-gray-500 border border-gray-500/20";
-  return "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+const CATEGORIES = [
+  ["fat_loss",              "Fat Loss"],
+  ["muscle_growth",         "Muscle Growth"],
+  ["body_recomposition",    "Body Recomposition"],
+  ["athletic_performance",  "Athletic Performance"],
+  ["lifestyle",             "Lifestyle"],
+  ["competition_prep",      "Competition Prep"],
+  ["executive_performance", "Executive Performance"],
+] as const;
+
+const EXPERIENCE_LEVELS = [
+  ["beginner",     "Beginner"],
+  ["intermediate", "Intermediate"],
+  ["advanced",     "Advanced"],
+  ["competitive",  "Competitive"],
+  ["mixed",        "Mixed"],
+] as const;
+
+function fmtLabel(s: string) {
+  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function statusLabel(s: string) {
-  if (s === "active") return "Published";
-  return s.charAt(0).toUpperCase() + s.slice(1);
+function statusBadge(s: string) {
+  if (s === "active")   return { cls: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Published" };
+  if (s === "archived") return { cls: "bg-white/[0.05] text-white/30 border border-white/[0.06]",       label: "Archived" };
+  return                       { cls: "bg-amber-500/10 text-amber-400/80 border border-amber-500/20",    label: "Draft" };
 }
 
 // ─────────────────────────────────────────────────────────────
-// DAY CELL COMPONENT
+// BLUEPRINT PICKER
+// ─────────────────────────────────────────────────────────────
+
+function BlueprintPicker({
+  blueprints,
+  currentId,
+  onSelect,
+  onClear,
+  onClose,
+}: {
+  blueprints:  BlueprintOption[];
+  currentId:   string | null;
+  onSelect:    (b: BlueprintOption) => void;
+  onClear:     () => void;
+  onClose:     () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const filtered = blueprints.filter((b) => {
+    const q = search.toLowerCase();
+    return (
+      b.name.toLowerCase().includes(q) ||
+      (b.primaryFocus ?? "").toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <div
+      className="absolute z-30 top-full left-0 mt-1 w-72 bg-[#111213] border border-white/[0.10] shadow-2xl"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Search */}
+      <div className="p-2 border-b border-white/[0.06]">
+        <input
+          ref={inputRef}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+          placeholder="Search blueprints…"
+          className="w-full bg-[#0a0b0b] border border-white/[0.06] text-white text-xs px-2.5 py-1.5 focus:outline-none focus:border-[#C9A24D]/40 placeholder-white/20"
+        />
+      </div>
+
+      {/* Options list */}
+      <div className="max-h-64 overflow-y-auto">
+        {currentId && (
+          <button
+            onClick={onClear}
+            className="w-full text-left px-3 py-2.5 text-[11px] text-white/30 hover:text-red-400/80 hover:bg-red-500/[0.04] border-b border-white/[0.04] transition-colors"
+          >
+            ✕ Make rest day
+          </button>
+        )}
+
+        {filtered.length === 0 && (
+          <p className="px-3 py-4 text-[11px] text-white/20 text-center">
+            {blueprints.length === 0 ? "No published blueprints yet." : "No match."}
+          </p>
+        )}
+
+        {filtered.map((b) => (
+          <button
+            key={b.id}
+            onClick={() => onSelect(b)}
+            className={`w-full text-left px-3 py-2.5 border-b border-white/[0.03] last:border-0 transition-colors ${
+              b.id === currentId
+                ? "bg-[#C9A24D]/[0.08] hover:bg-[#C9A24D]/[0.12]"
+                : "hover:bg-white/[0.03]"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className={`text-[11px] font-medium truncate leading-tight ${b.id === currentId ? "text-[#C9A24D]" : "text-white/75"}`}>
+                  {b.name}
+                </p>
+                {b.primaryFocus && (
+                  <p className="text-[10px] text-white/25 mt-0.5 truncate">{b.primaryFocus}</p>
+                )}
+              </div>
+              <div className="flex flex-col items-end shrink-0 gap-0.5">
+                {b.estimatedDurationMinutes && (
+                  <span className="text-[9px] text-white/20 tabular-nums">~{b.estimatedDurationMinutes}m</span>
+                )}
+                {b.exerciseCount > 0 && (
+                  <span className="text-[9px] text-white/15 tabular-nums">{b.exerciseCount}ex</span>
+                )}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Footer */}
+      <div className="px-3 py-2 border-t border-white/[0.05] flex items-center justify-between">
+        <Link
+          href="/hq/blueprints/new"
+          className="text-[10px] text-[#C9A24D]/50 hover:text-[#C9A24D]/80 transition-colors"
+          onClick={onClose}
+        >
+          + New blueprint
+        </Link>
+        <button
+          onClick={onClose}
+          className="text-[10px] text-white/20 hover:text-white/40 transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// DAY CELL
 // ─────────────────────────────────────────────────────────────
 
 function DayCell({
-  day,
+  dow,
+  data,
   weekId,
   templateId,
   blueprints,
   onUpdate,
 }: {
-  day: DayData | undefined;
-  weekId: string;
-  templateId: string;
-  blueprints: BlueprintOption[];
-  onUpdate: (dayOfWeek: number, updated: DayData | null) => void;
+  dow:         number;
+  data:        DayData | undefined;
+  weekId:      string;
+  templateId:  string;
+  blueprints:  BlueprintOption[];
+  onUpdate:    (dow: number, result: DayData | null) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open,   setOpen]   = useState(false);
   const [saving, setSaving] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const dayOfWeek = day?.day.dayOfWeek ?? -1;
-  const hasWorkout = !!day?.day.workoutTemplateId;
+  const hasWorkout = !!data?.day.workoutTemplateId;
 
-  async function handleSelect(workoutTemplateId: string | null, name: string | null) {
-    if (dayOfWeek === -1) return;
+  // Close picker on outside click
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  async function applySelection(workoutTemplateId: string | null, name: string | null) {
     setSaving(true);
     setOpen(false);
     try {
-      const res = await fetch(
-        `/api/internal/programs/${templateId}/weeks/${weekId}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            dayOfWeek,
-            workoutTemplateId,
-            clear: workoutTemplateId === null,
-          }),
-        },
-      );
-      const data = await res.json() as { ok: boolean; day?: DayData["day"] };
-      if (data.ok) {
+      const body = workoutTemplateId === null
+        ? { dayOfWeek: dow, clear: true }
+        : { dayOfWeek: dow, workoutTemplateId };
+
+      const res = await fetch(`/api/internal/programs/${templateId}/weeks/${weekId}`, {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+      });
+      const json = await res.json() as { ok: boolean; day?: DaySlot };
+      if (json.ok) {
         if (workoutTemplateId === null) {
-          onUpdate(dayOfWeek, null);
+          onUpdate(dow, null);
         } else {
-          const blueprint = blueprints.find((b) => b.id === workoutTemplateId);
-          onUpdate(dayOfWeek, {
-            day: data.day ?? {
-              id: "",
-              programWeekId: weekId,
-              dayOfWeek,
-              workoutTemplateId,
-              label: null,
-              notes: null,
+          const bp = blueprints.find((b) => b.id === workoutTemplateId);
+          onUpdate(dow, {
+            day: json.day ?? {
+              id: "", programWeekId: weekId, dayOfWeek: dow,
+              workoutTemplateId, label: null, notes: null,
             },
-            workoutName: name,
-            workoutStatus: blueprint?.status ?? null,
+            workoutName:   name,
+            workoutStatus: bp?.status ?? null,
           });
         }
       }
@@ -145,70 +285,58 @@ function DayCell({
     }
   }
 
+  if (saving) {
+    return (
+      <div className="h-[72px] bg-white/[0.02] border border-white/[0.04] flex items-center justify-center">
+        <div className="w-3 h-3 border border-[#C9A24D]/30 border-t-[#C9A24D]/70 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const bp = hasWorkout ? blueprints.find((b) => b.id === data?.day.workoutTemplateId) : null;
+
   return (
-    <div className="relative">
-      {saving ? (
-        <div className="h-16 bg-white/[0.03] border border-white/[0.06] flex items-center justify-center">
-          <div className="w-3 h-3 border border-[#C9A24D]/40 border-t-[#C9A24D] rounded-full animate-spin" />
-        </div>
-      ) : hasWorkout ? (
+    <div ref={containerRef} className="relative">
+      {hasWorkout ? (
         <button
           onClick={() => setOpen((x) => !x)}
-          className="w-full h-16 bg-[#C9A24D]/[0.06] border border-[#C9A24D]/20 px-2 text-left hover:bg-[#C9A24D]/10 transition-colors"
+          className="w-full h-[72px] bg-[#C9A24D]/[0.05] border border-[#C9A24D]/[0.18] px-2 pt-1.5 pb-2 text-left hover:bg-[#C9A24D]/[0.09] hover:border-[#C9A24D]/30 transition-colors group"
         >
-          <p className="text-[#C9A24D] text-[10px] font-semibold truncate leading-tight">
-            {day?.workoutName}
+          <p className="text-[#C9A24D]/85 text-[10px] font-semibold truncate leading-tight">
+            {data?.workoutName}
           </p>
-          {day?.day.label && (
-            <p className="text-gray-600 text-[9px] truncate">{day.day.label}</p>
+          {bp?.primaryFocus && (
+            <p className="text-white/20 text-[9px] mt-0.5 truncate">{bp.primaryFocus}</p>
           )}
+          <p className="text-white/15 text-[9px] mt-auto flex gap-1.5">
+            {bp?.estimatedDurationMinutes && <span>~{bp.estimatedDurationMinutes}m</span>}
+            {bp && bp.exerciseCount > 0 && <span>{bp.exerciseCount}ex</span>}
+          </p>
         </button>
       ) : (
         <button
           onClick={() => setOpen((x) => !x)}
-          className="w-full h-16 bg-[#080909] border border-dashed border-white/[0.06] flex items-center justify-center hover:border-white/20 hover:bg-white/[0.02] transition-colors text-gray-700 text-[10px]"
+          className="w-full h-[72px] bg-transparent border border-dashed border-white/[0.05] flex items-center justify-center hover:border-white/[0.14] hover:bg-white/[0.015] transition-colors group"
         >
-          + Rest
+          <span className="text-white/12 text-[11px] group-hover:text-white/25 transition-colors">+</span>
         </button>
       )}
 
       {open && (
-        <div className="absolute z-20 top-[68px] left-0 min-w-[220px] bg-[#111213] border border-white/[0.12] shadow-xl">
-          {hasWorkout && (
-            <button
-              onClick={() => handleSelect(null, null)}
-              className="w-full text-left px-3 py-2 text-[11px] text-gray-600 hover:text-red-400 border-b border-white/[0.05] transition-colors"
-            >
-              Remove workout (make rest day)
-            </button>
-          )}
-          {blueprints.length === 0 && (
-            <p className="text-gray-700 text-[11px] px-3 py-3">
-              No published blueprints available.
-            </p>
-          )}
-          {blueprints.map((b) => (
-            <button
-              key={b.id}
-              onClick={() => handleSelect(b.id, b.name)}
-              className={`w-full text-left px-3 py-2.5 hover:bg-white/[0.04] transition-colors border-b border-white/[0.03] last:border-0 ${
-                day?.day.workoutTemplateId === b.id ? "bg-[#C9A24D]/[0.06]" : ""
-              }`}
-            >
-              <p className="text-white text-[11px] font-medium">{b.name}</p>
-              {b.primaryFocus && (
-                <p className="text-gray-600 text-[10px]">{b.primaryFocus}</p>
-              )}
-            </button>
-          ))}
-        </div>
+        <BlueprintPicker
+          blueprints={blueprints}
+          currentId={data?.day.workoutTemplateId ?? null}
+          onSelect={(b) => applySelection(b.id, b.name)}
+          onClear={() => applySelection(null, null)}
+          onClose={() => setOpen(false)}
+        />
       )}
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// WEEK ROW COMPONENT
+// WEEK ROW
 // ─────────────────────────────────────────────────────────────
 
 function WeekRow({
@@ -217,31 +345,36 @@ function WeekRow({
   blueprints,
   onUpdateDay,
   onDelete,
+  onCopyWeek,
   onUpdateLabel,
 }: {
-  weekData: WeekData;
-  templateId: string;
-  blueprints: BlueprintOption[];
-  onUpdateDay: (weekId: string, dayOfWeek: number, data: DayData | null) => void;
-  onDelete: (weekId: string) => void;
-  onUpdateLabel: (weekId: string, label: string) => void;
+  weekData:       WeekData;
+  templateId:     string;
+  blueprints:     BlueprintOption[];
+  onUpdateDay:    (weekId: string, dow: number, data: DayData | null) => void;
+  onDelete:       (weekId: string) => void;
+  onCopyWeek:     (weekId: string, newWeek: WeekData["week"]) => void;
+  onUpdateLabel:  (weekId: string, label: string) => void;
 }) {
   const { week, days } = weekData;
-  const [editLabel, setEditLabel] = useState(false);
-  const [labelInput, setLabelInput] = useState(week.label ?? `Week ${week.weekNumber}`);
+  const [editLabel,   setEditLabel]   = useState(false);
+  const [labelInput,  setLabelInput]  = useState(week.label ?? `Week ${week.weekNumber}`);
   const [savingLabel, setSavingLabel] = useState(false);
+  const [copying,     setCopying]     = useState(false);
 
   const dayMap = new Map(days.map((d) => [d.day.dayOfWeek, d]));
+  const trainingDayCount = days.filter((d) => d.day.workoutTemplateId).length;
 
   async function handleSaveLabel() {
+    if (!labelInput.trim()) return;
     setSavingLabel(true);
     try {
       await fetch(`/api/internal/programs/${templateId}/weeks/${week.id}`, {
-        method: "PUT",
+        method:  "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: labelInput }),
+        body:    JSON.stringify({ label: labelInput.trim() }),
       });
-      onUpdateLabel(week.id, labelInput);
+      onUpdateLabel(week.id, labelInput.trim());
       setEditLabel(false);
     } finally {
       setSavingLabel(false);
@@ -249,63 +382,111 @@ function WeekRow({
   }
 
   async function handleDelete() {
-    if (!confirm(`Delete Week ${week.weekNumber}? All day assignments in this week will be lost.`)) return;
+    if (!confirm(`Delete "${week.label ?? `Week ${week.weekNumber}`}"? All workout assignments in this week will be lost.`)) return;
     await fetch(`/api/internal/programs/${templateId}/weeks/${week.id}`, { method: "DELETE" });
     onDelete(week.id);
   }
 
+  async function handleCopy() {
+    setCopying(true);
+    try {
+      const res = await fetch(
+        `/api/internal/programs/${templateId}/weeks/${week.id}/copy`,
+        { method: "POST" },
+      );
+      const data = await res.json() as { ok: boolean; week?: WeekData["week"] };
+      if (data.ok && data.week) {
+        onCopyWeek(week.id, data.week);
+      }
+    } finally {
+      setCopying(false);
+    }
+  }
+
   return (
-    <div className="border border-white/[0.06] bg-[#0d0e0f] mb-3">
+    <div className="border border-white/[0.06] bg-[#0c0d0e] mb-2 group/week">
       {/* Week header */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-white/[0.04]">
-        <span className="text-gray-600 text-[10px] font-semibold tracking-[0.4em] uppercase shrink-0">
-          W{week.weekNumber}
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-white/[0.04]">
+        <span className="text-white/20 text-[9px] font-bold tracking-[0.45em] uppercase shrink-0 tabular-nums">
+          W{String(week.weekNumber).padStart(2, "0")}
         </span>
+
         {editLabel ? (
           <div className="flex items-center gap-2 flex-1">
             <input
               autoFocus
               value={labelInput}
               onChange={(e) => setLabelInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleSaveLabel(); if (e.key === "Escape") setEditLabel(false); }}
-              className="flex-1 bg-[#080909] border border-white/[0.08] text-white px-2 py-1 text-xs focus:outline-none focus:border-[#C9A24D]/40"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveLabel();
+                if (e.key === "Escape") { setLabelInput(week.label ?? `Week ${week.weekNumber}`); setEditLabel(false); }
+              }}
+              className="flex-1 bg-[#080909] border border-white/[0.08] text-white/80 px-2 py-1 text-xs focus:outline-none focus:border-[#C9A24D]/40"
             />
-            <button onClick={handleSaveLabel} disabled={savingLabel} className="text-[10px] bg-[#C9A24D] text-black font-bold px-2 py-1 hover:bg-[#D4B56A] transition-colors disabled:opacity-50">
+            <button
+              onClick={handleSaveLabel}
+              disabled={savingLabel}
+              className="text-[10px] bg-[#C9A24D] text-black font-bold px-2 py-1 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
+            >
               {savingLabel ? "…" : "Save"}
             </button>
-            <button onClick={() => setEditLabel(false)} className="text-[10px] text-gray-600 hover:text-gray-400">Cancel</button>
+            <button
+              onClick={() => { setLabelInput(week.label ?? `Week ${week.weekNumber}`); setEditLabel(false); }}
+              className="text-[10px] text-white/25 hover:text-white/50"
+            >
+              Cancel
+            </button>
           </div>
         ) : (
           <>
-            <button onClick={() => setEditLabel(true)} className="flex-1 text-left text-white text-xs font-medium hover:text-gray-300 transition-colors">
+            <button
+              onClick={() => setEditLabel(true)}
+              className="flex-1 text-left text-white/60 text-xs hover:text-white/85 transition-colors"
+            >
               {week.label ?? `Week ${week.weekNumber}`}
             </button>
-            <button onClick={handleDelete} className="text-[10px] text-gray-700 hover:text-red-400 transition-colors ml-2">×</button>
+            {trainingDayCount > 0 && (
+              <span className="text-white/15 text-[9px] shrink-0">
+                {trainingDayCount}d
+              </span>
+            )}
           </>
+        )}
+
+        {/* Week actions */}
+        {!editLabel && (
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={handleCopy}
+              disabled={copying}
+              title="Duplicate this week"
+              className="text-[10px] text-white/20 hover:text-[#C9A24D]/70 transition-colors px-1.5 py-0.5 disabled:opacity-50"
+            >
+              {copying ? "…" : "⧉"}
+            </button>
+            <button
+              onClick={handleDelete}
+              title="Delete this week"
+              className="text-[10px] text-white/15 hover:text-red-400/70 transition-colors px-1.5 py-0.5"
+            >
+              ×
+            </button>
+          </div>
         )}
       </div>
 
       {/* Day grid */}
-      <div className="grid grid-cols-7 gap-1 p-2">
+      <div className="grid grid-cols-7 gap-px p-1 bg-[#0a0b0c]">
         {[0, 1, 2, 3, 4, 5, 6].map((dow) => (
-          <div key={dow}>
-            <p className="text-gray-700 text-[9px] text-center uppercase tracking-[0.2em] mb-1">
-              {DAY_LABELS[dow]}
-            </p>
-            <DayCell
-              day={dayMap.get(dow)}
-              weekId={week.id}
-              templateId={templateId}
-              blueprints={blueprints}
-              onUpdate={(d, updated) => {
-                if (updated === null) {
-                  onUpdateDay(week.id, d, null);
-                } else {
-                  onUpdateDay(week.id, d, updated);
-                }
-              }}
-            />
-          </div>
+          <DayCell
+            key={dow}
+            dow={dow}
+            data={dayMap.get(dow)}
+            weekId={week.id}
+            templateId={templateId}
+            blueprints={blueprints}
+            onUpdate={(d, updated) => onUpdateDay(week.id, d, updated)}
+          />
         ))}
       </div>
     </div>
@@ -313,135 +494,148 @@ function WeekRow({
 }
 
 // ─────────────────────────────────────────────────────────────
-// ASSIGN TO CLIENT PANEL
+// METADATA PANEL
 // ─────────────────────────────────────────────────────────────
 
-function AssignPanel({ templateId }: { templateId: string }) {
-  const [clients, setClients] = useState<ClientOption[]>([]);
-  const [loadingClients, setLoadingClients] = useState(false);
-  const [clientId, setClientId] = useState("");
-  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
-  const [coachNotes, setCoachNotes] = useState("");
-  const [override, setOverride] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+function MetadataPanel({
+  templateId,
+  template,
+  onChange,
+}: {
+  templateId: string;
+  template:   ProgramTemplate;
+  onChange:   (t: ProgramTemplate) => void;
+}) {
+  const [form, setForm] = useState({
+    description:            template.description ?? "",
+    category:               template.category,
+    experienceLevel:        template.experienceLevel,
+    recommendedDaysPerWeek: String(template.recommendedDaysPerWeek ?? ""),
+    defaultDurationWeeks:   String(template.defaultDurationWeeks ?? ""),
+  });
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
 
-  const loadClients = useCallback(async () => {
-    if (clients.length > 0) return;
-    setLoadingClients(true);
-    try {
-      // Fetch all users from the existing clients endpoint
-      const res = await fetch("/api/internal/client-programs");
-      const data = await res.json() as { ok: boolean; assignments?: { assignment: { clientId: string }; clientName: string }[] };
-      if (data.ok && data.assignments) {
-        const seen = new Set<string>();
-        const opts: ClientOption[] = [];
-        for (const a of data.assignments) {
-          if (!seen.has(a.assignment.clientId)) {
-            seen.add(a.assignment.clientId);
-            opts.push({ id: a.assignment.clientId, name: a.clientName });
-          }
-        }
-        setClients(opts);
-      }
-    } finally {
-      setLoadingClients(false);
-    }
-  }, [clients.length]);
+  const dirty =
+    form.description          !== (template.description ?? "") ||
+    form.category             !== template.category ||
+    form.experienceLevel      !== template.experienceLevel ||
+    form.recommendedDaysPerWeek !== String(template.recommendedDaysPerWeek ?? "") ||
+    form.defaultDurationWeeks   !== String(template.defaultDurationWeeks ?? "");
 
-  async function handleAssign() {
-    if (!clientId || !startDate) { setResult({ ok: false, msg: "Client and start date are required" }); return; }
+  async function handleSave() {
     setSaving(true);
-    setResult(null);
+    setSaved(false);
     try {
-      const res = await fetch("/api/internal/client-programs", {
-        method: "POST",
+      const res = await fetch(`/api/internal/programs/${templateId}`, {
+        method:  "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientId,
-          programTemplateId: templateId,
-          startDate,
-          coachNotes: coachNotes || null,
-          overrideAllowMultiple: override,
+        body:    JSON.stringify({
+          description:            form.description || null,
+          category:               form.category,
+          experienceLevel:        form.experienceLevel,
+          recommendedDaysPerWeek: form.recommendedDaysPerWeek ? parseInt(form.recommendedDaysPerWeek, 10) : null,
+          defaultDurationWeeks:   form.defaultDurationWeeks   ? parseInt(form.defaultDurationWeeks,   10) : null,
         }),
       });
-      const data = await res.json() as { ok: boolean; error?: string };
-      setResult({ ok: data.ok, msg: data.ok ? "Program assigned successfully." : (data.error ?? "Failed") });
+      const data = await res.json() as { ok: boolean; template?: ProgramTemplate };
+      if (data.ok && data.template) {
+        onChange(data.template);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="border border-white/[0.08] bg-[#0d0e0f] p-5 mt-6">
-      <div className="flex items-center gap-2 mb-4">
-        <p className="text-[10px] tracking-[0.5em] text-gray-600 uppercase font-semibold">Assign to Client</p>
+    <div className="space-y-4">
+      <div>
+        <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Description</label>
+        <textarea
+          value={form.description}
+          onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+          rows={2}
+          placeholder="Describe this program's goals, methodology, and intended athlete…"
+          className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2 focus:outline-none focus:border-[#C9A24D]/35 resize-none placeholder-white/15"
+        />
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div>
-          <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1">Client ID</label>
-          <input
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            onFocus={loadClients}
-            placeholder="Paste client UUID or select below"
-            list="client-options"
-            className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700"
-          />
-          <datalist id="client-options">
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </datalist>
-          {loadingClients && <p className="text-gray-700 text-[10px] mt-1">Loading active clients…</p>}
+          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Category</label>
+          <select
+            value={form.category}
+            onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2 focus:outline-none focus:border-[#C9A24D]/35"
+          >
+            {CATEGORIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
         </div>
         <div>
-          <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1">Program Start Date</label>
+          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Experience</label>
+          <select
+            value={form.experienceLevel}
+            onChange={(e) => setForm((f) => ({ ...f, experienceLevel: e.target.value }))}
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2 focus:outline-none focus:border-[#C9A24D]/35"
+          >
+            {EXPERIENCE_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Duration (weeks)</label>
           <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40"
+            type="number"
+            min="1"
+            value={form.defaultDurationWeeks}
+            onChange={(e) => setForm((f) => ({ ...f, defaultDurationWeeks: e.target.value }))}
+            placeholder="—"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2 focus:outline-none focus:border-[#C9A24D]/35 placeholder-white/15"
           />
         </div>
-        <div className="sm:col-span-2">
-          <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1">Coach Notes</label>
+        <div>
+          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Days / week</label>
           <input
-            value={coachNotes}
-            onChange={(e) => setCoachNotes(e.target.value)}
-            placeholder="Internal notes for this assignment"
-            className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700"
+            type="number"
+            min="1"
+            max="7"
+            value={form.recommendedDaysPerWeek}
+            onChange={(e) => setForm((f) => ({ ...f, recommendedDaysPerWeek: e.target.value }))}
+            placeholder="—"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2 focus:outline-none focus:border-[#C9A24D]/35 placeholder-white/15"
           />
         </div>
       </div>
 
-      <label className="flex items-center gap-2 mt-3 cursor-pointer">
-        <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} className="accent-[#C9A24D]" />
-        <span className="text-gray-500 text-xs">Allow multiple active programs (override)</span>
-      </label>
-
-      {result && (
-        <p className={`text-xs mt-3 ${result.ok ? "text-emerald-400" : "text-red-400"}`}>{result.msg}</p>
-      )}
-
-      <button
-        onClick={handleAssign}
-        disabled={saving}
-        className="mt-4 bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.25em] uppercase px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
-      >
-        {saving ? "Assigning…" : "Assign Program"}
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving || !dirty}
+          className="text-[10px] tracking-[0.3em] uppercase font-bold bg-white/[0.04] border border-white/[0.08] text-white/50 px-4 py-2 hover:bg-white/[0.07] hover:text-white/70 transition-colors disabled:opacity-30 disabled:cursor-default"
+        >
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+        {saved && (
+          <span className="text-[10px] text-emerald-400/60">Saved</span>
+        )}
+      </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// VALIDATION PANEL
+// VALIDATION + PUBLISH PANEL
 // ─────────────────────────────────────────────────────────────
 
-function ValidationPanel({ templateId, onPublish }: { templateId: string; onPublish: () => void }) {
-  const [errors, setErrors] = useState<string[] | null>(null);
+function PublishPanel({
+  templateId,
+  onPublish,
+}: {
+  templateId: string;
+  onPublish:  () => void;
+}) {
+  const [errors,     setErrors]     = useState<string[] | null>(null);
   const [publishing, setPublishing] = useState(false);
 
   async function handlePublish() {
@@ -449,15 +643,15 @@ function ValidationPanel({ templateId, onPublish }: { templateId: string; onPubl
     setErrors(null);
     try {
       const res = await fetch(`/api/internal/programs/${templateId}`, {
-        method: "PUT",
+        method:  "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ publish: true }),
+        body:    JSON.stringify({ publish: true }),
       });
       const data = await res.json() as { ok: boolean; errors?: string[] };
       if (data.ok) {
         onPublish();
       } else {
-        setErrors(data.errors ?? ["Unknown validation failure"]);
+        setErrors(data.errors ?? ["Validation failed."]);
       }
     } finally {
       setPublishing(false);
@@ -465,33 +659,151 @@ function ValidationPanel({ templateId, onPublish }: { templateId: string; onPubl
   }
 
   return (
-    <div className="border border-white/[0.08] bg-[#0d0e0f] p-5 mt-6">
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-[10px] tracking-[0.5em] text-gray-600 uppercase font-semibold">Publish Program</p>
+    <div className="border-t border-white/[0.05] mt-8 pt-6">
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <p className="text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Publish Program</p>
+          <p className="text-white/25 text-xs leading-relaxed max-w-md">
+            Publishing validates that every assigned blueprint is finalized.
+            Published programs can be assigned to clients. You can continue
+            editing after publishing — each change increments the version.
+          </p>
+        </div>
         <button
           onClick={handlePublish}
           disabled={publishing}
-          className="text-[10px] tracking-[0.25em] uppercase font-semibold bg-[#C9A24D] text-black px-4 py-2 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
+          className="shrink-0 text-[10px] tracking-[0.3em] uppercase font-bold bg-[#C9A24D] text-black px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
         >
           {publishing ? "Validating…" : "Validate & Publish"}
         </button>
       </div>
 
-      <p className="text-gray-700 text-xs mb-3">
-        Publishing validates that every assigned blueprint is published and passes structural checks.
-        Only published programs can be assigned to clients.
-      </p>
-
       {errors && errors.length > 0 && (
-        <div className="space-y-1.5">
+        <div className="mt-5 space-y-2">
           {errors.map((e, i) => (
-            <div key={i} className="flex items-start gap-2 bg-red-500/[0.04] border border-red-500/15 px-3 py-2">
-              <span className="text-red-400 text-xs shrink-0">✗</span>
-              <p className="text-red-400/80 text-xs">{e}</p>
+            <div key={i} className="flex items-start gap-3 bg-red-500/[0.04] border border-red-500/[0.12] px-3 py-2.5">
+              <span className="text-red-400/60 text-[10px] mt-0.5 shrink-0">✕</span>
+              <p className="text-red-400/70 text-xs">{e}</p>
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// ASSIGN PANEL
+// ─────────────────────────────────────────────────────────────
+
+interface ClientOption { id: string; name: string }
+
+function AssignPanel({ templateId }: { templateId: string }) {
+  const [clients,       setClients]       = useState<ClientOption[]>([]);
+  const [loadingC,      setLoadingC]      = useState(false);
+  const [clientId,      setClientId]      = useState("");
+  const [startDate,     setStartDate]     = useState(new Date().toISOString().slice(0, 10));
+  const [coachNotes,    setCoachNotes]    = useState("");
+  const [override,      setOverride]      = useState(false);
+  const [saving,        setSaving]        = useState(false);
+  const [result,        setResult]        = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const loadClients = useCallback(async () => {
+    if (clients.length > 0) return;
+    setLoadingC(true);
+    try {
+      const res  = await fetch("/api/internal/clients");
+      const data = await res.json() as { ok: boolean; clients?: ClientOption[] };
+      if (data.ok && data.clients) {
+        setClients(data.clients);
+      }
+    } finally {
+      setLoadingC(false);
+    }
+  }, [clients.length]);
+
+  async function handleAssign() {
+    if (!clientId.trim() || !startDate) {
+      setResult({ ok: false, msg: "Select a client and start date." });
+      return;
+    }
+    setSaving(true);
+    setResult(null);
+    try {
+      const res  = await fetch("/api/internal/client-programs", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ clientId: clientId.trim(), programTemplateId: templateId, startDate, coachNotes: coachNotes || null, overrideAllowMultiple: override }),
+      });
+      const data = await res.json() as { ok: boolean; error?: string };
+      setResult({ ok: data.ok, msg: data.ok ? "Program assigned." : (data.error ?? "Failed.") });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <p className="text-white/25 text-xs leading-relaxed">
+        Assign this program to a client. A deep copy of the schedule is created
+        for the client at assignment time — future template edits won&apos;t affect
+        in-progress assignments.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Client</label>
+          <input
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            onFocus={loadClients}
+            placeholder="Search or paste client ID…"
+            list="assign-client-list"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2 focus:outline-none focus:border-[#C9A24D]/35 placeholder-white/15"
+          />
+          <datalist id="assign-client-list">
+            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </datalist>
+          {loadingC && <p className="text-white/20 text-[10px] mt-1">Loading clients…</p>}
+        </div>
+        <div>
+          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Start Date</label>
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2 focus:outline-none focus:border-[#C9A24D]/35"
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Coach Notes</label>
+          <input
+            value={coachNotes}
+            onChange={(e) => setCoachNotes(e.target.value)}
+            placeholder="Internal notes for this assignment (optional)…"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2 focus:outline-none focus:border-[#C9A24D]/35 placeholder-white/15"
+          />
+        </div>
+      </div>
+
+      <label className="flex items-center gap-2.5 cursor-pointer">
+        <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} className="accent-[#C9A24D]" />
+        <span className="text-white/30 text-xs">Allow alongside an existing active program</span>
+      </label>
+
+      {result && (
+        <p className={`text-xs ${result.ok ? "text-emerald-400/70" : "text-red-400/70"}`}>
+          {result.msg}
+        </p>
+      )}
+
+      <button
+        onClick={handleAssign}
+        disabled={saving}
+        className="text-[10px] tracking-[0.3em] uppercase font-bold bg-[#C9A24D] text-black px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
+      >
+        {saving ? "Assigning…" : "Assign Program →"}
+      </button>
     </div>
   );
 }
@@ -500,54 +812,77 @@ function ValidationPanel({ templateId, onPublish }: { templateId: string; onPubl
 // MAIN BUILDER
 // ─────────────────────────────────────────────────────────────
 
-interface Props {
-  templateId: string;
-  initialData: ProgramBuilderData;
-  blueprints: BlueprintOption[];
-  backHref?: string;
-}
+type Tab = "schedule" | "details" | "assign";
 
-export default function ProgramBuilder({ templateId, initialData, blueprints, backHref = "/admin/programs" }: Props) {
-  const [template, setTemplate] = useState(initialData.template);
-  const [weeks, setWeeks] = useState(initialData.weeks);
-  const [addingWeek, setAddingWeek] = useState(false);
-  const [activePanel, setActivePanel] = useState<"schedule" | "assign">("schedule");
+export default function ProgramBuilder({
+  templateId,
+  initialData,
+  blueprints,
+  backHref = "/hq/programs",
+}: {
+  templateId:   string;
+  initialData:  ProgramBuilderData;
+  blueprints:   BlueprintOption[];
+  backHref?:    string;
+}) {
+  const [template,     setTemplate]     = useState(initialData.template);
+  const [weeks,        setWeeks]        = useState(initialData.weeks);
+  const [tab,          setTab]          = useState<Tab>("schedule");
+  const [addingWeek,   setAddingWeek]   = useState(false);
+  const [editingName,  setEditingName]  = useState(false);
+  const [nameInput,    setNameInput]    = useState(initialData.template.name);
+  const [savingName,   setSavingName]   = useState(false);
+  const [archiving,    setArchiving]    = useState(false);
 
-  function handleUpdateDay(weekId: string, dayOfWeek: number, data: DayData | null) {
+  const badge = statusBadge(template.status);
+
+  // ── Day update ──────────────────────────────────────────────
+  function handleUpdateDay(weekId: string, dow: number, data: DayData | null) {
     setWeeks((prev) =>
       prev.map((w) => {
         if (w.week.id !== weekId) return w;
-        const filtered = w.days.filter((d) => d.day.dayOfWeek !== dayOfWeek);
+        const filtered = w.days.filter((d) => d.day.dayOfWeek !== dow);
         if (data === null) return { ...w, days: filtered };
         return { ...w, days: [...filtered, data] };
       }),
     );
   }
 
+  // ── Week handlers ───────────────────────────────────────────
   function handleDeleteWeek(weekId: string) {
     setWeeks((prev) => prev.filter((w) => w.week.id !== weekId));
   }
 
-  function handleUpdateWeekLabel(weekId: string, label: string) {
+  function handleCopyWeek(sourceWeekId: string, newWeek: WeekData["week"]) {
+    const sourceWeekData = weeks.find((w) => w.week.id === sourceWeekId);
+    if (!sourceWeekData) return;
+    setWeeks((prev) => [
+      ...prev,
+      {
+        week: newWeek,
+        days: sourceWeekData.days.map((d) => ({
+          ...d,
+          day: { ...d.day, id: "", programWeekId: newWeek.id },
+        })),
+      },
+    ]);
+  }
+
+  function handleUpdateLabel(weekId: string, label: string) {
     setWeeks((prev) =>
-      prev.map((w) =>
-        w.week.id === weekId ? { ...w, week: { ...w.week, label } } : w,
-      ),
+      prev.map((w) => w.week.id === weekId ? { ...w, week: { ...w.week, label } } : w),
     );
   }
 
   async function handleAddWeek() {
     setAddingWeek(true);
     try {
-      const res = await fetch(`/api/internal/programs/${templateId}/weeks`, {
-        method: "POST",
+      const res  = await fetch(`/api/internal/programs/${templateId}/weeks`, {
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body:    JSON.stringify({}),
       });
-      const data = await res.json() as {
-        ok: boolean;
-        week?: { id: string; weekNumber: number; label: string | null; notes: string | null };
-      };
+      const data = await res.json() as { ok: boolean; week?: WeekData["week"] };
       if (data.ok && data.week) {
         setWeeks((prev) => [...prev, { week: data.week!, days: [] }]);
       }
@@ -556,87 +891,164 @@ export default function ProgramBuilder({ templateId, initialData, blueprints, ba
     }
   }
 
-  function handlePublish() {
-    setTemplate((t) => ({ ...t, status: "active" }));
+  // ── Name inline edit ────────────────────────────────────────
+  async function handleSaveName() {
+    if (!nameInput.trim() || nameInput === template.name) {
+      setEditingName(false);
+      setNameInput(template.name);
+      return;
+    }
+    setSavingName(true);
+    try {
+      const res  = await fetch(`/api/internal/programs/${templateId}`, {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ name: nameInput.trim() }),
+      });
+      const data = await res.json() as { ok: boolean; template?: ProgramTemplate };
+      if (data.ok && data.template) {
+        setTemplate(data.template);
+        setNameInput(data.template.name);
+        setEditingName(false);
+      }
+    } finally {
+      setSavingName(false);
+    }
   }
 
-  // Days used across all weeks for blueprint usage summary
-  const assignedCount = weeks.reduce(
+  // ── Archive ─────────────────────────────────────────────────
+  async function handleArchive() {
+    if (!confirm("Archive this program? It will no longer be assignable to new clients.")) return;
+    setArchiving(true);
+    try {
+      const res  = await fetch(`/api/internal/programs/${templateId}`, {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ status: "archived" }),
+      });
+      const data = await res.json() as { ok: boolean; template?: ProgramTemplate };
+      if (data.ok && data.template) setTemplate(data.template);
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  // ── Stats ───────────────────────────────────────────────────
+  const trainingDays = weeks.reduce(
     (sum, w) => sum + w.days.filter((d) => d.day.workoutTemplateId).length,
     0,
   );
+  const sortedWeeks = [...weeks].sort((a, b) => a.week.weekNumber - b.week.weekNumber);
 
   return (
-    <div className="min-h-screen bg-[#080909] text-white">
-      {/* Header */}
-      <header className="border-b border-white/[0.06] bg-[#080909]/95 backdrop-blur-sm sticky top-0 z-40">
-        <div className="max-w-screen-xl mx-auto px-4 md:px-8">
-          <div className="flex items-center justify-between h-14 gap-4">
-            <div className="flex items-center gap-4 min-w-0">
-              <Link href={backHref} className="text-gray-600 hover:text-gray-400 text-xs tracking-widest uppercase font-semibold transition-colors shrink-0">
+    <div className="min-h-screen bg-[#070809] text-white">
+
+      {/* ── Sticky header ─────────────────────────────────────── */}
+      <header className="sticky top-0 z-40 bg-[#070809]/95 backdrop-blur-sm border-b border-white/[0.05]">
+        <div className="max-w-screen-lg mx-auto px-5 md:px-8">
+          <div className="flex items-center h-13 gap-4 py-2">
+
+            {/* Left: back + name */}
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <Link
+                href={backHref}
+                className="text-white/25 hover:text-white/50 text-[10px] tracking-[0.35em] uppercase font-semibold transition-colors shrink-0"
+              >
                 ← Programs
               </Link>
-              <div className="w-px h-4 bg-white/10 shrink-0" />
-              <h1 className="text-white font-semibold text-sm tracking-wide truncate">{template.name}</h1>
-              <span className={`px-1.5 py-0.5 text-[10px] font-semibold tracking-wide shrink-0 ${statusCls(template.status)}`}>
-                {statusLabel(template.status)}
+              <div className="w-px h-4 bg-white/[0.08] shrink-0" />
+
+              {editingName ? (
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    autoFocus
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSaveName();
+                      if (e.key === "Escape") { setNameInput(template.name); setEditingName(false); }
+                    }}
+                    className="flex-1 bg-transparent border-b border-[#C9A24D]/40 text-white text-sm font-medium focus:outline-none py-0.5"
+                  />
+                  <button onClick={handleSaveName} disabled={savingName} className="text-[10px] text-[#C9A24D]/70 hover:text-[#C9A24D] disabled:opacity-50">
+                    {savingName ? "…" : "Save"}
+                  </button>
+                  <button onClick={() => { setNameInput(template.name); setEditingName(false); }} className="text-[10px] text-white/25 hover:text-white/50">
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setEditingName(true)}
+                  className="text-white/80 text-sm font-medium hover:text-white transition-colors truncate text-left"
+                >
+                  {template.name}
+                </button>
+              )}
+
+              <span className={`px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase shrink-0 ${badge.cls}`}>
+                {badge.label}
               </span>
+
+              {template.version > 1 && (
+                <span className="text-white/18 text-[9px] shrink-0">v{template.version}</span>
+              )}
             </div>
-            <div className="flex items-center gap-2 shrink-0 text-gray-600 text-[11px]">
-              <span>{weeks.length}w · {assignedCount} workouts</span>
+
+            {/* Right: actions + stats */}
+            <div className="flex items-center gap-3 shrink-0">
+              <span className="text-white/18 text-[10px] hidden sm:block tabular-nums">
+                {weeks.length}w · {trainingDays} workouts
+              </span>
+
+              {template.status === "active" && (
+                <button
+                  onClick={handleArchive}
+                  disabled={archiving}
+                  className="text-[9px] tracking-[0.3em] uppercase font-semibold text-white/25 border border-white/[0.08] px-3 py-1.5 hover:text-white/45 hover:border-white/15 transition-colors disabled:opacity-40"
+                >
+                  {archiving ? "…" : "Archive"}
+                </button>
+              )}
             </div>
           </div>
+
+          {/* Day-of-week legend (below header, above tabs) */}
+          {tab === "schedule" && (
+            <div className="grid grid-cols-7 gap-px pb-1 -mx-0">
+              {DAY_FULL.map((d) => (
+                <p key={d} className="text-white/12 text-[8px] text-center uppercase tracking-[0.2em]">{d.slice(0, 3)}</p>
+              ))}
+            </div>
+          )}
         </div>
       </header>
 
-      <div className="max-w-screen-xl mx-auto px-4 md:px-8 py-6">
-        {/* Nav tabs */}
-        <div className="flex gap-1 mb-6 border-b border-white/[0.06]">
-          {(["schedule", "assign"] as const).map((p) => (
+      <div className="max-w-screen-lg mx-auto px-5 md:px-8 py-6">
+
+        {/* ── Tabs ──────────────────────────────────────────── */}
+        <div className="flex gap-0 mb-6 border-b border-white/[0.05]">
+          {(["schedule", "details", "assign"] as Tab[]).map((t) => (
             <button
-              key={p}
-              onClick={() => setActivePanel(p)}
-              className={`px-4 py-2.5 text-[10px] uppercase tracking-[0.35em] font-semibold transition-colors border-b-2 -mb-px ${
-                activePanel === p
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-5 py-2.5 text-[9px] uppercase tracking-[0.4em] font-semibold transition-colors border-b-2 -mb-px ${
+                tab === t
                   ? "text-[#C9A24D] border-[#C9A24D]"
-                  : "text-gray-600 border-transparent hover:text-gray-400"
+                  : "text-white/25 border-transparent hover:text-white/45"
               }`}
             >
-              {p === "schedule" ? "Schedule" : "Assign to Client"}
+              {t === "schedule" ? "Schedule" : t === "details" ? "Details" : "Assign"}
             </button>
           ))}
         </div>
 
-        {activePanel === "schedule" && (
+        {/* ── Schedule tab ──────────────────────────────────── */}
+        {tab === "schedule" && (
           <>
-            {/* Blueprint legend */}
-            {blueprints.length > 0 && (
-              <div className="mb-6 p-3 bg-[#0d0e0f] border border-white/[0.06]">
-                <p className="text-[9px] text-gray-600 uppercase tracking-[0.4em] mb-2">Published Blueprints Available</p>
-                <div className="flex flex-wrap gap-2">
-                  {blueprints.slice(0, 12).map((b) => (
-                    <span key={b.id} className="text-[10px] text-gray-400 border border-white/[0.06] px-2 py-0.5">
-                      {b.name}
-                    </span>
-                  ))}
-                  {blueprints.length > 12 && (
-                    <span className="text-[10px] text-gray-600">+{blueprints.length - 12} more</span>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Day-of-week header */}
-            <div className="grid grid-cols-7 gap-1 mb-1 px-0">
-              {DAY_FULL.map((d) => (
-                <p key={d} className="text-gray-700 text-[10px] text-center uppercase tracking-[0.2em] pb-1">{d}</p>
-              ))}
-            </div>
-
-            {/* Week rows */}
-            {[...weeks]
-              .sort((a, b) => a.week.weekNumber - b.week.weekNumber)
-              .map((w) => (
+            {/* Week list */}
+            <div className="space-y-0">
+              {sortedWeeks.map((w) => (
                 <WeekRow
                   key={w.week.id}
                   weekData={w}
@@ -644,33 +1056,78 @@ export default function ProgramBuilder({ templateId, initialData, blueprints, ba
                   blueprints={blueprints}
                   onUpdateDay={handleUpdateDay}
                   onDelete={handleDeleteWeek}
-                  onUpdateLabel={handleUpdateWeekLabel}
+                  onCopyWeek={handleCopyWeek}
+                  onUpdateLabel={handleUpdateLabel}
                 />
               ))}
+            </div>
 
             {/* Add week */}
             <button
               onClick={handleAddWeek}
               disabled={addingWeek}
-              className="w-full border border-dashed border-white/[0.08] px-5 py-4 text-gray-600 text-xs hover:text-gray-400 hover:border-white/[0.15] transition-colors disabled:opacity-50"
+              className="w-full border border-dashed border-white/[0.05] py-4 text-white/20 text-xs hover:text-white/40 hover:border-white/[0.12] transition-colors disabled:opacity-40 mt-1"
             >
               {addingWeek ? "Adding…" : "+ Add Week"}
             </button>
 
-            {/* Validation / publish */}
-            {template.status !== "active" && (
-              <ValidationPanel templateId={templateId} onPublish={handlePublish} />
+            {/* Blueprints legend */}
+            {blueprints.length > 0 && (
+              <div className="mt-8 pt-6 border-t border-white/[0.04]">
+                <p className="text-[9px] text-white/18 uppercase tracking-[0.45em] mb-3">Blueprints in library</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {blueprints.map((b) => (
+                    <Link
+                      key={b.id}
+                      href={`/hq/blueprints/${b.id}`}
+                      className="text-[10px] text-white/28 border border-white/[0.05] px-2 py-1 hover:text-white/50 hover:border-white/[0.10] transition-colors truncate max-w-[180px]"
+                    >
+                      {b.name}
+                      {b.estimatedDurationMinutes && (
+                        <span className="text-white/15 ml-1.5">~{b.estimatedDurationMinutes}m</span>
+                      )}
+                    </Link>
+                  ))}
+                  <Link
+                    href="/hq/blueprints/new"
+                    className="text-[10px] text-[#C9A24D]/35 border border-[#C9A24D]/[0.12] px-2 py-1 hover:text-[#C9A24D]/60 hover:border-[#C9A24D]/25 transition-colors"
+                  >
+                    + New blueprint
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {/* Publish panel — only for drafts */}
+            {template.status === "draft" && (
+              <PublishPanel
+                templateId={templateId}
+                onPublish={() => setTemplate((t) => ({ ...t, status: "active" }))}
+              />
             )}
           </>
         )}
 
-        {activePanel === "assign" && (
+        {/* ── Details tab ───────────────────────────────────── */}
+        {tab === "details" && (
+          <MetadataPanel
+            templateId={templateId}
+            template={template}
+            onChange={setTemplate}
+          />
+        )}
+
+        {/* ── Assign tab ────────────────────────────────────── */}
+        {tab === "assign" && (
           <>
             {template.status !== "active" ? (
-              <div className="border border-amber-500/20 bg-amber-500/[0.04] px-5 py-4 text-amber-400 text-sm">
-                This program must be published before it can be assigned to clients.
-                <br />
-                <span className="text-xs text-amber-400/60">Switch to the Schedule tab and click Validate & Publish.</span>
+              <div className="border border-amber-500/[0.15] bg-amber-500/[0.03] px-5 py-4">
+                <p className="text-amber-400/60 text-sm">
+                  Publish this program before assigning it to clients.
+                </p>
+                <p className="text-amber-400/35 text-xs mt-1">
+                  Go to the Schedule tab → Validate &amp; Publish.
+                </p>
               </div>
             ) : (
               <AssignPanel templateId={templateId} />

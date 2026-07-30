@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  listWorkoutTemplates,
+  listWorkoutTemplatesWithSummary,
   createWorkoutTemplate,
 } from "@/lib/db/workout-template-service";
 import type { ExperienceLevel } from "@/lib/db/schema";
@@ -12,7 +12,7 @@ export async function GET() {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   try {
-    const templates = await listWorkoutTemplates();
+    const templates = await listWorkoutTemplatesWithSummary();
     return NextResponse.json({ ok: true, templates });
   } catch (err) {
     return NextResponse.json(

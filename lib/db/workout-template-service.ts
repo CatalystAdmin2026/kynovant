@@ -80,6 +80,41 @@ export async function listWorkoutTemplates(): Promise<WorkoutTemplate[]> {
     .orderBy(asc(workoutTemplates.createdAt));
 }
 
+// Returns templates enriched with exercise count — used by the
+// program builder's blueprint picker for at-a-glance previews.
+export type WorkoutTemplateSummary = Pick<
+  WorkoutTemplate,
+  | "id" | "name" | "slug" | "status" | "primaryFocus"
+  | "estimatedDurationMinutes" | "recommendedExperienceLevel"
+  | "description" | "updatedAt"
+> & { exerciseCount: number };
+
+export async function listWorkoutTemplatesWithSummary(): Promise<WorkoutTemplateSummary[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id:                          workoutTemplates.id,
+      name:                        workoutTemplates.name,
+      slug:                        workoutTemplates.slug,
+      status:                      workoutTemplates.status,
+      primaryFocus:                workoutTemplates.primaryFocus,
+      estimatedDurationMinutes:    workoutTemplates.estimatedDurationMinutes,
+      recommendedExperienceLevel:  workoutTemplates.recommendedExperienceLevel,
+      description:                 workoutTemplates.description,
+      updatedAt:                   workoutTemplates.updatedAt,
+      exerciseCount:               sql<number>`count(${workoutTemplateExercises.id})::int`,
+    })
+    .from(workoutTemplates)
+    .leftJoin(
+      workoutTemplateExercises,
+      eq(workoutTemplateExercises.workoutTemplateId, workoutTemplates.id),
+    )
+    .groupBy(workoutTemplates.id)
+    .orderBy(asc(workoutTemplates.name));
+
+  return rows;
+}
+
 export async function getWorkoutTemplate(
   id: string,
 ): Promise<WorkoutTemplate | null> {

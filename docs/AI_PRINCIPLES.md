@@ -168,6 +168,147 @@ This is not optional. The audit trail serves:
 
 ---
 
+## Programming Intelligence Doctrine
+
+*Established 2026-07-28*
+
+The principles above govern AI behavior across all domains of Catalyst OS. This section extends that governance to the **programming and workout analysis domain** — where AI overreach carries the most direct risk to client outcomes.
+
+A coach's programming decisions determine training load, adaptation, injury risk, and long-term client progress. The Programming Intelligence Layer (PIL) produces findings that inform those decisions. The boundary between what PIL calculates and what AI expresses must be explicit and permanent.
+
+---
+
+**What the Programming Intelligence Layer is**
+
+PIL is a deterministic coaching engine. It evaluates, validates, explains, and improves strength-training programs using structured exercise knowledge from the Exercise Library.
+
+The three layers of Catalyst's programming intelligence are distinct and must not change roles:
+
+- **The Exercise Library defines knowledge.** Exercise properties, muscles, joint stress, fatigue, biomechanics, contraindications, and relations are structured facts stored in the database.
+- **The Programming Intelligence Layer applies knowledge.** It runs rule-based and heuristic calculations over exercise knowledge and program structure to produce transparent, traceable findings.
+- **AI communicates and orchestrates knowledge.** In the programming domain, AI explains PIL findings, translates technical analysis into coaching-voice language, and orchestrates deterministic PIL services during future program generation.
+
+AI is a consumer of PIL — not a replacement for it.
+
+---
+
+### P-1. Coach authority is preserved
+
+PIL may analyze, flag, recommend, compare, and explain. It must not silently alter a Blueprint, Program, Assignment, or completed workout. Any program-changing action — substituting an exercise, adjusting volume, reordering sessions — requires explicit coach approval.
+
+The coach who sees a PIL finding is looking at evidence, not a decision. PIL surfaces what it knows; the coach decides what to do with it.
+
+**Why this matters:** A coaching program is a contract between a coach and a client. If the system can silently alter that contract based on algorithmic conclusions, the coach is no longer accountable for the program they deliver. Catalyst will not create that situation.
+
+---
+
+### P-2. Deterministic logic owns objective analysis
+
+The following analyses must be calculated from structured data by transparent, auditable rules — not delegated to an LLM:
+
+- Volume calculations (direct and indirect sets per muscle group)
+- Fatigue scoring (sets × fatigue cost)
+- Movement-pattern distribution and push/pull balance
+- Muscle-frequency analysis across training days
+- Joint-stress aggregation per session
+- Recovery-spacing analysis
+- Exercise redundancy detection
+- Equipment conflict identification
+- Superset compatibility analysis
+- Progression validation
+
+If any of these results cannot be calculated from structured data in the Exercise Library and program schema, the result must be returned as unknown — not inferred or estimated by a model.
+
+**Why this matters:** LLM-produced calculations are opaque, inconsistent across requests, and cannot be unit-tested. A volume recommendation that changes between page loads is worse than no recommendation at all. Coaching conclusions grounded in visible arithmetic are auditable, correctable, and trustworthy.
+
+---
+
+### P-3. AI owns communication and orchestration
+
+When AI is introduced to the programming domain, its role is bounded to:
+
+- Explaining PIL findings in coaching-voice language
+- Summarizing Blueprint or Program audit results for coach review
+- Translating technical metrics (push/pull ratio, fatigue score) into actionable coaching guidance
+- Producing client-facing explanations of program structure or exercise intent
+- Comparing alternative programming approaches
+- Orchestrating deterministic PIL services during future AI-assisted program generation
+
+AI must not invent exercise scores, muscle associations, contraindications, or biomechanical facts. If information is not in the Exercise Library, AI may not supply it as though it were.
+
+---
+
+### P-4. The Exercise Library is the source of truth
+
+PIL may only reason from exercise knowledge represented in Catalyst's structured data. Every finding must trace back to a database record.
+
+- Missing data must be treated as unknown, not estimated
+- Exercise relations, muscles, biomechanics, fatigue, joint stress, contraindications, and prescriptions must trace back to structured rows
+- PIL must not supplement missing library data by consulting an LLM
+- When `fatigueCost` is null for an exercise, that exercise's fatigue contribution is unknown; PIL must surface the gap rather than assume a default
+
+---
+
+### P-5. Recommendations must be explainable
+
+Every PIL finding must expose the data that produced it. A coach must be able to see:
+
+- Which exercises contributed to a volume or fatigue total
+- Which sessions or days contributed to a frequency or recovery finding
+- Which movement patterns are over- or under-represented
+- Which rule or heuristic fired to produce the finding
+- Whether the finding is certain, heuristic, or limited by incomplete data
+
+Catalyst will not present "optimal" scores or black-box conclusions. The conclusion and its evidence are always available together.
+
+---
+
+### P-6. PIL does not practice medicine
+
+PIL may identify stored contraindication conflicts and surface cautionary information. It must not:
+
+- Diagnose injuries or medical conditions
+- Prescribe treatment protocols
+- Claim medical certainty about contraindication severity
+- Make client-specific health recommendations beyond what is stored in structured Catalyst data
+
+Client-health matching must remain bounded by information Catalyst actually stores. When a client's health record and an exercise's contraindication record share a body region, PIL may surface a caution. It may not extrapolate beyond the stored record.
+
+---
+
+### P-7. Historical records remain immutable
+
+Exercise Library updates, PIL algorithm changes, and future programming improvements must not rewrite completed workout history.
+
+- `workout_sessions.workoutSnapshot` is frozen at session creation and must remain so
+- `workout_set_logs` rows are append-only
+- Analysis of historical sessions may evolve as PIL improves, but the underlying records do not
+
+A coach reviewing a session from six months ago must see what the client actually did — not what today's algorithm would have produced for that session.
+
+---
+
+### P-8. Evidence and uncertainty must be represented honestly
+
+PIL must not use absolute language ("optimal," "perfect," "ideal") where coaching judgment or individual variation meaningfully affects the answer. PIL findings must distinguish:
+
+- **Hard violations** — rules broken regardless of coaching philosophy (e.g., repsMin > repsMax, prescribed exercise not in library)
+- **Evidence-informed guidelines** — findings backed by research consensus with defensible thresholds
+- **Heuristics** — reasonable defaults that may not apply universally; must be labeled as such
+- **Incomplete data** — findings that cannot be completed because required Exercise Library data is absent
+
+A finding that fires because of missing data must say so. A finding that reflects a heuristic must say so. Coaches must never mistake a heuristic for a rule.
+
+---
+
+### P-9. Extensibility without fragmentation
+
+Future AI, analytics, optimization, and reporting features must consume PIL rather than recreate parallel programming logic. Shared calculations belong in reusable PIL service functions — not in API route handlers, AI prompts, or one-off utilities.
+
+When volume logic needs correction, it must be fixable in one place. Duplicate volume-calculation implementations scattered across features are a structural failure.
+
+---
+
 ## Current AI State (as of 2026-07-22)
 
 No LLM features are currently active in Catalyst OS. The narrative summary on the Progress page is generated by `buildNarrativeSummary()` in `app/portal/progress/page.tsx` — a deterministic, rule-based function that produces coaching-voice prose from behavioral data. No model is involved.
@@ -203,3 +344,4 @@ Before shipping any AI-powered feature, verify:
 | Date | Change |
 |------|--------|
 | 2026-07-22 | Initial version established |
+| 2026-07-28 | Added Programming Intelligence Doctrine (P-1 through P-9): PIL/AI boundary for the programming analysis domain |

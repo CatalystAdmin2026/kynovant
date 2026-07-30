@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 import { use } from "react";
 import BlueprintEditor from "@/components/BlueprintEditor";
 import type { BlueprintData } from "@/components/BlueprintEditor";
+import BlueprintAuditPanel from "@/components/pil/BlueprintAuditPanel";
 
 export default function HQBlueprintEditorPage({
   params,
@@ -63,5 +64,12 @@ export default function HQBlueprintEditorPage({
 
   if (!data) return null;
 
-  return <BlueprintEditor templateId={id} initialData={data} backHref="/hq/blueprints" />;
+  return (
+    <div className="space-y-6">
+      <BlueprintEditor templateId={id} initialData={data} backHref="/hq/blueprints" />
+      <div className="max-w-4xl mx-auto px-4">
+        <BlueprintAuditPanel templateId={id} />
+      </div>
+    </div>
+  );
 }

@@ -41,6 +41,7 @@ import {
 import {
   programWeeks,
   programWeekDays,
+  clientPrograms,
   type ProgramWeek,
   type ProgramWeekDay,
 } from "./schema-program";
@@ -215,6 +216,22 @@ export async function updateProgramTemplate(
 
 export async function deleteProgramTemplate(id: string): Promise<void> {
   const db = getDb();
+
+  // Refuse to delete if any client assignment references this template.
+  // The FK RESTRICT would catch this at the DB level but with an opaque error;
+  // this gives a clean, actionable message before touching anything.
+  const [assigned] = await db
+    .select({ id: clientPrograms.id })
+    .from(clientPrograms)
+    .where(eq(clientPrograms.programTemplateId, id))
+    .limit(1);
+
+  if (assigned) {
+    throw new Error(
+      "This program has client assignments and cannot be deleted. Archive it instead.",
+    );
+  }
+
   // Delete days → weeks first (FK constraints)
   const weeks = await db
     .select({ id: programWeeks.id })
@@ -506,4 +523,250 @@ export async function getProgramContent(
   }));
 
   return { template, weeks: weekData };
+}
+
+// ─────────────────────────────────────────────────────────────
+// CLONE
+//
+// Deep-copies a program template into a new draft. Preserves the
+// entire week/day structure. The clone's name gets " (Copy)"
+// appended. parentTemplateId points back to the original for
+// lineage tracking. Used by both the coach UI and future AI
+// generator (which clones a base template before populating it).
+// ─────────────────────────────────────────────────────────────
+
+export async function cloneProgramTemplate(
+  sourceId: string,
+  coachId: string | null = null,
+): Promise<ProgramTemplate> {
+  const db = getDb();
+
+  const [source] = await db
+    .select()
+    .from(programTemplates)
+    .where(eq(programTemplates.id, sourceId))
+    .limit(1);
+
+  if (!source) throw new Error(`Program template ${sourceId} not found`);
+
+  const baseName = source.name.replace(/ \(Copy\)(\s*\d+)?$/, "");
+  const cloneName = `${baseName} (Copy)`;
+  const cloneSlug = slugify(cloneName) + "-" + Date.now().toString(36);
+
+  const [clone] = await db
+    .insert(programTemplates)
+    .values({
+      name: cloneName,
+      slug: cloneSlug,
+      category: source.category,
+      experienceLevel: source.experienceLevel,
+      description: source.description,
+      recommendedDaysPerWeek: source.recommendedDaysPerWeek,
+      defaultDurationWeeks: source.defaultDurationWeeks,
+      status: "draft",
+      version: 1,
+      createdBy: coachId,
+      parentTemplateId: sourceId,
+    })
+    .returning();
+
+  const sourceWeeks = await db
+    .select()
+    .from(programWeeks)
+    .where(eq(programWeeks.programTemplateId, sourceId))
+    .orderBy(asc(programWeeks.weekNumber));
+
+  for (const week of sourceWeeks) {
+    const [newWeek] = await db
+      .insert(programWeeks)
+      .values({
+        programTemplateId: clone.id,
+        weekNumber: week.weekNumber,
+        label: week.label,
+        notes: week.notes,
+      })
+      .returning();
+
+    const sourceDays = await db
+      .select()
+      .from(programWeekDays)
+      .where(eq(programWeekDays.programWeekId, week.id));
+
+    if (sourceDays.length > 0) {
+      await db.insert(programWeekDays).values(
+        sourceDays.map((d) => ({
+          programWeekId: newWeek.id,
+          dayOfWeek: d.dayOfWeek,
+          workoutTemplateId: d.workoutTemplateId,
+          label: d.label,
+          notes: d.notes,
+        })),
+      );
+    }
+  }
+
+  return clone;
+}
+
+// ─────────────────────────────────────────────────────────────
+// COPY WEEK
+//
+// Appends a duplicate of weekId at the end of the program.
+// Copies all day-slot assignments. Used by coaches to repeat
+// a training week pattern without manually re-assigning each day.
+// ─────────────────────────────────────────────────────────────
+
+export async function copyProgramWeek(
+  weekId: string,
+): Promise<ProgramWeek> {
+  const db = getDb();
+
+  const templateId = await getTemplateIdForWeek(weekId);
+  if (!templateId) throw new Error(`Week ${weekId} not found`);
+
+  const [sourceWeek] = await db
+    .select()
+    .from(programWeeks)
+    .where(eq(programWeeks.id, weekId))
+    .limit(1);
+
+  if (!sourceWeek) throw new Error(`Week ${weekId} not found`);
+
+  const [lastWeek] = await db
+    .select({ n: programWeeks.weekNumber })
+    .from(programWeeks)
+    .where(eq(programWeeks.programTemplateId, templateId))
+    .orderBy(sql`${programWeeks.weekNumber} DESC`)
+    .limit(1);
+
+  const nextNumber = (lastWeek?.n ?? 0) + 1;
+
+  const [newWeek] = await db
+    .insert(programWeeks)
+    .values({
+      programTemplateId: templateId,
+      weekNumber: nextNumber,
+      label: sourceWeek.label ? `${sourceWeek.label} (Copy)` : `Week ${nextNumber}`,
+      notes: sourceWeek.notes,
+    })
+    .returning();
+
+  const sourceDays = await db
+    .select()
+    .from(programWeekDays)
+    .where(eq(programWeekDays.programWeekId, weekId));
+
+  if (sourceDays.length > 0) {
+    await db.insert(programWeekDays).values(
+      sourceDays.map((d) => ({
+        programWeekId: newWeek.id,
+        dayOfWeek: d.dayOfWeek,
+        workoutTemplateId: d.workoutTemplateId,
+        label: d.label,
+        notes: d.notes,
+      })),
+    );
+  }
+
+  await bumpTemplateVersion(templateId);
+  return newWeek;
+}
+
+// ─────────────────────────────────────────────────────────────
+// IMPORT SPEC  (AI seam)
+//
+// Accepts a declarative program spec and atomically applies it.
+// When clearExisting=true, wipes the current week/day structure
+// before writing. Human coach builds the same structure
+// incrementally; AI generator submits it in one call. The
+// on-disk data shape is identical — no special handling needed.
+// ─────────────────────────────────────────────────────────────
+
+export interface ProgramSpecDay {
+  dayOfWeek: number;
+  workoutTemplateId: string | null;
+  label?: string | null;
+  notes?: string | null;
+}
+
+export interface ProgramSpecWeek {
+  weekNumber: number;
+  label?: string | null;
+  notes?: string | null;
+  days: ProgramSpecDay[];
+}
+
+export interface ImportProgramSpecInput {
+  clearExisting?: boolean;
+  weeks: ProgramSpecWeek[];
+}
+
+export interface ImportProgramSpecResult {
+  weeksCreated: number;
+  daysCreated: number;
+}
+
+export async function importProgramSpec(
+  programId: string,
+  input: ImportProgramSpecInput,
+): Promise<ImportProgramSpecResult> {
+  const db = getDb();
+
+  const [template] = await db
+    .select({ id: programTemplates.id })
+    .from(programTemplates)
+    .where(eq(programTemplates.id, programId))
+    .limit(1);
+
+  if (!template) throw new Error(`Program template ${programId} not found`);
+
+  if (input.clearExisting) {
+    const existingWeeks = await db
+      .select({ id: programWeeks.id })
+      .from(programWeeks)
+      .where(eq(programWeeks.programTemplateId, programId));
+
+    if (existingWeeks.length > 0) {
+      await db
+        .delete(programWeekDays)
+        .where(inArray(programWeekDays.programWeekId, existingWeeks.map((w) => w.id)));
+      await db
+        .delete(programWeeks)
+        .where(eq(programWeeks.programTemplateId, programId));
+    }
+  }
+
+  let weeksCreated = 0;
+  let daysCreated = 0;
+
+  for (const specWeek of input.weeks) {
+    const [newWeek] = await db
+      .insert(programWeeks)
+      .values({
+        programTemplateId: programId,
+        weekNumber: specWeek.weekNumber,
+        label: specWeek.label ?? `Week ${specWeek.weekNumber}`,
+        notes: specWeek.notes ?? null,
+      })
+      .returning();
+
+    weeksCreated++;
+
+    const trainingDays = specWeek.days.filter((d) => d.workoutTemplateId != null);
+    if (trainingDays.length > 0) {
+      await db.insert(programWeekDays).values(
+        trainingDays.map((d) => ({
+          programWeekId: newWeek.id,
+          dayOfWeek: d.dayOfWeek,
+          workoutTemplateId: d.workoutTemplateId,
+          label: d.label ?? null,
+          notes: d.notes ?? null,
+        })),
+      );
+      daysCreated += trainingDays.length;
+    }
+  }
+
+  await bumpTemplateVersion(programId);
+  return { weeksCreated, daysCreated };
 }

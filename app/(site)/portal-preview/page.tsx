@@ -62,7 +62,7 @@ export default function PortalPreviewPage() {
       {phase === "entry" && (
         <MissionEntry
           clientName={data.clientName}
-          scenario={scenario}
+          clientId="preview-dev-client"
           onComplete={() => setPhase("portal")}
         />
       )}

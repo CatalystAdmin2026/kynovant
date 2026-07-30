@@ -27,6 +27,7 @@ interface CoachData {
 
 interface Props {
   clientName: string;
+  clientId: string;
   dashboardData: DashboardData;
   coachData: CoachData | null;
   devPreviewState?: string;
@@ -144,6 +145,7 @@ function JourneyTimeline({
 
 export default function PortalDashboard({
   clientName,
+  clientId,
   dashboardData,
   coachData,
   devPreviewState,
@@ -241,7 +243,7 @@ export default function PortalDashboard({
       {phase === "entry" && (
         <MissionEntry
           clientName={clientName}
-          scenario={displayPromises.hasAnyData ? "default" : "first_day"}
+          clientId={clientId}
           onComplete={handleEntryComplete}
         />
       )}

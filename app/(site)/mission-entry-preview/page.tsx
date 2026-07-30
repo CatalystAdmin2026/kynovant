@@ -26,7 +26,7 @@ export default function MissionEntryPreviewPage() {
       {phase === "entry" && (
         <MissionEntry
           clientName={data.clientName}
-          scenario={scenario}
+          clientId="preview-dev-client"
           onComplete={() => setPhase("arrived")}
         />
       )}

@@ -25,6 +25,7 @@ export default async function PortalPage(props: {
   return (
     <PortalDashboard
       clientName={clientName}
+      clientId={dbUser.id}
       dashboardData={dashboardData}
       coachData={coachData}
       devPreviewState={devPreviewState}

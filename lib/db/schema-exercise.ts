@@ -27,10 +27,16 @@ import {
   uniqueIndex,
   index,
   check,
+  customType,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core/columns/common";
 import { users, workoutTemplates, templateStatusEnum } from "./schema";
+
+// tsvector custom type (read-only generated column — never written by Drizzle)
+const tsvector = customType<{ data: string }>({
+  dataType() { return "tsvector"; },
+});
 
 // ─────────────────────────────────────────────────────────────
 // POSTGRES ENUMS
@@ -227,6 +233,12 @@ export const substitutionPolicyEnum = pgEnum("substitution_policy", [
   "no_substitute",
 ]);
 
+export const exerciseScopeEnum = pgEnum("exercise_scope", [
+  "system",
+  "organization",
+  "coach",
+]);
+
 // ─────────────────────────────────────────────────────────────
 // TABLE 1 — exercises
 //
@@ -285,6 +297,12 @@ export const exercises = pgTable(
     createdBy: uuid("created_by").references(() => users.id, {
       onDelete: "set null",
     }),
+    scope: exerciseScopeEnum("scope").notNull().default("coach"),
+    primaryMuscleGroup: muscleGroupEnum("primary_muscle_group"),
+    tags: jsonb("tags").notNull().default([]),
+    defaultPrescription: jsonb("default_prescription"),
+    // Generated tsvector — Postgres maintains this; never written by Drizzle
+    searchVector: tsvector("search_vector"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -299,6 +317,8 @@ export const exercises = pgTable(
     index("idx_exercises_classification").on(table.classification),
     index("idx_exercises_difficulty").on(table.difficulty),
     index("idx_exercises_parent").on(table.parentExerciseId),
+    index("idx_exercises_scope").on(table.scope),
+    index("idx_exercises_primary_muscle_group").on(table.primaryMuscleGroup),
     check(
       "chk_exercise_fatigue_cost",
       sql`${table.fatigueCost} IS NULL OR (${table.fatigueCost} >= 1 AND ${table.fatigueCost} <= 10)`,
@@ -769,7 +789,79 @@ export type WorkoutTemplateExercise =
 export type NewWorkoutTemplateExercise =
   typeof workoutTemplateExercises.$inferInsert;
 
+// ─────────────────────────────────────────────────────────────
+// TABLE 11 — exercise_favorites
+//
+// Coach stars on exercises. Used for the Favorites filter in the
+// Exercise Library and the "Recently Used" picker in blueprints.
+// One row per (exerciseId, coachId) pair.
+// ─────────────────────────────────────────────────────────────
+
+export const exerciseFavorites = pgTable(
+  "exercise_favorites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    exerciseId: uuid("exercise_id")
+      .notNull()
+      .references(() => exercises.id, { onDelete: "cascade" }),
+    coachId: uuid("coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_exercise_favorite").on(table.exerciseId, table.coachId),
+    index("idx_exercise_favorites_coach_id").on(table.coachId),
+    index("idx_exercise_favorites_exercise_id").on(table.exerciseId),
+  ],
+);
+
+// ─────────────────────────────────────────────────────────────
+// TABLE 12 — exercise_coach_overrides
+//
+// Per-coach overrides for system exercises. Allows a coach to set
+// their preferred default prescription and private notes without
+// modifying the canonical exercise record.
+//
+// privateNotes is never shown to clients — coach reference only.
+// ─────────────────────────────────────────────────────────────
+
+export const exerciseCoachOverrides = pgTable(
+  "exercise_coach_overrides",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    exerciseId: uuid("exercise_id")
+      .notNull()
+      .references(() => exercises.id, { onDelete: "cascade" }),
+    coachId: uuid("coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    defaultPrescription: jsonb("default_prescription"),
+    privateNotes: text("private_notes"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_exercise_coach_override").on(table.exerciseId, table.coachId),
+    index("idx_exercise_coach_overrides_coach_id").on(table.coachId),
+    index("idx_exercise_coach_overrides_exercise_id").on(table.exerciseId),
+  ],
+);
+
+export type ExerciseFavorite = typeof exerciseFavorites.$inferSelect;
+export type NewExerciseFavorite = typeof exerciseFavorites.$inferInsert;
+
+export type ExerciseCoachOverride = typeof exerciseCoachOverrides.$inferSelect;
+export type NewExerciseCoachOverride = typeof exerciseCoachOverrides.$inferInsert;
+
 // Enum value types
+export type ExerciseScope = (typeof exerciseScopeEnum.enumValues)[number];
 export type MuscleGroup = (typeof muscleGroupEnum.enumValues)[number];
 export type MovementPattern = (typeof movementPatternEnum.enumValues)[number];
 export type ExerciseClassification =
