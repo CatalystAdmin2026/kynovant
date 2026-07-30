@@ -380,7 +380,7 @@ function SendAgreementModal({
 
         <p className="text-white font-semibold text-sm mb-0.5">Send Agreement</p>
         <p className="text-gray-500 text-xs mb-4">
-          Review details before sending the Catalyst Coaching agreement to{" "}
+          Review details before sending the Kynovant agreement to{" "}
           {lead.event.inviteeName || "client"}.
         </p>
 

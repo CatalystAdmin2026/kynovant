@@ -106,13 +106,13 @@ export default function ApplyPage() {
             <div className="border border-white/5 bg-[#141618] p-6">
               <div className="flex items-center gap-3 mb-4">
                 <Image
-                  src="/logos/mark-gold.png"
-                  alt="Catalyst Coaching"
+                  src="/logos/kynovant-mark.png"
+                  alt="Kynovant"
                   width={20}
                   height={20}
                 />
                 <span className="text-[10px] tracking-[0.3em] font-semibold text-white/50 uppercase">
-                  Catalyst Coaching
+                  Kynovant
                 </span>
               </div>
               <p className="text-gray-500 text-sm leading-relaxed">
@@ -220,7 +220,7 @@ export default function ApplyPage() {
 
               <div>
                 <label className={label}>
-                  How did you hear about Catalyst Coaching?
+                  How did you hear about Kynovant?
                 </label>
                 <select
                   name="referral_source"

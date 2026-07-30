@@ -57,8 +57,8 @@ export default function SetupPasswordPage() {
       <div className="w-full max-w-sm flex flex-col gap-10">
         <div className="flex flex-col items-center gap-4">
           <Image
-            src="/logos/mark-gold.png"
-            alt="Catalyst Coaching"
+            src="/logos/kynovant-mark.png"
+            alt="Kynovant"
             width={36}
             height={36}
             priority
@@ -66,7 +66,7 @@ export default function SetupPasswordPage() {
           />
           <div className="flex flex-col items-center gap-1">
             <p className="text-[10px] font-semibold tracking-[0.28em] text-white/40 uppercase">
-              Catalyst OS
+              Kynovant OS
             </p>
             <h1 className="text-lg font-semibold text-white/90 tracking-wide">
               Create Your Password
@@ -91,7 +91,7 @@ export default function SetupPasswordPage() {
         ) : (
           <form onSubmit={handleSubmit} className="flex flex-col gap-6">
             <p className="text-xs text-white/45 leading-relaxed">
-              Welcome to Catalyst. Create a password to secure your account —
+              Welcome to Kynovant. Create a password to secure your account —
               you&apos;ll use it every time you sign in.
             </p>
 

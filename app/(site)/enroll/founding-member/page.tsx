@@ -3,8 +3,8 @@ import EnrollmentPage from "@/components/EnrollmentPage";
 import { STRIPE_LINKS, STANDARD_INCLUDES } from "@/lib/enrollment";
 
 export const metadata: Metadata = {
-  title: "Founding Member Enrollment — Catalyst Coaching",
-  description: "Activate your Founding Member rate. Private pricing for early supporters of Catalyst Coaching.",
+  title: "Founding Member Enrollment — Kynovant",
+  description: "Activate your Founding Member rate. Private pricing for early supporters of Kynovant.",
   robots: { index: false, follow: false },
 };
 

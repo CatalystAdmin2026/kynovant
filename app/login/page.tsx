@@ -113,8 +113,8 @@ function LoginContent() {
         {/* Catalyst mark */}
         <div className="flex flex-col items-center gap-4">
           <Image
-            src="/logos/mark-gold.png"
-            alt="Catalyst Coaching"
+            src="/logos/kynovant-mark.png"
+            alt="Kynovant"
             width={36}
             height={36}
             priority
@@ -122,10 +122,10 @@ function LoginContent() {
           />
           <div className="flex flex-col items-center gap-1">
             <p className="text-[10px] font-semibold tracking-[0.28em] text-white/40 uppercase">
-              Catalyst OS
+              Kynovant OS
             </p>
             <h1 className="text-lg font-semibold text-white/90 tracking-wide">
-              Catalyst Secure Access
+              Kynovant Secure Access
             </h1>
           </div>
         </div>
@@ -155,7 +155,7 @@ function LoginContent() {
             <div className="flex flex-col gap-2">
               <p className="text-sm font-semibold text-white/85">Check your inbox</p>
               <p className="text-xs text-white/40 leading-relaxed">
-                If an active Catalyst account exists for{" "}
+                If an active Kynovant account exists for{" "}
                 <span className="text-white/60">{email}</span>, a secure sign-in
                 link has been sent.
               </p>
@@ -302,7 +302,7 @@ function LoginContent() {
           href="/"
           className="text-center text-[10px] text-white/25 hover:text-white/45 tracking-[0.1em] uppercase transition-colors"
         >
-          ← Catalyst Coaching
+          ← Kynovant
         </Link>
       </div>
     </div>

@@ -51,7 +51,7 @@ export default function AboutPage() {
 
         <div className="relative z-10 max-w-6xl mx-auto">
           <p className="text-[#C9A24D] text-[11px] font-semibold tracking-[0.45em] mb-4 uppercase">
-            About Catalyst Coaching
+            About Kynovant
           </p>
           <h1 className="font-headline text-5xl md:text-7xl font-bold uppercase text-white leading-none mb-6">
             Coaching Built
@@ -74,7 +74,7 @@ export default function AboutPage() {
             <div className="relative w-72 md:w-80 lg:w-[340px] overflow-hidden aspect-[3/4]">
               <Image
                 src="/images/jermaine-headshot.jpg"
-                alt="Jermaine Jones — Founder & Head Coach, Catalyst Coaching"
+                alt="Jermaine Jones — Founder & Head Coach, Kynovant"
                 fill
                 priority
                 className="object-cover object-top"
@@ -113,7 +113,7 @@ export default function AboutPage() {
                 online. I've made most of those mistakes myself. The gap between
                 where I started and where I am now isn't talent — it's finding
                 the right information and building habits I could actually
-                sustain. Catalyst Coaching exists to give you a direct path to
+                sustain. Kynovant exists to give you a direct path to
                 that same outcome, without the years of trial and error it took
                 me.
               </p>
@@ -294,7 +294,7 @@ export default function AboutPage() {
             Who We Work With.
           </h2>
           <p className="text-gray-400 text-base leading-relaxed mb-12 max-w-2xl mx-auto">
-            Catalyst Coaching is application-based. We work with a limited
+            Kynovant is application-based. We work with a limited
             number of clients at a time — and we only take on clients we're
             confident we can get results with.
           </p>

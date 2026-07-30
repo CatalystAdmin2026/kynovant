@@ -71,7 +71,7 @@ export default function AdminGate({ children }: { children: React.ReactNode }) {
           <div className="text-center mb-10">
             <div className="w-1.5 h-8 bg-[#C9A24D] rounded-sm mx-auto mb-7" />
             <p className="text-[10px] tracking-[0.65em] text-gray-600 uppercase font-semibold mb-3">
-              Catalyst Coaching
+              Kynovant
             </p>
             <h1 className="text-white text-xl font-semibold tracking-wide">
               Command Center

@@ -147,7 +147,7 @@ async function sendClientWelcomeEmail(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Welcome to Catalyst Coaching</title>
+  <title>Welcome to Kynovant</title>
 </head>
 <body style="margin:0;padding:0;background:#080909;font-family:Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#080909;padding:48px 24px;">
@@ -163,7 +163,7 @@ async function sendClientWelcomeEmail(
           <!-- Header -->
           <tr>
             <td style="background:#0d0e0f;padding:36px 40px 20px;">
-              <p style="margin:0 0 6px;font-size:10px;letter-spacing:0.45em;text-transform:uppercase;color:#C9A24D;font-weight:600;">Catalyst Coaching</p>
+              <p style="margin:0 0 6px;font-size:10px;letter-spacing:0.45em;text-transform:uppercase;color:#C9A24D;font-weight:600;">Kynovant</p>
               <h1 style="margin:0;font-size:32px;font-weight:700;color:#ffffff;letter-spacing:-0.02em;text-transform:uppercase;line-height:1.1;">Welcome.</h1>
             </td>
           </tr>
@@ -180,7 +180,7 @@ async function sendClientWelcomeEmail(
             <td style="background:#0d0e0f;padding:28px 40px 36px;">
               <p style="margin:0 0 16px;font-size:15px;color:#d1d5db;line-height:1.75;">Hi ${firstName},</p>
               <p style="margin:0 0 16px;font-size:15px;color:#d1d5db;line-height:1.75;">
-                Welcome to Catalyst Coaching — your membership is active.
+                Welcome to Kynovant — your membership is active.
               </p>
               <p style="margin:0 0 32px;font-size:15px;color:#d1d5db;line-height:1.75;">
                 Your next step is completing your onboarding questionnaire so I can build your training and nutrition plan around your goals, schedule, preferences, and limitations.
@@ -204,7 +204,7 @@ async function sendClientWelcomeEmail(
               <!-- Signoff -->
               <p style="margin:0 0 3px;font-size:14px;color:#ffffff;font-weight:600;">Jermaine Jones</p>
               <p style="margin:0 0 3px;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#C9A24D;">Founder &amp; Head Coach</p>
-              <p style="margin:0;font-size:11px;color:#6b7280;">Catalyst Coaching</p>
+              <p style="margin:0;font-size:11px;color:#6b7280;">Kynovant</p>
             </td>
           </tr>
 
@@ -216,7 +216,7 @@ async function sendClientWelcomeEmail(
           <!-- Footer -->
           <tr>
             <td style="background:#080909;padding:18px 40px;text-align:center;">
-              <p style="margin:0;font-size:11px;color:#374151;">Catalyst Coaching Elite</p>
+              <p style="margin:0;font-size:11px;color:#374151;">Kynovant Elite</p>
             </td>
           </tr>
 
@@ -229,9 +229,9 @@ async function sendClientWelcomeEmail(
 
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
-    from:    `Catalyst Coaching <${fromEmail}>`,
+    from:    `Kynovant <${fromEmail}>`,
     to:      clientEmail,
-    subject: "Welcome to Catalyst Coaching",
+    subject: "Welcome to Kynovant",
     html,
   });
 
@@ -278,7 +278,7 @@ async function sendAdminNotificationEmail(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>New Client Payment — Catalyst Coaching</title>
+  <title>New Client Payment — Kynovant</title>
 </head>
 <body style="margin:0;padding:0;background:#080909;font-family:Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#080909;padding:40px 24px;">
@@ -338,7 +338,7 @@ async function sendAdminNotificationEmail(
           <!-- Footer -->
           <tr>
             <td style="background:#080909;padding:16px 32px;text-align:center;">
-              <p style="margin:0;font-size:11px;color:#374151;">Catalyst Coaching — Admin Notification</p>
+              <p style="margin:0;font-size:11px;color:#374151;">Kynovant — Admin Notification</p>
             </td>
           </tr>
 
@@ -351,9 +351,9 @@ async function sendAdminNotificationEmail(
 
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
-    from:    `Catalyst Coaching <${fromEmail}>`,
+    from:    `Kynovant <${fromEmail}>`,
     to:      adminEmail,
-    subject: "New Catalyst Client Payment Received",
+    subject: "New Kynovant Client Payment Received",
     html,
   });
 

@@ -570,8 +570,8 @@ export default function OnboardingWizard({
             {/* Logo mark */}
             <div className="mb-10">
               <Image
-                src="/logos/mark-gold.png"
-                alt="Catalyst Coaching"
+                src="/logos/kynovant-mark.png"
+                alt="Kynovant"
                 width={40}
                 height={40}
                 className="mx-auto opacity-80"

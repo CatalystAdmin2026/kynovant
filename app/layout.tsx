@@ -15,20 +15,20 @@ const barlowCondensed = Barlow_Condensed({
 });
 
 export const metadata: Metadata = {
-  title: "Catalyst Coaching | Private Physique Coaching",
+  title: "Kynovant | Intelligence Behind Elite Coaching",
   description:
-    "Application-based private physique coaching. Custom programming, nutrition guidance, and accountability for driven people who want real results.",
+    "Kynovant is the operating system behind elite coaching — custom programming, nutrition guidance, and accountability for driven people who want real results.",
   icons: {
-    icon: "/logos/mark-gold.png",
-    shortcut: "/logos/mark-gold.png",
-    apple: "/logos/mark-gold.png",
+    icon: "/kynovant_favicon.png",
+    shortcut: "/kynovant_favicon.png",
+    apple: "/kynovant_favicon.png",
   },
   openGraph: {
-    title: "Catalyst Coaching | Private Physique Coaching",
-    description: "Application-based private physique coaching. Real structure. Real results.",
+    title: "Kynovant | Intelligence Behind Elite Coaching",
+    description: "Kynovant is the operating system behind elite coaching. Real structure. Real results.",
     url: "https://catalystcoachingelite.com",
-    siteName: "Catalyst Coaching",
-    images: [{ url: "/logos/mark-gold.png", width: 512, height: 512 }],
+    siteName: "Kynovant",
+    images: [{ url: "/kynovant_primary.png", width: 1254, height: 1254 }],
     type: "website",
   },
 };

@@ -53,15 +53,15 @@ export default function HQSidebar({ coachName }: { coachName: string }) {
       {/* Brand */}
       <div className="flex items-center gap-2.5 px-5 h-12 border-b border-white/[0.06] shrink-0">
         <Image
-          src="/logos/mark-gold.png"
-          alt="Catalyst"
+          src="/logos/kynovant-mark.png"
+          alt="Kynovant"
           width={16}
           height={16}
           className="opacity-80"
         />
         <div>
           <p className="text-[8px] font-bold tracking-[0.4em] text-white/40 uppercase leading-tight">
-            Catalyst
+            Kynovant
           </p>
           <p className="text-[10px] font-bold tracking-[0.3em] text-[#C9A24D]/80 uppercase leading-tight">
             HQ

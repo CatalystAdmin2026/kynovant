@@ -103,14 +103,14 @@ export default async function AccountPage() {
       <header className="border-b border-white/[0.06] px-6 h-16 flex items-center justify-between max-w-2xl mx-auto">
         <div className="flex items-center gap-2.5">
           <Image
-            src="/logos/mark-gold.png"
-            alt="Catalyst Coaching"
+            src="/logos/kynovant-mark.png"
+            alt="Kynovant"
             width={20}
             height={20}
             className="opacity-75"
           />
           <span className="text-[10px] font-semibold tracking-[0.26em] text-white/45 uppercase">
-            Catalyst OS
+            Kynovant OS
           </span>
         </div>
         <Link

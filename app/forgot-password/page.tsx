@@ -40,8 +40,8 @@ function ForgotPasswordContent() {
       <div className="w-full max-w-sm flex flex-col gap-10">
         <div className="flex flex-col items-center gap-4">
           <Image
-            src="/logos/mark-gold.png"
-            alt="Catalyst Coaching"
+            src="/logos/kynovant-mark.png"
+            alt="Kynovant"
             width={36}
             height={36}
             priority
@@ -49,7 +49,7 @@ function ForgotPasswordContent() {
           />
           <div className="flex flex-col items-center gap-1">
             <p className="text-[10px] font-semibold tracking-[0.28em] text-white/40 uppercase">
-              Catalyst OS
+              Kynovant OS
             </p>
             <h1 className="text-lg font-semibold text-white/90 tracking-wide">
               Reset Password
@@ -67,7 +67,7 @@ function ForgotPasswordContent() {
             <div className="flex flex-col gap-2">
               <p className="text-sm font-semibold text-white/85">Check your inbox</p>
               <p className="text-xs text-white/40 leading-relaxed">
-                If a Catalyst account exists for{" "}
+                If a Kynovant account exists for{" "}
                 <span className="text-white/60">{email}</span>, a password reset
                 link has been sent.
               </p>
@@ -86,7 +86,7 @@ function ForgotPasswordContent() {
         ) : (
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
             <p className="text-xs text-white/45 leading-relaxed">
-              Enter your email and we&apos;ll send a reset link if a Catalyst
+              Enter your email and we&apos;ll send a reset link if a Kynovant
               account exists for that address.
             </p>
 

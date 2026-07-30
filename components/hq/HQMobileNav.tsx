@@ -27,9 +27,9 @@ export default function HQMobileNav({ coachName }: { coachName: string }) {
     <>
       {/* Top bar — mobile only */}
       <header className="lg:hidden fixed top-0 inset-x-0 z-40 h-12 bg-[#0b0c0d]/95 backdrop-blur-sm border-b border-white/[0.06] flex items-center px-4 gap-3">
-        <Image src="/logos/mark-gold.png" alt="Catalyst HQ" width={14} height={14} className="opacity-80" />
+        <Image src="/logos/kynovant-mark.png" alt="Kynovant HQ" width={14} height={14} className="opacity-80" />
         <span className="text-[9px] font-bold tracking-[0.3em] text-[#C9A24D]/80 uppercase flex-1">
-          Catalyst HQ
+          Kynovant HQ
         </span>
         <button
           onClick={() => setOpen(true)}
@@ -46,9 +46,9 @@ export default function HQMobileNav({ coachName }: { coachName: string }) {
           <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
           <div className="relative w-64 bg-[#0b0c0d] border-r border-white/[0.08] flex flex-col h-full">
             <div className="flex items-center gap-2.5 px-5 h-12 border-b border-white/[0.06]">
-              <Image src="/logos/mark-gold.png" alt="" width={14} height={14} className="opacity-80" />
+              <Image src="/logos/kynovant-mark.png" alt="" width={14} height={14} className="opacity-80" />
               <span className="text-[9px] font-bold tracking-[0.3em] text-[#C9A24D]/80 uppercase flex-1">
-                Catalyst HQ
+                Kynovant HQ
               </span>
               <button onClick={() => setOpen(false)} aria-label="Close navigation" className="text-white/40 hover:text-white/70">
                 <X size={16} />

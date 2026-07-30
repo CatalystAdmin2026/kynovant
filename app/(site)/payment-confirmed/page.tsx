@@ -65,7 +65,7 @@ export default async function PaymentConfirmedPage({
           </div>
 
           <p className="text-[#C9A24D] text-[11px] font-semibold tracking-[0.45em] mb-6 uppercase">
-            Welcome to Catalyst Coaching
+            Welcome to Kynovant
           </p>
 
           <h1 className="font-headline text-5xl sm:text-6xl md:text-[80px] font-bold uppercase leading-none tracking-tight mb-6 text-white">
@@ -73,7 +73,7 @@ export default async function PaymentConfirmedPage({
           </h1>
 
           <p className="text-gray-300 text-lg md:text-xl max-w-xl mx-auto mb-6 leading-relaxed">
-            Your Catalyst Coaching subscription has been successfully activated.
+            Your Kynovant subscription has been successfully activated.
           </p>
 
           <div className="w-8 h-px bg-[#C9A24D]/40 mx-auto mb-8" />
@@ -181,7 +181,7 @@ export default async function PaymentConfirmedPage({
 
           <div className="mt-10 pt-10 border-t border-white/5">
             <p className="font-headline text-xl font-bold uppercase text-white tracking-wide mb-2">
-              Thank you for trusting Catalyst Coaching with your transformation journey.
+              Thank you for trusting Kynovant with your transformation journey.
             </p>
             <p className="text-[#C9A24D] font-semibold tracking-[0.3em] text-sm uppercase">
               Let&apos;s get to work.

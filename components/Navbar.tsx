@@ -54,16 +54,13 @@ export default function Navbar() {
         {/* Logo */}
         <Link href="/" className="flex items-center gap-3 group">
           <Image
-            src="/logos/mark-gold.png"
-            alt="Catalyst Coaching"
-            width={28}
-            height={28}
+            src="/kynovant_horizontal.png"
+            alt="Kynovant"
+            width={166}
+            height={83}
             priority
-            className="opacity-90 group-hover:opacity-100 transition-opacity"
+            className="h-7 w-auto opacity-90 group-hover:opacity-100 transition-opacity"
           />
-          <span className="tracking-[0.28em] text-[11px] font-semibold text-white/80 group-hover:text-white transition-colors">
-            CATALYST COACHING
-          </span>
         </Link>
 
         {/* Desktop Nav */}

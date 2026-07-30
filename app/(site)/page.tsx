@@ -220,7 +220,7 @@ export default function HomePage() {
               {/* Card body */}
               <div className="p-6 flex flex-col gap-4 flex-1">
                 <p className="text-gray-500 text-xs leading-relaxed flex-1">
-                  Maggie came to Catalyst Coaching ready to lose body fat and improve her physique.
+                  Maggie came to Kynovant ready to lose body fat and improve her physique.
                   Halfway through her transformation, her confidence and results were so strong that
                   she decided to pursue competitive bodybuilding. Through consistent training, nutrition
                   structure, and accountability, she lost nearly 30 pounds while building visible muscle
@@ -484,7 +484,7 @@ export default function HomePage() {
             </h2>
             <p className="text-gray-400 leading-relaxed mb-8 text-sm">
               We don't sell modules, tiers, or add-ons. When you're accepted
-              into Catalyst Coaching, you get the full program — built around
+              into Kynovant, you get the full program — built around
               you, not a template someone else used.
             </p>
             <Button href="/apply">Apply for Coaching</Button>
@@ -554,7 +554,7 @@ export default function HomePage() {
             <div className="relative w-72 md:w-80 lg:w-[340px] overflow-hidden aspect-[3/4]">
               <Image
                 src="/images/jermaine-headshot.jpg"
-                alt="Jermaine Jones — Founder & Head Coach, Catalyst Coaching"
+                alt="Jermaine Jones — Founder & Head Coach, Kynovant"
                 fill
                 className="object-cover object-top"
               />
