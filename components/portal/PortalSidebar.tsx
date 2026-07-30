@@ -45,14 +45,14 @@ export default function PortalSidebar({ clientName }: Props) {
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-5 h-16 border-b border-white/[0.05]">
         <Image
-          src="/logos/mark-gold.png"
-          alt="Catalyst Coaching"
+          src="/logos/kynovant-mark.png"
+          alt="Kynovant"
           width={20}
           height={20}
           className="opacity-75"
         />
         <span className="text-[10px] font-semibold tracking-[0.28em] text-white/35 uppercase">
-          Catalyst OS
+          Kynovant OS
         </span>
       </div>
 

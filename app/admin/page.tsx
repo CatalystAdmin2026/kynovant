@@ -1834,7 +1834,7 @@ export default function AdminPage() {
               <div className="w-2 h-5 bg-[#C9A24D] rounded-sm" />
               <div>
                 <p className="text-white font-semibold text-sm tracking-wide leading-none">
-                  Catalyst Command Center
+                  Kynovant Command Center
                 </p>
                 <p className="text-gray-700 text-[10px] tracking-wide mt-0.5">{now}</p>
               </div>

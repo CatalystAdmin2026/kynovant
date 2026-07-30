@@ -3,8 +3,8 @@ import EnrollmentPage from "@/components/EnrollmentPage";
 import { STRIPE_LINKS, STANDARD_INCLUDES } from "@/lib/enrollment";
 
 export const metadata: Metadata = {
-  title: "Legacy Rate Enrollment — Catalyst Coaching",
-  description: "Activate your Legacy rate. Private pricing for long-standing Catalyst Coaching members.",
+  title: "Legacy Rate Enrollment — Kynovant",
+  description: "Activate your Legacy rate. Private pricing for long-standing Kynovant members.",
   robots: { index: false, follow: false },
 };
 

@@ -25,14 +25,12 @@ export default function Footer() {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8 mb-10">
           <Link href="/" className="flex items-center gap-2.5 group">
             <Image
-              src="/logos/mark-gold.png"
-              alt="Catalyst Coaching"
-              width={24}
-              height={24}
+              src="/kynovant_horizontal.png"
+              alt="Kynovant"
+              width={166}
+              height={83}
+              className="h-6 w-auto opacity-90 group-hover:opacity-100 transition-opacity"
             />
-            <span className="tracking-[0.28em] text-[11px] font-semibold text-white/60 group-hover:text-white/80 transition-colors">
-              CATALYST COACHING
-            </span>
           </Link>
 
           <nav className="flex items-center gap-6 text-sm">
@@ -58,14 +56,14 @@ export default function Footer() {
         {/* Bottom */}
         <div className="flex flex-col md:flex-row justify-between gap-5 text-xs text-gray-600 leading-relaxed">
           <p className="max-w-xl">
-            Catalyst Coaching provides physique coaching, custom training
+            Kynovant provides physique coaching, custom training
             programming, and nutrition guidance for general wellness. We do not
             provide medical advice, diagnoses, or treatment. Consult a qualified
             healthcare provider before beginning any new exercise or nutrition
             program.
           </p>
           <p className="md:text-right shrink-0 text-gray-700">
-            © {year} Catalyst Coaching.
+            © {year} Kynovant.
             <br />
             All rights reserved.
           </p>

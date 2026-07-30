@@ -127,7 +127,7 @@ export default function MissionEntry({ clientName, scenario, onComplete }: Props
           aria-hidden
         >
           <Image
-            src="/logos/mark-gold.png"
+            src="/logos/kynovant-mark.png"
             alt=""
             width={44}
             height={44}

@@ -11,7 +11,7 @@ const nextSteps = [
   {
     num: "02",
     title: "Strategy call: we align on your goals",
-    body: "We use the call to understand where you are, where you want to go, and whether Catalyst Coaching is the right fit.",
+    body: "We use the call to understand where you are, where you want to go, and whether Kynovant is the right fit.",
   },
   {
     num: "03",
@@ -28,8 +28,8 @@ export default function ThankYouPage() {
       <div className="max-w-xl mx-auto text-center mb-16">
         <div className="flex justify-center mb-8">
           <Image
-            src="/logos/mark-gold.png"
-            alt="Catalyst Coaching"
+            src="/logos/kynovant-mark.png"
+            alt="Kynovant"
             width={44}
             height={44}
             className="opacity-80"
@@ -70,7 +70,7 @@ export default function ThankYouPage() {
             <span className="text-[#C9A24D]">Strategy Call.</span>
           </h2>
           <p className="text-gray-400 text-sm leading-relaxed max-w-lg mx-auto">
-            Book your Catalyst Coaching Strategy Call below. This is a
+            Book your Kynovant Strategy Call below. This is a
             personalized session — not a sales call — where we align on your
             goals and determine whether the program is the right fit.
             Scheduling your call now secures your place in the review process.
