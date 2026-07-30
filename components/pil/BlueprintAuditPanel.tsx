@@ -182,7 +182,7 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
       <div className="border border-gray-200 rounded-lg p-4">
         <div className="flex items-center gap-3 mb-3">
           <div className="w-3.5 h-3.5 border-2 border-gray-200 border-t-gray-600 rounded-full animate-spin" />
-          <p className="text-xs text-gray-500">Running Catalyst Insights…</p>
+          <p className="text-xs text-gray-500">Running Kynovant Insights…</p>
         </div>
         <div className="space-y-2 animate-pulse">
           <div className="flex gap-2">
@@ -258,7 +258,7 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-2">
-              <p className="text-sm font-medium text-gray-700">Catalyst Insights</p>
+              <p className="text-sm font-medium text-gray-700">Kynovant Insights</p>
               <DurationBadge
                 estimatedMinutes={durationEstimate.estimatedMinutes}
                 confidence={durationEstimate.confidence}

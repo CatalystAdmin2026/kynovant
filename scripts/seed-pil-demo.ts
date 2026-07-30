@@ -3,7 +3,7 @@
 // Catalyst OS — PIL Demo Programs Seed
 //
 // Creates two program templates specifically designed to showcase
-// Catalyst Insights during demos:
+// Kynovant Insights during demos:
 //
 //   1. "Demo — Overloaded Split"  → triggers multiple findings
 //      • RECOVERY_CONSECUTIVE (hamstrings + quads trained back-to-back)
@@ -709,7 +709,7 @@ async function createOverloadedSplitProgram(exerciseMap: Map<string, string>) {
       slug: "pil-demo-overloaded-split",
       category: "athletic_performance",
       experienceLevel: "intermediate",
-      description: "Demo program: multiple coaching findings. Consecutive lower-body days, push/pull imbalance, redundant exercises, and excessive hamstring volume. Use with Catalyst Insights to demonstrate the recommendation engine.",
+      description: "Demo program: multiple coaching findings. Consecutive lower-body days, push/pull imbalance, redundant exercises, and excessive hamstring volume. Use with Kynovant Insights to demonstrate the recommendation engine.",
       recommendedDaysPerWeek: 3,
       defaultDurationWeeks: 4,
       status: "active",
@@ -760,7 +760,7 @@ async function createBalancedProgram(exerciseMap: Map<string, string>) {
       slug: "pil-demo-balanced-performance",
       category: "lifestyle",
       experienceLevel: "intermediate",
-      description: "Demo program: well-structured 3-day full body split. Push/pull balance, adequate recovery spacing, and appropriate volume. Use with Catalyst Insights to demonstrate a clean or near-clean audit result.",
+      description: "Demo program: well-structured 3-day full body split. Push/pull balance, adequate recovery spacing, and appropriate volume. Use with Kynovant Insights to demonstrate a clean or near-clean audit result.",
       recommendedDaysPerWeek: 3,
       defaultDurationWeeks: 4,
       status: "active",
