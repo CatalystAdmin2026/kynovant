@@ -3,7 +3,7 @@
 //
 // Registered in Stripe Dashboard under:
 //   Developers → Webhooks → Add endpoint
-//   URL: https://www.catalystcoachingelite.com/api/stripe/webhook
+//   URL: https://www.kynovant.com/api/stripe/webhook
 //   Events: checkout.session.completed, customer.subscription.*,
 //           invoice.paid, invoice.payment_failed
 //
@@ -114,7 +114,7 @@ async function persistToGas(gasUrl: string, payload: GasStripePayload): Promise<
 // one failure does not prevent the other.
 // ─────────────────────────────────────────────────────────────
 
-const SITE_ORIGIN = "https://www.catalystcoachingelite.com";
+const SITE_ORIGIN = "https://www.kynovant.com";
 
 /** Returns the correct onboarding URL for a given package name. */
 function onboardingUrlForPackage(packageName: string): string {

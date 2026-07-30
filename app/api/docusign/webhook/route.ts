@@ -109,7 +109,7 @@ function verifyHmac(rawBody: string, secret: string, receivedSig: string): boole
 // Non-fatal: a Resend failure logs an error but never blocks the { ok: true }
 // ack back to DocuSign.
 
-const SITE_ORIGIN = "https://www.catalystcoachingelite.com";
+const SITE_ORIGIN = "https://www.kynovant.com";
 
 async function sendActivateCoachingEmail(
   clientName: string,
@@ -226,7 +226,7 @@ async function sendActivateCoachingEmail(
           <tr>
             <td style="padding:20px 0 0;text-align:center;">
               <p style="margin:0;font-size:10px;color:#374151;letter-spacing:0.05em;">
-                www.catalystcoachingelite.com
+                www.kynovant.com
               </p>
             </td>
           </tr>

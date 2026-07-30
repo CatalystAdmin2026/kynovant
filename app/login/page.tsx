@@ -110,7 +110,7 @@ function LoginContent() {
   return (
     <div className="min-h-screen bg-[#080909] flex flex-col items-center justify-center px-5">
       <div className="w-full max-w-sm flex flex-col gap-10">
-        {/* Catalyst mark */}
+        {/* Kynovant mark */}
         <div className="flex flex-col items-center gap-4">
           <Image
             src="/logos/kynovant-mark.png"

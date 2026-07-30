@@ -836,7 +836,7 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
         {isSystem && (
           <div className="bg-white/[0.02] border border-white/[0.05] px-4 py-2.5">
             <p className="text-[11px] text-white/30 leading-relaxed">
-              This is a Catalyst system exercise. All fields are read-only. Use the overrides below to set your preferred default prescription and private coaching notes.
+              This is a Kynovant system exercise. All fields are read-only. Use the overrides below to set your preferred default prescription and private coaching notes.
             </p>
           </div>
         )}
