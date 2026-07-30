@@ -1,4 +1,4 @@
-# Catalyst OS — Client Profile & Onboarding Data Foundation
+# Kynovant — Client Profile & Onboarding Data Foundation
 
 Sprint 5B.3 · July 2026
 

@@ -1,4 +1,4 @@
-# Catalyst OS — Authentication
+# Kynovant — Authentication
 
 Sprint 5B.2 · Established 2026-07-12
 
@@ -6,7 +6,7 @@ Sprint 5B.2 · Established 2026-07-12
 
 ## Architecture Overview
 
-Catalyst OS uses Supabase Auth for session management paired with Drizzle ORM for all coaching data persistence. The two systems share a canonical UUID identity: every `auth.users` row has a matching `public.users` row with the same UUID.
+Kynovant uses Supabase Auth for session management paired with Drizzle ORM for all coaching data persistence. The two systems share a canonical UUID identity: every `auth.users` row has a matching `public.users` row with the same UUID.
 
 ```
 Browser
@@ -67,7 +67,7 @@ supabase.auth.signInWithOtp({
 
 `shouldCreateUser: false` tells Supabase not to create a new `auth.users` row for unknown emails. Supabase silently skips the email send for unknown addresses without returning an error. The UI always shows the same neutral message:
 
-> "If an active Catalyst account exists for this email, a secure sign-in link has been sent."
+> "If an active Kynovant account exists for this email, a secure sign-in link has been sent."
 
 Account existence is never disclosed.
 
@@ -182,7 +182,7 @@ RLS is enabled on all 10 public tables via migration `0001_catalyst_auth.sql`.
 
 **Drizzle ORM (direct Postgres connection via `DATABASE_URL`) bypasses RLS entirely.** All server-side reads and writes in Server Components, Route Handlers, and Server Actions are unaffected by RLS.
 
-RLS only applies to requests going through the Supabase Data API (PostgREST). Since Catalyst OS does not use PostgREST for data access, RLS acts as a defense-in-depth layer protecting against accidental exposure through the publishable key.
+RLS only applies to requests going through the Supabase Data API (PostgREST). Since Kynovant does not use PostgREST for data access, RLS acts as a defense-in-depth layer protecting against accidental exposure through the publishable key.
 
 ---
 
@@ -219,9 +219,9 @@ Before the portal is usable, confirm these settings:
 - Secure email change: ON
 
 **Authentication → URL Configuration:**
-- Site URL: `https://catalystcoachingelite.com`
+- Site URL: `https://kynovant.com`
 - Redirect URLs (add both):
-  - `https://catalystcoachingelite.com/auth/callback`
+  - `https://kynovant.com/auth/callback`
   - `http://localhost:3000/auth/callback`
 
 **Authentication → Settings:**

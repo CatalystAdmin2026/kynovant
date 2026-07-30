@@ -1,4 +1,4 @@
-# Catalyst OS — Exercise Library & Workout Blueprint Foundation
+# Kynovant — Exercise Library & Workout Blueprint Foundation
 
 Sprint 5C.1 · July 2026
 
@@ -206,7 +206,7 @@ Exercises in the same superset or triset share a `groupId` (plain UUID) and sequ
 - `triset` — 3 exercises alternated
 - `myo_reps` — activation set + mini-sets with short rest
 - `rest_pause` — single set broken into clusters with intra-set rest
-- `stretch_mediated_finisher` — Catalyst-specific: lengthened position holds at end of sets
+- `stretch_mediated_finisher` — Kynovant-specific: lengthened position holds at end of sets
 
 ### Prescription Fields
 

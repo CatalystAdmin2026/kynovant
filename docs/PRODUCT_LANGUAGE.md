@@ -1,4 +1,4 @@
-# Catalyst OS — Product Language
+# Kynovant — Product Language
 
 Established 2026-07-22
 
@@ -6,7 +6,7 @@ Established 2026-07-22
 
 ## What This Document Is
 
-This is the official terminology reference for Catalyst OS. It defines what we call things in the product — in UI copy, in code, in documentation, in coach-facing tools, and in client-facing surfaces.
+This is the official terminology reference for Kynovant. It defines what we call things in the product — in UI copy, in code, in documentation, in coach-facing tools, and in client-facing surfaces.
 
 Consistent language matters for two reasons:
 
@@ -225,7 +225,7 @@ When in doubt about what to call something, look here first. If it isn't here, d
 
 ### Newly Earned Milestone
 
-**Definition:** A Coaching Milestone that has transitioned from locked to earned since the client last viewed the Milestones section. In code: determined at mount time by comparing earned milestone IDs against `localStorage.getItem('catalyst_milestones_seen')`. In the UI: triggers a one-time CSS animation (`milestone-unlock` keyframe) — a restrained gold glow and brief scale — before settling into the permanent earned state.
+**Definition:** A Coaching Milestone that has transitioned from locked to earned since the client last viewed the Milestones section. In code: determined at mount time by comparing earned milestone IDs against `localStorage.getItem('kynovant_milestones_seen')`. In the UI: triggers a one-time CSS animation (`milestone-unlock` keyframe) — a restrained gold glow and brief scale — before settling into the permanent earned state.
 
 **Purpose:** Gives the milestone unlock moment the weight it deserves. Earning "Four-Week Standard" after four consecutive weeks of training is a genuine coaching moment. The animation is the system's acknowledgement of that moment — seen once, never repeated.
 
@@ -233,13 +233,13 @@ When in doubt about what to call something, look here first. If it isn't here, d
 
 **When not to use it:** Do not animate every earned milestone on every page load — only those not yet acknowledged in `localStorage`. Do not use this pattern outside the Milestones section. Do not apply arcade-style animations, confetti, or sound effects. The animation is a quiet nod from the system — not a celebration that demands the client's full attention.
 
-**Persistence mechanism:** Client-side `localStorage` keyed by `catalyst_milestones_seen`. See `ARCHITECTURE_DECISIONS.md` → ADR-010 for the tradeoff discussion.
+**Persistence mechanism:** Client-side `localStorage` keyed by `kynovant_milestones_seen`. See `ARCHITECTURE_DECISIONS.md` → ADR-010 for the tradeoff discussion.
 
 ---
 
 ## Terms to Avoid
 
-These terms are in common use in fitness apps and should be avoided in Catalyst to maintain distinction:
+These terms are in common use in fitness apps and should be avoided in Kynovant to maintain distinction:
 
 | Avoid | Use Instead | Reason |
 |-------|-------------|--------|

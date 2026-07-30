@@ -1,4 +1,4 @@
-# Catalyst OS — Data Foundation
+# Kynovant — Data Foundation
 
 Sprint 5B.1 · Established 2026-07-11
 
@@ -12,7 +12,7 @@ This document describes the database foundation established in Sprint 5B.1. It c
 
 ## Canonical Identity Strategy
 
-Every person in Catalyst OS — client, coach, or admin — receives a UUID at first contact. That UUID is the canonical identity anchor and never changes, regardless of email changes, re-enrollment, or account status changes.
+Every person in Kynovant — client, coach, or admin — receives a UUID at first contact. That UUID is the canonical identity anchor and never changes, regardless of email changes, re-enrollment, or account status changes.
 
 ### Why UUID over email as PK
 
@@ -57,7 +57,7 @@ One row per client-coach engagement. Historical enrollments are preserved — a 
 
 ### `external_identities`
 
-Vendor ID registry. Maps Catalyst UUIDs to Stripe, DocuSign, Calendly, and Drive identifiers. `provider + externalId` is unique across the table. At least one of `userId` or `enrollmentId` must be non-null (enforced by check constraint). FKs use SET NULL — external records survive user archival or enrollment completion.
+Vendor ID registry. Maps Kynovant UUIDs to Stripe, DocuSign, Calendly, and Drive identifiers. `provider + externalId` is unique across the table. At least one of `userId` or `enrollmentId` must be non-null (enforced by check constraint). FKs use SET NULL — external records survive user archival or enrollment completion.
 
 ### `enrollment_events`
 
@@ -107,7 +107,7 @@ Program and workout templates use the separate-rows versioning approach:
 
 ## Deletion Policy
 
-Catalyst OS favors data preservation and soft deletion:
+Kynovant favors data preservation and soft deletion:
 
 | Table | Delete behavior |
 |-------|----------------|
@@ -128,7 +128,7 @@ CASCADE DELETE is not used anywhere in the Sprint 5B.1 schema. If a referenced r
 
 ## System Responsibilities
 
-Catalyst OS uses three distinct storage systems. Each has a defined role.
+Kynovant uses three distinct storage systems. Each has a defined role.
 
 ### Supabase Postgres (primary persistence)
 

@@ -1,4 +1,4 @@
-# Catalyst OS — Architecture Decision Record
+# Kynovant — Architecture Decision Record
 
 Established 2026-07-22
 
@@ -6,7 +6,7 @@ Established 2026-07-22
 
 ## What This Document Is
 
-This is a living record of significant architectural decisions made during the development of Catalyst OS. Each entry documents the decision itself, why it was chosen, what alternatives were considered, the tradeoffs accepted, and the long-term benefits expected.
+This is a living record of significant architectural decisions made during the development of Kynovant. Each entry documents the decision itself, why it was chosen, what alternatives were considered, the tradeoffs accepted, and the long-term benefits expected.
 
 New decisions should be appended in chronological order. Decisions are not removed when superseded — they are marked as superseded and a new entry explains the change and the reason for it.
 
