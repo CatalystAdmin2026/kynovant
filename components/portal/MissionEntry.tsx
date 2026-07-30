@@ -1,89 +1,110 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
-import type { PortalScenario } from "@/lib/portal/types";
-import { getMissionBriefing } from "@/lib/portal/briefingData";
-import type { MissionBriefing } from "@/lib/portal/briefingData";
+
+// ─────────────────────────────────────────────────────────────
+// Curated Catalyst lines — rotate once per client-local calendar
+// day. Selected deterministically from clientId + local date.
+// No API call, no database write, stable across refreshes.
+// ─────────────────────────────────────────────────────────────
+
+const CATALYST_LINES: readonly string[] = [
+  "Keep showing up. The results will catch up.",
+  "Consistency changes everything.",
+  "What you repeat becomes who you are.",
+  "Progress is built before it is noticed.",
+  "The next step still counts.",
+  "Discipline makes the difference.",
+  "Small choices shape lasting change.",
+  "Keep becoming.",
+  "Today still matters.",
+  "The work compounds.",
+  "Show up again. That's the whole strategy.",
+  "Every rep builds the record.",
+  "The habit is the result.",
+  "One more day.",
+  "Earned, not given.",
+];
+
+function hashString(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h, 33) ^ s.charCodeAt(i);
+  }
+  return h >>> 0;
+}
+
+function getDailyLine(clientId: string): string {
+  const localDate = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local time
+  return CATALYST_LINES[hashString(clientId + localDate) % CATALYST_LINES.length];
+}
+
+// ─────────────────────────────────────────────────────────────
+// Greeting — four time buckets, client local time.
+// Late-night / early-morning window gets "Welcome Back."
+// ─────────────────────────────────────────────────────────────
+
+function getTimeGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 5 || h >= 21) return "WELCOME BACK,";
+  if (h < 12) return "GOOD MORNING,";
+  if (h < 17) return "GOOD AFTERNOON,";
+  return "GOOD EVENING,";
+}
 
 // ─────────────────────────────────────────────────────────────
 // Animation step machine
 //
 //  0  initial   → nothing visible
 //  1  logo      → Catalyst mark fades in with gold glow
-//  2  greeting  → GOOD EVENING, / EMMA. appears
-//  3  message   → coaching paragraph fades in (waits for briefing)
-//  4  card      → Today's Mission card slides up; CTA available
+//  2  greeting  → greeting + name + daily line appear
+//  3  message   → coaching paragraph fades in
+//  4  card      → Today's Promise card slides up; CTA available
 //  5  exiting   → full screen fades to black; onComplete fires
 // ─────────────────────────────────────────────────────────────
 
-// Delays between steps (milliseconds). Reduced-motion path uses 0 for all.
 const STEP_DELAYS = [
-  150,  // 0 → 1: show logo after paint
-  1000, // 1 → 2: greeting (logo visible for ~500ms after its 500ms fade)
-  600,  // 2 → 3: coaching message
-  550,  // 3 → 4: mission card
+  150,  // 0 → 1: logo appears after first paint
+  1000, // 1 → 2: greeting (logo visible ~500ms during its 500ms fade)
+  600,  // 2 → 3: coaching paragraph
+  550,  // 3 → 4: promise card
 ] as const;
 
-const EXIT_DURATION = 400; // ms for full-screen fade-out
-
-function getTimeGreeting(): { line1: string; line2: string } {
-  const h = new Date().getHours();
-  const period =
-    h < 12 ? "GOOD MORNING," : h < 17 ? "GOOD AFTERNOON," : "GOOD EVENING,";
-  return { line1: period, line2: "" };
-}
+const EXIT_DURATION = 400;
 
 interface Props {
   clientName: string;
-  scenario: PortalScenario;
+  clientId: string;
   onComplete: () => void;
 }
 
-export default function MissionEntry({ clientName, scenario, onComplete }: Props) {
+export default function MissionEntry({ clientName, clientId, onComplete }: Props) {
   const firstName = clientName.split(" ")[0].toUpperCase();
-  const { line1 } = getTimeGreeting();
+  const greeting = getTimeGreeting();
+  const dailyLine = getDailyLine(clientId);
 
-  // Detect reduced-motion once on mount
   const [rm] = useState(
     () =>
       typeof window !== "undefined"
         ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        : false
+        : false,
   );
 
-  // Async briefing — starts fetching immediately, step 2→3 waits for it
-  const [briefing, setBriefing] = useState<MissionBriefing | null>(null);
-  useEffect(() => {
-    getMissionBriefing(scenario).then(setBriefing);
-  }, [scenario]);
-
   const [step, setStep] = useState(0);
-  const advancedRef = useRef(false); // prevent double-firing in StrictMode
 
-  // Advance through steps 0→1→2→3→4
   useEffect(() => {
-    if (step >= 4) return; // step 4 (card) and 5 (exit) are user/onComplete driven
-
-    // Step 2 → 3 waits for the briefing to arrive
-    if (step === 2 && !briefing) return;
-
+    if (step >= 4) return;
     const delay = rm ? 0 : STEP_DELAYS[step];
-    const t = setTimeout(() => {
-      if (!advancedRef.current || step < 4) {
-        setStep((s) => s + 1);
-      }
-    }, delay);
+    const t = setTimeout(() => setStep((s) => s + 1), delay);
     return () => clearTimeout(t);
-  }, [step, rm, briefing]);
+  }, [step, rm]);
 
   function handleBegin() {
     setStep(5);
     setTimeout(() => onComplete(), rm ? 0 : EXIT_DURATION);
   }
 
-  // ── Transition helpers ──────────────────────────────────
-  // Base classes for elements that animate in via opacity + translate.
   function fadeUp(visible: boolean, durationMs = 450, delayMs = 0): React.CSSProperties {
     if (rm) return {};
     return {
@@ -94,7 +115,6 @@ export default function MissionEntry({ clientName, scenario, onComplete }: Props
     };
   }
 
-  // Full-screen exit: opacity of the wrapper
   const exiting = step === 5;
   const wrapperStyle: React.CSSProperties = rm
     ? {}
@@ -103,7 +123,6 @@ export default function MissionEntry({ clientName, scenario, onComplete }: Props
         transition: `opacity ${EXIT_DURATION}ms ease`,
       };
 
-  // Logo glow appears with the logo
   const logoGlow: React.CSSProperties =
     step >= 1
       ? { filter: "drop-shadow(0 0 22px rgba(201, 162, 77, 0.38))" }
@@ -114,16 +133,13 @@ export default function MissionEntry({ clientName, scenario, onComplete }: Props
       className="fixed inset-0 z-50 bg-[#080909] flex items-center justify-center px-6"
       style={wrapperStyle}
       aria-live="polite"
-      aria-label="Loading your mission"
+      aria-label="Welcome to Catalyst"
     >
       <div className="flex flex-col items-center text-center w-full max-w-sm gap-10">
 
         {/* ── Step 1: Catalyst mark ──────────────────────── */}
         <div
-          style={{
-            ...fadeUp(step >= 1, 500, 0),
-            ...logoGlow,
-          }}
+          style={{ ...fadeUp(step >= 1, 500, 0), ...logoGlow }}
           aria-hidden
         >
           <Image
@@ -135,30 +151,38 @@ export default function MissionEntry({ clientName, scenario, onComplete }: Props
           />
         </div>
 
-        {/* ── Step 2: Greeting ──────────────────────────── */}
-        <div
-          className="flex flex-col gap-0.5 -mt-2 w-full min-w-0"
-          style={fadeUp(step >= 2, 450, 0)}
-        >
-          <p className="font-headline text-xl sm:text-2xl md:text-3xl uppercase tracking-[0.1em] text-white/38 leading-none">
-            {line1}
-          </p>
-          <h1
-            className="font-headline uppercase tracking-[0.04em] text-white leading-tight break-words"
-            style={{ fontSize: "clamp(2rem, 10vw, 4.5rem)" }}
-          >
-            {firstName}.
-          </h1>
+        {/* ── Step 2: Greeting + Name + Daily line ──────── */}
+        <div className="flex flex-col items-center gap-3 -mt-2 w-full min-w-0">
+          {/* Greeting and name animate in together */}
+          <div className="w-full" style={fadeUp(step >= 2, 450, 0)}>
+            <p className="font-headline text-xl sm:text-2xl md:text-3xl uppercase tracking-[0.1em] text-white/38 leading-none">
+              {greeting}
+            </p>
+            <h1
+              className="font-headline uppercase tracking-[0.04em] text-white leading-tight break-words"
+              style={{ fontSize: "clamp(2rem, 10vw, 4.5rem)" }}
+            >
+              {firstName}.
+            </h1>
+          </div>
+
+          {/* Daily Catalyst line — fades in 220ms after the name */}
+          <div style={fadeUp(step >= 2, 380, 220)} aria-hidden>
+            <p className="text-[11px] text-white/25 tracking-[0.12em]">
+              {dailyLine}
+            </p>
+          </div>
         </div>
 
-        {/* ── Step 3: Coaching message ──────────────────── */}
+        {/* ── Step 3: Coaching paragraph ────────────────── */}
         <div style={fadeUp(step >= 3, 400, 0)}>
           <p className="text-sm text-white/45 leading-relaxed">
-            {briefing?.coachingMessage ?? ""}
+            Small promises become lasting results. Show up today, trust the
+            process, and let consistency do what motivation never can.
           </p>
         </div>
 
-        {/* ── Step 4: Today's Mission card + CTA ────────── */}
+        {/* ── Step 4: Today's Promise card + CTA ────────── */}
         <div
           className="w-full"
           style={
@@ -172,24 +196,21 @@ export default function MissionEntry({ clientName, scenario, onComplete }: Props
           }
         >
           <div className="border border-[#c9a24d]/22 bg-[#c9a24d]/[0.04] rounded-sm px-6 py-6 flex flex-col gap-5">
-            {/* Card header */}
             <div className="flex flex-col gap-1.5 text-left">
               <p className="text-[10px] text-[#c9a24d]/55 font-semibold tracking-[0.2em] uppercase">
-                Today&apos;s Mission
+                Today&apos;s Promise
               </p>
               <p className="text-base font-semibold text-white/85 leading-snug">
-                {briefing?.missionLine ?? ""}
+                Keep the promise you made to yourself. Everything else follows.
               </p>
             </div>
-
-            {/* Primary CTA */}
             <button
               type="button"
               onClick={handleBegin}
               disabled={step < 4}
               className="w-full bg-[#c9a24d] text-black py-3.5 text-[11px] font-bold tracking-[0.14em] uppercase hover:bg-[#d4b56a] transition-colors disabled:opacity-0 min-h-[44px]"
             >
-              Begin Today&apos;s Mission &rarr;
+              Enter Catalyst &rarr;
             </button>
           </div>
         </div>

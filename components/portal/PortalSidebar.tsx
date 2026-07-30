@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Calendar, FileText, LayoutDashboard, Layers } from "lucide-react";
+import { Activity, Calendar, FileText, LayoutDashboard, Layers, Utensils } from "lucide-react";
 import LogoutButton from "./LogoutButton";
 
 interface NavItem {
@@ -18,6 +18,7 @@ const NAV_ITEMS: NavItem[] = [
   { icon: Layers,          label: "Program",    href: "/portal/program"                },
   { icon: Activity,        label: "Progress",   href: "/portal/progress"               },
   { icon: Calendar,        label: "Check-Ins",  href: "/portal/check-ins"              },
+  { icon: Utensils,        label: "Nutrition",  href: "/portal/nutrition"              },
   { icon: FileText,        label: "Documents",  href: "/portal/documents"              },
 ];
 

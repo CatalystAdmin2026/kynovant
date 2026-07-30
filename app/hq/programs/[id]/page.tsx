@@ -5,15 +5,8 @@
 
 import { useState, useEffect, use } from "react";
 import ProgramBuilder from "@/components/ProgramBuilder";
-import type { ProgramBuilderData } from "@/components/ProgramBuilder";
-
-interface BlueprintOption {
-  id: string;
-  name: string;
-  status: string;
-  primaryFocus: string | null;
-  estimatedDurationMinutes: number | null;
-}
+import type { ProgramBuilderData, BlueprintOption } from "@/components/ProgramBuilder";
+import ProgramAuditPanel from "@/components/pil/ProgramAuditPanel";
 
 export default function HQProgramEditorPage({
   params,
@@ -73,5 +66,12 @@ export default function HQProgramEditorPage({
 
   if (!data) return null;
 
-  return <ProgramBuilder templateId={id} initialData={data} blueprints={blueprints} backHref="/hq/programs" />;
+  return (
+    <div className="space-y-6">
+      <ProgramBuilder templateId={id} initialData={data} blueprints={blueprints} backHref="/hq/programs" />
+      <div className="max-w-3xl">
+        <ProgramAuditPanel programTemplateId={id} />
+      </div>
+    </div>
+  );
 }

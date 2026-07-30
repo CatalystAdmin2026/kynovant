@@ -502,6 +502,265 @@ The decision to build the DB layer before any delivery UI follows the same patte
 
 ---
 
+### ADR-012 — Document Ownership: Organization-Owned Source, Assignment-Derived Client Access
+
+**Status:** Active
+**Date:** 2026-07-23
+
+#### Decision
+
+The document model is split into two tables:
+
+**`documents`** — source document owned by the coaching organization. One row per distinct file. Fields: `id`, `createdByCoachId`, `title`, `description`, `category`, `storageKey`, `originalFilename`, `mimeType`, `fileSizeBytes`, `version`, `status` (`draft / active / archived`), `createdAt`, `updatedAt`, `archivedAt`.
+
+**`client_document_assignments`** — lifecycle record for one source document assigned to one client. Fields: `id`, `documentId`, `clientId`, `assignedByCoachId`, `documentVersion`, `required`, `dueAt`, `viewedAt`, `acknowledgedAt`, `revokedAt`, `revokedByCoachId`, `assignedAt`.
+
+Client portal access is always derived from an active assignment (`revokedAt IS NULL`). A client never owns the source document and can never access it by guessing its ID or storage path.
+
+**Partial unique index** on `(document_id, client_id) WHERE revoked_at IS NULL` prevents duplicate active assignments for the same client and document, while allowing multiple historical (revoked) rows.
+
+**Storage:** documents are stored in a private `coaching-documents` Supabase Storage bucket. `storageKey` (stored in DB) is the bucket-relative path. Clients never receive the key directly — the portal requests a short-lived signed URL (1 hour TTL) generated server-side after the assignment authorization check.
+
+**Deletion policy:** enforced in the service layer:
+- Zero assignment history → hard delete (`deleteDocument()`) permitted
+- Any historical assignment (even revoked) → `archiveDocument()` only; hard delete throws
+- Revoking one client's assignment does not affect any other client's assignment or the source document
+
+**Versioning:** `documents.version` is incremented when a document is updated in place. `clientDocumentAssignments.documentVersion` captures the version at assignment time. This supports future version-pinning UI (e.g., "this client is on v1; you published v2") without requiring it now.
+
+#### Why
+
+A document is a coaching asset — it was created, chosen, and timed by the coach. Assigning it to a client is a coaching decision, not a transfer of ownership. The same meal plan may be sent to 30 clients; those 30 clients do not each own 30 copies. They each have access via an assignment that can be updated or revoked.
+
+If documents were modeled client-first (one document row per client), the same source file would exist in the database many times, making it impossible to update all clients' references when the file is revised, and making it impossible to track which clients have ever been sent a given document.
+
+#### Alternatives Considered
+
+**Client owns the document (one document row per client):** Simplest query pattern. Rejected because: (1) a change to the source file cannot be propagated; (2) the coach loses visibility into how many clients have a given document; (3) assignment semantics (revoke, required, due date) become awkward fields on a table that conceptually represents a file.
+
+**Shared read via file URL (no assignment table):** Documents are in a public folder; any authenticated user can access any document URL. Rejected: zero access control, no audit trail, no coach visibility into who has been sent what, no ability to revoke.
+
+**Full unique index (not partial) on document_id + client_id:** Would block re-assigning after revocation. Rejected: a coach should be able to re-send a document to a client who was previously revoked (e.g., an updated meal plan after a package renewal).
+
+#### Tradeoffs
+
+- No file upload UI in this sprint — service functions and schema are in place; the coach upload flow is a future sprint item.
+- `createdByCoachId` is attribution-only (FK SET NULL on coach deletion). The organization owns the document, not the coach who created it. This is correct but means no org-level isolation beyond what the service layer enforces — a future `organizationId` column could be added without schema changes to assignment logic.
+- Signed URL TTL of 1 hour is a product tradeoff: long enough for a coaching session, short enough to not expose documents to stale browser sessions.
+
+#### Long-term Benefits
+
+- One source document can be assigned to any number of clients with independent lifecycles (different `viewedAt`, `acknowledgedAt`, `revokedAt` per client).
+- Revoking access is instantaneous: set `revokedAt`. The next request for a signed URL fails the auth check.
+- The assignment table is an audit log: who assigned what, when, at what document version, and when it was viewed or acknowledged.
+- `documentVersion` enables future "stale assignment" detection: when `documents.version > assignment.documentVersion`, the coach can be prompted to update the client's assignment.
+- Organization isolation can be added by filtering `documents` on a future `organizationId` without changing the assignment model.
+
+---
+
+### ADR-013 — Voice and Tone as a Required Design Standard
+Status: Active
+Date: 2026-07-23
+
+#### Decision
+
+`docs/VOICE_AND_TONE.md` is a required design standard for all product work in Catalyst OS. Any new screen, feature, state, notification, error message, or AI-generated draft must be reviewed against it before implementation is considered complete.
+
+Voice and tone are product quality — not a separate concern handled after engineering is done.
+
+#### Why
+
+A product that sounds like multiple different people wrote it — or like a machine assembled it — fails a trust test that clients and coaches cannot always articulate but will always feel. In a coaching context, where the relationship between coach and client is the product, inconsistent language directly undermines the premise of the platform.
+
+The standard needed to be written down because:
+- Verbal alignment does not survive team turnover or AI-assisted development.
+- AI-generated copy defaults to generic patterns that violate Catalyst's voice without explicit guidance.
+- State-level copy decisions (guilt vs. invitation, blame vs. reassurance) are value judgements that need to be made once, explicitly, rather than re-litigated on every screen.
+
+#### Alternatives Considered
+
+**Style guide in a wiki or Notion:** External to the repository, out of sync with implementation decisions, invisible to engineers at the time they are writing copy.
+
+**In-code comments on individual screens:** Copy guidance scattered across files cannot be applied consistently to new work. Centralization is the only pattern that survives.
+
+**No documented standard (trust engineers to follow verbal norms):** Rejected. The check-in list page shipped with "Your coach is waiting" before this document was written. That is what happens without a written standard.
+
+#### Tradeoffs
+
+- Requires copy review as part of feature completion, not after. This adds a step to the definition of done.
+- The document must be actively maintained when new surfaces (push notifications, email, voice interfaces) are added. A standard that is not updated becomes misleading.
+
+#### Long-term Benefits
+
+- Every engineer and AI assistant working in this codebase has a single reference point for how Catalyst should sound.
+- New surfaces default to the correct voice rather than to the conventions of whatever tool or framework generated the first draft.
+- The emotional design layer — what clients feel when they use the product — is treated as a first-class engineering concern.
+- AI-generated content (narrative summaries, check-in response drafts) has a documented standard against which quality can be evaluated and enforced.
+
+---
+
+### ADR-014 — Nutrition Domain: Effective-Dated Targets, Four-Stage Model, Deferred Meal Plan Builder
+Status: Active
+Date: 2026-07-23
+
+#### Decision
+
+The Nutrition module is established with the following foundational decisions, each of which must remain stable across future Nutrition sprints unless superseded by a later ADR.
+
+---
+
+**1. Nutrition targets are historical coaching decisions, not profile fields**
+
+Calorie and macro targets are coaching decisions made about a specific client at a specific point in time. They are not profile preferences. They are not settings. They must be:
+
+- Append-only: previous targets are never overwritten
+- Effective-dated: each target has an `effective_date` from which it became active
+- Historically queryable: `getTargetAtDate(clientId, date)` must return the exact target that was active on any given date
+- Publishable: targets move through a lifecycle (draft → published → archived)
+- Auditable: every target records who created it, who published it, and when
+
+When a new target is published, the previous one is archived. The archived record is never deleted. A check-in from April must be evaluatable against the target that was active in April — not the target active today.
+
+**2. Four-stage Nutrition model**
+
+The system distinguishes four separate concepts that must never be collapsed into one:
+
+```
+CALCULATOR INPUTS
+  height, weight, age, biological sex, activity level, goal type
+  → stored for audit when a draft is created from the calculator
+
+SYSTEM RECOMMENDATION
+  calculated BMR, TDEE, and recommended calorie / macro targets
+  → output of the Mifflin-St Jeor formula and goal-based adjustments
+  → stored on the target record for full audit trail
+  → NEVER automatically published to the client
+
+COACH DECISION
+  what the coach actually sets after reviewing the recommendation
+  → may match the recommendation exactly, or override any value
+  → override reasons are captured when values diverge from the recommendation
+
+PUBLISHED CLIENT TARGET
+  the approved version the client sees in their Nutrition destination
+  → requires explicit publish action by the coach
+  → creates a notification event (nutrition_updated)
+```
+
+The system recommendation is always a starting point. The coach is always the decision-maker. Software eliminates arithmetic — not coaching judgment.
+
+**3. Source of truth**
+
+| Concept | Owner | Table |
+|---|---|---|
+| Calorie target | Coach decision | `client_nutrition_targets.calorie_target` |
+| Macro targets (protein/fat/carb) | Coach decision | `client_nutrition_targets.{protein,fat,carb}_grams` |
+| System recommendation | Calculator output | `client_nutrition_targets.rec_{calories,protein_g,fat_g,carb_g}` |
+| Calculator inputs (audit) | Session record | `client_nutrition_targets.calc_{height,weight,age,sex,activity,goal}` |
+| Dietary restrictions | Client-reported | `nutrition_profiles.{allergies,intolerances,foods_avoided}` |
+| Food preferences | Client-reported | `nutrition_profiles.{foods_liked,foods_disliked,preferred_*}` |
+| Hydration baseline | Client-reported | `nutrition_profiles.hydration_ounces_average` |
+| Body weight | Measurement record | `body_composition_records.weight_pounds` (latest, append-only) |
+| Body composition | Measurement record | `body_composition_records.*` (append-only) |
+| Nutrition compliance | Client self-report | `weekly_check_ins.nutrition_compliance_pct` |
+| Biological sex (calc input) | Health profile | `health_profiles.biological_sex` |
+| Height (calc input) | Health profile | `health_profiles.height_inches` |
+| Date of birth (calc input) | Health profile | `health_profiles.date_of_birth` |
+
+Body weight is owned by `body_composition_records`. Nutrition services that need body weight must read from that table, never store a parallel copy.
+
+**4. One active published target per client**
+
+A partial unique index enforces exactly one published target per client at any time:
+
+```sql
+CREATE UNIQUE INDEX uq_active_published_nutrition_target
+  ON client_nutrition_targets (client_id)
+  WHERE status = 'published';
+```
+
+Publishing a new target atomically archives the previous one. The service layer enforces this transaction. The DB constraint prevents any race condition that could result in two simultaneous published targets.
+
+**5. Client philosophy: one adaptive Nutrition destination**
+
+The client sees a single `/portal/nutrition` page. That page adapts based on what has been published:
+
+| State | What the client sees |
+|---|---|
+| Nothing published | Intentional empty state. Coaching context. No mention of permissions or credentials. |
+| Target published, no notes | Targets with macro breakdown. |
+| Target published with coaching notes | Targets + coaching guidance (the "why"). Notes displayed prominently above the numbers. |
+| Target + meal plan document assigned | All of the above + link to the assigned document. |
+
+Clients never see: permission boundaries, credential status, draft targets, unpublished calculations, system recommendation values, or any language referencing internal workflow state.
+
+**6. Coach philosophy: software eliminates arithmetic, coach provides judgment**
+
+The coach workflow at `/hq/clients/[clientId]/nutrition` centers on:
+
+1. Review client profile and biological inputs
+2. Calculator produces BMR, TDEE, and recommended targets — automatically, on page load
+3. Coach reviews recommendation
+4. Coach may adjust any value and record an optional adjustment reason
+5. Coach adds coaching notes (visible to client)
+6. Coach publishes — this is the explicit human approval step
+
+The coach never needs to open a spreadsheet or calculate macros manually. The calculator handles arithmetic. The coach handles the parts only a coach can handle: contextual judgment, client-specific adjustments, and the coaching relationship.
+
+**7. Calculator architecture**
+
+BMR formula: Mifflin-St Jeor (`lib/nutrition/calculator.ts`, `formulaVersion: "mifflin-st-jeor-v1"`).
+
+The calculator is a pure module with no database calls. It is importable from both server and client components. Formula constants (activity multipliers, goal adjustments, macro ratios) are named constants, not inline magic numbers.
+
+Formula replacement in future sprints: introduce a new `formulaVersion` value, update the constants. All historical targets retain their original `rec_formula_version` for audit purposes.
+
+**8. Meal Plan Builder is intentionally deferred**
+
+The structured Meal Plan Builder is not part of Nutrition Foundation. It requires:
+
+- Coach credential verification infrastructure (not built)
+- Product capability grants (not built)
+- Structured meal / food item domain model (not built)
+
+Until those exist, meal plans are delivered as flat-file documents via the existing document assignment system (`documents` + `clientDocumentAssignments` with category `meal_plan`). This is a working solution for the current coaching relationship.
+
+The Meal Plan Builder will be addressed in a future sprint (P3) once credential verification and capability grants are established.
+
+**9. Nutrition follows all established Catalyst standards**
+
+All copy, emotional design, and architectural patterns must follow:
+- `CATALYST_OS_PHILOSOPHY.md`: Coaching over tracking. Narrative before metrics.
+- `VOICE_AND_TONE.md`: Recognition before reporting. Coach as guide. No guilt-driven language.
+- `AI_PRINCIPLES.md`: AI drafts, coaches approve. AI never publishes. AI never changes targets.
+- Check-ins architecture (ADR-011): `nutritionCompliancePct` stays in `weekly_check_ins`.
+- Document architecture (ADR-012): Flat-file meal plans delivered via document assignment.
+
+#### Alternatives Considered
+
+**Store calorie/macro targets in `nutrition_profiles` as mutable fields:** Rejected. Targets would be overwritten without history, making historical check-in evaluation against correct targets impossible.
+
+**Single `isRD` boolean on coach profile to gate meal plans:** Rejected. A boolean conflates professional identity, credential verification, and product capability. The correct model separates these concerns. See P3 roadmap.
+
+**Separate `nutrition_calculation_sessions` table for calculator audit:** Considered. Deferred to P4. For the foundation sprint, calculator inputs and recommendation are stored inline on the target record. This provides complete audit without requiring a separate table join.
+
+**Auto-publish the calculator recommendation:** Rejected. Violates the four-stage model. The system recommendation is a draft starting point. The coach's explicit publish action is the approval step that makes the recommendation a real target.
+
+#### Tradeoffs
+
+- Inline calculator inputs on the target record means re-running the same calculation twice produces two target records with slightly different inputs. This is acceptable in the foundation sprint. A `calculation_sessions` table would normalize this in P4.
+- The partial unique index enforces one published target, but the coach can have multiple drafts (no uniqueness constraint on drafts). Service functions must handle the edge case of multiple drafts gracefully.
+- `effective_date` is coach-set. Historical correctness depends on the coach entering accurate effective dates when backdating targets. The product does not enforce a strict temporal ordering beyond the unique published constraint.
+
+#### Long-term Benefits
+
+- Every check-in can be evaluated against the exact target that was active when it was submitted
+- The four-stage model prevents any path where a calculator recommendation reaches a client without coach approval
+- The coach calculator workflow makes Catalyst a single tool — eliminating the spreadsheet and manual arithmetic that currently exists outside the product
+- When the Meal Plan Builder is added in P3, it builds on this foundation without requiring schema changes to the target model
+
+---
+
 ## Appending New Decisions
 
 When a new architectural decision is made, add an entry at the bottom of this document following the format above. Assign the next sequential ADR number. Update the document history table.
@@ -522,3 +781,6 @@ Decisions should be documented when:
 | 2026-07-23 | Added ADR-008 (Victory Moment), ADR-009 (Goal Distance), ADR-010 (localStorage milestone acknowledgement) |
 | 2026-07-23 | ADR-010 superseded: replaced localStorage with DB-backed acknowledgement table (`client_milestone_acknowledgements`) |
 | 2026-07-23 | Added ADR-011 (Notification Architecture): DB-backed event log, `check_in_reviewed` notification wired; delivery channels deferred |
+| 2026-07-23 | Added ADR-012 (Document Ownership): two-table model (documents + client_document_assignments), partial unique index for active assignments, signed URL access, organization-owned source |
+| 2026-07-23 | Added ADR-013 (Voice and Tone): docs/VOICE_AND_TONE.md established as required design standard for all product work |
+| 2026-07-23 | Added ADR-014 (Nutrition Domain): effective-dated target model, four-stage model, source-of-truth map, Meal Plan Builder deferred |

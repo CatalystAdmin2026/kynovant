@@ -985,6 +985,33 @@ export default async function ClientWorkspacePage({
         )}
       </section>
 
+      {/* Nutrition quick-link */}
+      <section>
+        <SectionHeader
+          title="Nutrition"
+          action={
+            <Link
+              href={`/hq/clients/${clientId}/nutrition`}
+              className="text-[10px] text-gray-500 hover:text-[#C9A24D] transition-colors uppercase tracking-[0.2em]"
+            >
+              Manage Targets →
+            </Link>
+          }
+        />
+        <div className="bg-[#0a0b0c] border border-white/[0.05] px-4 py-4">
+          <p className="text-xs text-white/40 leading-relaxed">
+            Set daily calorie and macro targets for this client. Targets are calculated
+            using Mifflin-St Jeor and require coach review before publishing.
+          </p>
+          <Link
+            href={`/hq/clients/${clientId}/nutrition`}
+            className="inline-block mt-3 text-[10px] text-[#C9A24D]/60 hover:text-[#C9A24D] transition-colors"
+          >
+            Open Nutrition →
+          </Link>
+        </div>
+      </section>
+
       {/* Sensitive health — collapsible client component */}
       <SensitiveHealthPanel {...workspace.sensitive} />
 
