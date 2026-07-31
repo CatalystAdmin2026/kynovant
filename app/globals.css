@@ -1,6 +1,82 @@
 @import "tailwindcss";
 
-/* ── Design Tokens ─────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Kynovant Design System — Tokens
+   ─────────────────────────────────────────────────────────────
+   Registered through Tailwind v4's CSS-first @theme so every
+   token below is also a first-class utility (text-h1, bg-gold,
+   shadow-card, ring-gold, ...) without touching a single page.
+   Existing arbitrary-value usage (bg-[#c9a24d], text-[11px], ...)
+   keeps working unchanged — these tokens are additive.
+
+   Spacing scale (reference — no override; Tailwind's 4px-based
+   scale already covers this and is used consistently today):
+     4  · 8  · 12 · 16 · 20 · 24 · 32 · 40 · 48 · 64   (px)
+     1  · 2  · 3  · 4  · 5  · 6  · 8  · 10 · 12 · 16   (Tailwind step)
+   Use these steps for new UI. Prefer 4/8/16/24/32 for most
+   component padding and gaps; 40+ only for page-level rhythm.
+   ───────────────────────────────────────────────────────────── */
+@theme {
+  /* Brand — same values as the legacy :root tokens below, now
+     also available as bg-gold, text-gold, border-gold, ring-gold */
+  --color-gold: #c9a24d;
+  --color-gold-hover: #d4b56a;
+  --color-ink: #080909;
+
+  /* Semantic status colors — aligned with the severity system in
+     docs/kynovant-insights-ui-principles.md Principle 4 */
+  --color-success: var(--color-emerald-600);
+  --color-success-bg: var(--color-emerald-50);
+  --color-success-border: var(--color-emerald-200);
+  --color-warning: var(--color-amber-700);
+  --color-warning-bg: var(--color-amber-50);
+  --color-warning-border: var(--color-amber-200);
+  --color-danger: var(--color-red-700);
+  --color-danger-bg: var(--color-red-50);
+  --color-danger-border: var(--color-red-200);
+  --color-info: var(--color-sky-700);
+  --color-info-bg: var(--color-sky-50);
+  --color-info-border: var(--color-sky-200);
+  --color-neutral: var(--color-gray-600);
+  --color-neutral-bg: var(--color-gray-100);
+  --color-neutral-border: var(--color-gray-200);
+
+  /* Typography scale — semantic sizes on top of Tailwind's xs–9xl */
+  --text-display: 3rem;
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.015em;
+  --text-h1: 2rem;
+  --text-h1--line-height: 1.15;
+  --text-h1--letter-spacing: -0.01em;
+  --text-h2: 1.5rem;
+  --text-h2--line-height: 1.25;
+  --text-h3: 1.125rem;
+  --text-h3--line-height: 1.35;
+  --text-h4: 1rem;
+  --text-h4--line-height: 1.4;
+  --text-body-lg: 1rem;
+  --text-body-lg--line-height: 1.6;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.55;
+  --text-body-sm: 0.8125rem;
+  --text-body-sm--line-height: 1.5;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.4;
+  --text-label: 0.6875rem;
+  --text-label--line-height: 1.3;
+  --text-label--letter-spacing: 0.08em;
+
+  /* Elevation — soft, hairline-first shadows (Linear/Stripe-style,
+     not the heavy default drop shadows) */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 0 rgba(0, 0, 0, 0.03);
+  --shadow-card-hover: 0 8px 20px rgba(0, 0, 0, 0.08), 0 1px 0 rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 16px 40px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 0 0 1px rgba(201, 162, 77, 0.06), 0 32px 64px rgba(0, 0, 0, 0.6);
+  --shadow-glow-gold: 0 0 0 3px rgba(201, 162, 77, 0.16);
+}
+
+/* ── Legacy dark-surface tokens (portal / marketing / HQ chrome) ── */
 :root {
   --gold: #c9a24d;
   --gold-hover: #d4b56a;
@@ -12,6 +88,15 @@
   --border-gold: rgba(201, 162, 77, 0.28);
   --text-base: #f0efeb;
   --text-muted: rgba(240, 239, 235, 0.5);
+
+  /* Light-surface companions (HQ/admin data panels — cards, tables,
+     inputs on white) — same naming pattern as the dark tokens above */
+  --surface-light: #ffffff;
+  --surface-light-raised: #fafafa;
+  --border-light-subtle: var(--color-gray-100);
+  --border-light: var(--color-gray-200);
+  --text-light-base: var(--color-gray-900);
+  --text-light-muted: var(--color-gray-500);
 }
 
 /* Display / headline font utility */
@@ -77,4 +162,86 @@ select {
   background-repeat: no-repeat;
   background-position: right 14px center;
   padding-right: 36px !important;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Design system — motion primitives
+   Used by components/ui/* only. Respects reduced-motion.
+   ───────────────────────────────────────────────────────────── */
+
+@keyframes ds-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ds-scale-in {
+  from { opacity: 0; transform: scale(0.97) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes ds-slide-down {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ds-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+
+.ds-animate-fade-in {
+  animation: ds-fade-in 150ms ease-out;
+}
+
+.ds-animate-scale-in {
+  animation: ds-scale-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ds-animate-slide-down {
+  animation: ds-slide-down 140ms ease-out;
+}
+
+.ds-skeleton {
+  background: linear-gradient(
+    100deg,
+    rgba(0, 0, 0, 0.06) 25%,
+    rgba(0, 0, 0, 0.1) 37%,
+    rgba(0, 0, 0, 0.06) 50%
+  );
+  background-size: 200% 100%;
+  animation: ds-shimmer 1.8s ease-in-out infinite;
+}
+
+.ds-skeleton-dark {
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.05) 25%,
+    rgba(255, 255, 255, 0.1) 37%,
+    rgba(255, 255, 255, 0.05) 50%
+  );
+  background-size: 200% 100%;
+  animation: ds-shimmer 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-animate-fade-in,
+  .ds-animate-scale-in,
+  .ds-animate-slide-down {
+    animation: none;
+  }
+  .ds-skeleton,
+  .ds-skeleton-dark {
+    animation: none;
+  }
+}
+
+/* Consistent, premium focus ring — replaces the default browser
+   outline on interactive design-system elements. Gold-tinted to
+   match the brand accent instead of generic blue. */
+.ds-focus-ring {
+  outline: none;
+}
+.ds-focus-ring:focus-visible {
+  outline: 2px solid var(--color-gold);
+  outline-offset: 2px;
 }
