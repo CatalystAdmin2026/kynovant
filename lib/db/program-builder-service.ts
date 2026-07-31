@@ -110,6 +110,46 @@ export async function listProgramTemplates(): Promise<ProgramTemplate[]> {
     .orderBy(asc(programTemplates.createdAt));
 }
 
+// ─────────────────────────────────────────────────────────────
+// TEMPLATE ASSIGNMENT STATS
+//
+// Real, per-template counts of client_programs assignments, grouped
+// by status. Purely additive read — does not touch listProgramTemplates()
+// or any other consumer, and does not alter client_programs in any way.
+// Used to enrich the Programs list view with honest enrollment numbers.
+// ─────────────────────────────────────────────────────────────
+
+export interface ProgramTemplateStats {
+  programTemplateId: string;
+  activeClientCount: number;
+  completedClientCount: number;
+}
+
+export async function listProgramTemplateStats(): Promise<ProgramTemplateStats[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      programTemplateId: clientPrograms.programTemplateId,
+      status: clientPrograms.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(clientPrograms)
+    .groupBy(clientPrograms.programTemplateId, clientPrograms.status);
+
+  const byTemplate = new Map<string, ProgramTemplateStats>();
+  for (const row of rows) {
+    const entry = byTemplate.get(row.programTemplateId) ?? {
+      programTemplateId: row.programTemplateId,
+      activeClientCount: 0,
+      completedClientCount: 0,
+    };
+    if (row.status === "active") entry.activeClientCount = row.count;
+    if (row.status === "completed") entry.completedClientCount = row.count;
+    byTemplate.set(row.programTemplateId, entry);
+  }
+  return [...byTemplate.values()];
+}
+
 export async function getProgramTemplate(
   id: string,
 ): Promise<ProgramTemplate | null> {

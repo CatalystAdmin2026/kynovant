@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import {
   listProgramTemplates,
+  listProgramTemplateStats,
   createProgramTemplate,
 } from "@/lib/db/program-builder-service";
 import type { TemplateCategory, ExperienceLevel } from "@/lib/db/schema";
@@ -12,8 +13,17 @@ export async function GET() {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   try {
-    const templates = await listProgramTemplates();
-    return NextResponse.json({ ok: true, templates });
+    const [templates, stats] = await Promise.all([
+      listProgramTemplates(),
+      listProgramTemplateStats(),
+    ]);
+    const statsById = new Map(stats.map((s) => [s.programTemplateId, s]));
+    const enriched = templates.map((t) => ({
+      ...t,
+      activeClientCount: statsById.get(t.id)?.activeClientCount ?? 0,
+      completedClientCount: statsById.get(t.id)?.completedClientCount ?? 0,
+    }));
+    return NextResponse.json({ ok: true, templates: enriched });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : "Failed" },
