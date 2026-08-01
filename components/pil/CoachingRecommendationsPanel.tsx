@@ -11,6 +11,8 @@ const CATEGORY_ORDER: RecommendationCategory[] = [
   "session_design",
   "joint_stress",
   "movement",
+  "muscle_balance",
+  "progression",
   "volume",
 ];
 
@@ -20,6 +22,8 @@ const CATEGORY_LABEL: Record<RecommendationCategory, string> = {
   session_design: "Session Design",
   joint_stress: "Joint Stress",
   movement: "Movement Balance",
+  muscle_balance: "Muscle Balance",
+  progression: "Progression",
   volume: "Volume",
 };
 

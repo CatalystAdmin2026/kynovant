@@ -253,6 +253,40 @@ const ruleJointCumulative: RuleFn = (findings) => {
   );
 };
 
+const ruleFatigueAccumulationRising: RuleFn = (findings) => {
+  const match = findings.find((f) => f.code === "FATIGUE_ACCUMULATION_RISING");
+  if (!match) return null;
+  return rec(
+    "high",
+    "session_design",
+    "Schedule a deload — fatigue has risen for multiple consecutive weeks with no recovery break.",
+    "Weekly fatigue score has increased every week across a multi-week span with no deload week in between. Sustained rising fatigue without a planned reduction is associated with diminishing performance and elevated injury risk.",
+    ["FATIGUE_ACCUMULATION_RISING"],
+    "heuristic",
+  );
+};
+
+const ruleProgressionSpike: RuleFn = (findings) => {
+  const matches = findings.filter((f) => f.code === "PROGRESSION_SPIKE");
+  if (matches.length === 0) return null;
+  const muscleIds = [...new Set(
+    matches.map((f) => f.affectedEntities[0]?.id).filter(Boolean) as string[],
+  )];
+  const muscleNames = muscleIds.map(fmt);
+  const muscleList = muscleNames.length === 1
+    ? muscleNames[0]
+    : `${muscleNames[0]} and ${muscleNames.length - 1} others`;
+  return rec(
+    "high",
+    "progression",
+    `Smooth out the volume jump for ${muscleList} — a single-week spike exceeds a safe progression rate.`,
+    "A muscle group's direct set volume increased more than 20% in a single week. Gradual week-over-week increases give connective tissue and recovery capacity time to adapt; large jumps raise injury risk.",
+    ["PROGRESSION_SPIKE"],
+    "heuristic",
+    { muscles: muscleIds },
+  );
+};
+
 const ruleFrequencyHigh: RuleFn = (findings) => {
   const matches = findings.filter((f) => f.code === "FREQUENCY_HIGH");
   if (matches.length === 0) return null;
@@ -345,6 +379,43 @@ const ruleVolumeHigh: RuleFn = (findings) => {
   );
 };
 
+const ruleVolumeOverreachedWeekly: RuleFn = (findings) => {
+  const matches = findings.filter((f) => f.code === "VOLUME_MUSCLE_OVERREACHED_WEEKLY");
+  if (matches.length === 0) return null;
+  const muscleIds = [...new Set(
+    matches.map((f) => f.affectedEntities[0]?.id).filter(Boolean) as string[],
+  )];
+  const muscleNames = muscleIds.map(fmt);
+  const muscleList = muscleNames.length === 1
+    ? muscleNames[0]
+    : `${muscleNames[0]} (and ${muscleNames.length - 1} others)`;
+  return rec(
+    "medium",
+    "volume",
+    `Reconsider weekly ${muscleList} volume — the program average is at or above typical recoverable limits.`,
+    "Average weekly direct volume for this muscle group sits at or above the range where most lifters see diminishing returns and higher recovery cost. This is a program-wide average, not a single session — the fix is usually spread across the week, not one day.",
+    ["VOLUME_MUSCLE_OVERREACHED_WEEKLY"],
+    "heuristic",
+    { muscles: muscleIds },
+  );
+};
+
+const ruleBalanceAgonistDominant: RuleFn = (findings) => {
+  const matches = findings.filter((f) => f.code === "BALANCE_AGONIST_DOMINANT");
+  if (matches.length === 0) return null;
+  const muscleIds = [...new Set(matches.flatMap((f) => f.affectedEntities.map((e) => e.id)))];
+  const muscleNames = muscleIds.map(fmt);
+  return rec(
+    "medium",
+    "muscle_balance",
+    `Add direct work for the under-trained side of ${muscleNames.slice(0, 2).join(" vs. ")}.`,
+    "One muscle group in an agonist/antagonist pair is receiving more than three times the direct volume of its counterpart. Sustained imbalance between opposing muscle groups is a common contributor to postural and joint-stress issues over time.",
+    ["BALANCE_AGONIST_DOMINANT"],
+    "heuristic",
+    { muscles: muscleIds },
+  );
+};
+
 const ruleDurationVeryLong: RuleFn = (findings) => {
   const match = findings.find((f) => f.code === "DURATION_VERY_LONG");
   if (!match) return null;
@@ -417,6 +488,64 @@ const ruleFrequencyZero: RuleFn = (findings) => {
   );
 };
 
+const ruleVolumeUndertrainedWeekly: RuleFn = (findings) => {
+  const matches = findings.filter((f) => f.code === "VOLUME_MUSCLE_UNDERTRAINED_WEEKLY");
+  if (matches.length === 0) return null;
+  const muscleIds = [...new Set(
+    matches.map((f) => f.affectedEntities[0]?.id).filter(Boolean) as string[],
+  )];
+  const muscleNames = muscleIds.map(fmt);
+  const muscleList = muscleNames.length === 1
+    ? muscleNames[0]
+    : `${muscleNames.slice(0, 2).join(", ")}${muscleNames.length > 2 ? ` and ${muscleNames.length - 2} others` : ""}`;
+  return rec(
+    "low",
+    "volume",
+    `Consider adding direct volume for ${muscleList} — weekly average is below the general effective range.`,
+    "This muscle group is trained directly, but the weekly average falls below the range commonly cited as a minimum effective dose. If growth or strength in this area matters to the client's goal, a modest increase may help.",
+    ["VOLUME_MUSCLE_UNDERTRAINED_WEEKLY"],
+    "heuristic",
+    { muscles: muscleIds },
+  );
+};
+
+const ruleProgressionNoIncrease: RuleFn = (findings) => {
+  const matches = findings.filter((f) => f.code === "PROGRESSION_NO_INCREASE");
+  if (matches.length === 0) return null;
+  const muscleIds = [...new Set(
+    matches.map((f) => f.affectedEntities[0]?.id).filter(Boolean) as string[],
+  )];
+  const muscleNames = muscleIds.map(fmt);
+  const muscleList = muscleNames.length === 1
+    ? muscleNames[0]
+    : `${muscleNames.slice(0, 2).join(", ")}${muscleNames.length > 2 ? ` and ${muscleNames.length - 2} others` : ""}`;
+  return rec(
+    "low",
+    "progression",
+    `Plan a volume or intensity increase for ${muscleList} — weekly volume has held flat for several weeks.`,
+    "Direct volume for this muscle group has not increased across the analyzed weeks. This may be an intentional maintenance block, but progressive overload generally requires periodic increases to continue driving adaptation.",
+    ["PROGRESSION_NO_INCREASE"],
+    "heuristic",
+    { muscles: muscleIds },
+  );
+};
+
+const ruleBalanceAntagonistZero: RuleFn = (findings) => {
+  const matches = findings.filter((f) => f.code === "BALANCE_ANTAGONIST_ZERO");
+  if (matches.length === 0) return null;
+  const muscleIds = [...new Set(matches.flatMap((f) => f.affectedEntities.map((e) => e.id)))];
+  const muscleNames = muscleIds.map(fmt);
+  return rec(
+    "low",
+    "muscle_balance",
+    `Confirm the missing side of ${muscleNames.slice(0, 2).join(" / ")} is intentional.`,
+    "One side of an agonist/antagonist pair has meaningful direct volume while the other has none in this session. This is common in split programs where the opposing muscle is trained on a different day — worth a quick confirmation.",
+    ["BALANCE_ANTAGONIST_ZERO"],
+    "certain",
+    { muscles: muscleIds },
+  );
+};
+
 // ─── Rule registry ────────────────────────────────────────────────────────────
 // Ordered critical → low. Within priority, more specific rules run first.
 
@@ -430,19 +559,26 @@ const RULES: RuleFn[] = [
   // High
   ruleConsecutiveRecovery,
   ruleFatigueHigh,
+  ruleFatigueAccumulationRising,
   ruleJointExtreme,
   ruleJointCumulative,
   ruleFrequencyHigh,
+  ruleProgressionSpike,
   // Medium
   ruleJointMultiple,
   ruleMovementHorizontal,
   ruleMovementVertical,
   ruleVolumeHigh,
+  ruleVolumeOverreachedWeekly,
+  ruleBalanceAgonistDominant,
   ruleDurationVeryLong,
   // Low
   ruleRedundancy,
   ruleDurationLong,
   ruleFrequencyZero,
+  ruleVolumeUndertrainedWeekly,
+  ruleProgressionNoIncrease,
+  ruleBalanceAntagonistZero,
 ];
 
 // ─── Suppression ──────────────────────────────────────────────────────────────

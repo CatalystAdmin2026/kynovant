@@ -22,11 +22,15 @@ import { programWeeks, programWeekDays } from "@/lib/db/schema-program";
 import { getBlueprintEnriched } from "./enrichment";
 import { validateProgramStructureFromData } from "./modules/program-structure";
 import { analyzeVolume } from "./modules/volume";
+import { analyzeFatigue } from "./modules/fatigue";
 import { analyzeFrequency, type WeekInput } from "./modules/frequency";
 import { analyzeRecovery } from "./modules/recovery";
+import { analyzeVolumeProgression } from "./modules/volume-progression";
+import { analyzeFatigueAccumulation, type FatigueWeekInput } from "./modules/fatigue-accumulation";
 import { generateRecommendations } from "./recommendations";
 import type {
   EnrichedProgramWeek,
+  FatigueAnalysis,
   FrequencyAnalysis,
   MuscleGroup,
   PerMuscleWeekRow,
@@ -244,6 +248,7 @@ export async function getProgramAudit(
   // ── 3. Enrich each DISTINCT blueprint once ─────────────────────────────────
 
   const blueprintMap = new Map<string, VolumeAnalysis>();
+  const fatigueMap = new Map<string, FatigueAnalysis>();
 
   // Only enrich active templates (archived ones are flagged by M15)
   const activeTemplateIds = distinctTemplateIds.filter((id) => {
@@ -255,8 +260,9 @@ export async function getProgramAudit(
     activeTemplateIds.map(async (templateId) => {
       try {
         const blueprint = await getBlueprintEnriched(templateId, coachId);
-        const volume = analyzeVolume(blueprint);
-        blueprintMap.set(templateId, volume);
+        blueprintMap.set(templateId, analyzeVolume(blueprint));
+        // Fatigue reuses the same enriched blueprint fetched above — no extra query.
+        fatigueMap.set(templateId, analyzeFatigue(blueprint));
       } catch {
         // blueprint not found or enrichment failed — treat as no data
       }
@@ -284,6 +290,24 @@ export async function getProgramAudit(
 
   const recoveryAnalysis = analyzeRecovery(frequencyByWeek);
 
+  // ── 6b. M18 — Weekly volume progression + undertrained/overreached status ──
+
+  const volumeProgressionAnalysis = analyzeVolumeProgression(frequencyByWeek);
+
+  // ── 6c. M19 — Multi-week fatigue accumulation ───────────────────────────────
+
+  const fatigueWeekInputs: FatigueWeekInput[] = enrichedWeeks.map((week) => ({
+    weekNumber: week.weekNumber,
+    weekLabel: week.label,
+    days: week.days.map((day) => ({
+      fatigueAnalysis:
+        day.workoutTemplateId && fatigueMap.has(day.workoutTemplateId)
+          ? fatigueMap.get(day.workoutTemplateId)!
+          : null,
+    })),
+  }));
+  const fatigueAccumulationAnalysis = analyzeFatigueAccumulation(fatigueWeekInputs);
+
   // ── 7. Build PerMuscleWeeklyBrief ──────────────────────────────────────────
 
   const perMuscleWeeklyBrief = buildPerMuscleWeeklyBrief(
@@ -299,6 +323,8 @@ export async function getProgramAudit(
     ...structureResult.warnings,
     ...frequencyByWeek.flatMap((f) => f.findings),
     ...recoveryAnalysis.findings,
+    ...volumeProgressionAnalysis.findings,
+    ...fatigueAccumulationAnalysis.findings,
   ].sort(bySeverity);
 
   // ── 9. Program quality summary ─────────────────────────────────────────────
@@ -322,6 +348,8 @@ export async function getProgramAudit(
     perMuscleWeeklyBrief,
     frequencyAnalysisByWeek: frequencyByWeek,
     recoveryAnalysis,
+    volumeProgressionAnalysis,
+    fatigueAccumulationAnalysis,
     allFindings,
     recommendations: generateRecommendations(allFindings),
     distinctBlueprintsAudited: blueprintMap.size,

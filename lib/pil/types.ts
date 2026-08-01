@@ -781,7 +781,7 @@ export interface ProgramQualitySummary {
 
 // ─── Program Audit Result ─────────────────────────────────────────────────────
 
-/** Full output of getProgramAudit() — orchestrates M15, M16, M17, M32, M33. */
+/** Full output of getProgramAudit() — orchestrates M15, M16, M17, M18, M19, M32, M33. */
 export interface ProgramAuditResult {
   programTemplateId: string;
   qualitySummary: ProgramQualitySummary;
@@ -789,6 +789,8 @@ export interface ProgramAuditResult {
   perMuscleWeeklyBrief: PerMuscleWeeklyBriefData;
   frequencyAnalysisByWeek: FrequencyAnalysis[];
   recoveryAnalysis: RecoverySpacingAnalysis;
+  volumeProgressionAnalysis: VolumeProgressionAnalysis;
+  fatigueAccumulationAnalysis: FatigueAccumulationAnalysis;
   allFindings: PilFinding[];
   /** Deterministic coaching recommendations derived from allFindings. */
   recommendations: CoachingRecommendationResult;
@@ -833,7 +835,9 @@ export type RecommendationCategory =
   | "movement"
   | "joint_stress"
   | "program_structure"
-  | "session_design";
+  | "session_design"
+  | "muscle_balance"
+  | "progression";
 
 export interface CoachingRecommendation {
   id: string;
@@ -874,9 +878,74 @@ export interface CoachingRecommendationResult {
   hasActionableRecommendations: boolean;
 }
 
+// ─── M09 — Muscle Balance Analysis ───────────────────────────────────────────
+
+/** One agonist/antagonist muscle pair evaluated within a single Blueprint. */
+export interface MuscleBalancePair {
+  agonist: MuscleGroup;
+  antagonist: MuscleGroup;
+  agonistDirectSets: number;
+  antagonistDirectSets: number;
+  /** agonistDirectSets / antagonistDirectSets; null when the antagonist has 0 direct sets. */
+  ratio: number | null;
+  /** 'unknown' when neither muscle in the pair has any direct sets this session. */
+  status: "balanced" | "imbalanced" | "unknown";
+}
+
+/** Output type of M09 — Muscle Balance Analysis. */
+export interface MuscleBalanceAnalysis {
+  pairs: MuscleBalancePair[];
+  findings: PilFinding[];
+}
+
+// ─── Weekly Volume Progression (M18) + Muscle Training Status ───────────────
+
+export interface MuscleWeeklyVolumePoint {
+  weekNumber: number;
+  /** This week's own direct-set total for the muscle (not an average). */
+  directSets: number;
+}
+
+export type VolumeTrend = "increasing" | "decreasing" | "flat" | "variable" | "insufficient_data";
+
+/** Classification of a muscle group's average weekly direct volume against general set-volume landmark guidance. */
+export type MuscleVolumeStatus = "undertrained" | "adequate" | "overreached";
+
+export interface MuscleVolumeProgression {
+  muscleGroup: MuscleGroup;
+  weeklyVolume: MuscleWeeklyVolumePoint[];
+  trend: VolumeTrend;
+  /** Largest single-week percentage increase across the series; null when no week-over-week increase from a non-zero base exists. */
+  maxWeeklyIncreasePct: number | null;
+  averageWeeklySets: number;
+  status: MuscleVolumeStatus;
+}
+
+/** Output type of the Weekly Volume Progression module (M18, extended with training-status classification). */
+export interface VolumeProgressionAnalysis {
+  byMuscle: MuscleVolumeProgression[];
+  findings: PilFinding[];
+}
+
+// ─── M19 — Multi-Week Fatigue Accumulation ───────────────────────────────────
+
+export interface WeeklyFatiguePoint {
+  weekNumber: number;
+  /** Sum of each training day's FatigueAnalysis.totalScore for this week. */
+  totalScore: number;
+  /** True when the week's label contains "deload" (case-insensitive). */
+  isLabeledDeload: boolean;
+}
+
+/** Output type of M19 — Multi-Week Fatigue Accumulation. */
+export interface FatigueAccumulationAnalysis {
+  weeklyFatigue: WeeklyFatiguePoint[];
+  findings: PilFinding[];
+}
+
 // ─── Blueprint Audit Result ───────────────────────────────────────────────────
 
-/** Full output of getBlueprintAudit() — orchestrates M00–M08, M33. */
+/** Full output of getBlueprintAudit() — orchestrates M00–M09, M33. */
 export interface BlueprintAuditResult {
   templateId: string;
   qualitySummary: BlueprintQualitySummary;
@@ -887,6 +956,7 @@ export interface BlueprintAuditResult {
   jointStressAnalysis: JointStressAnalysis;
   redundancyAnalysis: RedundancyAnalysis;
   durationEstimate: DurationEstimate;
+  muscleBalanceAnalysis: MuscleBalanceAnalysis;
   completenessReport: CompletenessReport;
   /** All findings from all modules, sorted error→warning→caution→info. */
   allFindings: PilFinding[];

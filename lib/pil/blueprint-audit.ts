@@ -18,6 +18,7 @@ import { analyzeMovement } from "./modules/movement";
 import { analyzeJointStress } from "./modules/joint-stress";
 import { analyzeRedundancy } from "./modules/redundancy";
 import { estimateDuration } from "./modules/duration";
+import { analyzeMuscleBalance } from "./modules/muscle-balance";
 import { generateRecommendations } from "./recommendations";
 import type {
   BlueprintAuditResult,
@@ -91,6 +92,7 @@ export function orchestrateBlueprint(
   const jointStressAnalysis = analyzeJointStress(blueprint);
   const redundancyAnalysis = analyzeRedundancy(blueprint);
   const durationEstimate = estimateDuration(blueprint);
+  const muscleBalanceAnalysis = analyzeMuscleBalance(volumeAnalysis);
 
   const allFindings: PilFinding[] = [
     ...validationResult.errors,
@@ -101,6 +103,7 @@ export function orchestrateBlueprint(
     ...jointStressAnalysis.findings,
     ...redundancyAnalysis.findings,
     ...durationEstimate.findings,
+    ...muscleBalanceAnalysis.findings,
   ].sort(bySeverity);
 
   const hasJointCoverage = jointStressAnalysis.byJoint.length > 0;
@@ -122,6 +125,7 @@ export function orchestrateBlueprint(
     jointStressAnalysis,
     redundancyAnalysis,
     durationEstimate,
+    muscleBalanceAnalysis,
     completenessReport,
     allFindings,
     recommendations: generateRecommendations(allFindings),
