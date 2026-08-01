@@ -4,10 +4,11 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
-import { Menu, X, LayoutDashboard, Users, BookOpen, FileText, ClipboardCheck, Dumbbell } from "lucide-react";
+import { Menu, X, LayoutDashboard, Users, BookOpen, FileText, ClipboardCheck, Dumbbell, Rocket } from "lucide-react";
 
 const MAIN_NAV = [
   { icon: LayoutDashboard, label: "Mission Control",  href: "/hq",             exact: true },
+  { icon: Rocket,          label: "Get Started",      href: "/hq/get-started"              },
   { icon: Users,           label: "Clients",          href: "/hq/clients"                  },
   { icon: BookOpen,        label: "Programs",         href: "/hq/programs"                 },
   { icon: FileText,        label: "Blueprints",       href: "/hq/blueprints"               },

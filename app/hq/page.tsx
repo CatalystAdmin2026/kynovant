@@ -81,6 +81,31 @@ export default async function MissionControlPage() {
         }
       />
 
+      {/* ── Welcome banner: shown until this coach has a client ── */}
+      {data.activeClientCount === 0 && (
+        <section aria-label="Get started">
+          <div className="border border-[#C9A24D]/25 bg-gradient-to-br from-[#C9A24D]/[0.06] to-transparent px-6 py-6 flex flex-col sm:flex-row sm:items-center gap-5 justify-between">
+            <div>
+              <p className="text-[#C9A24D] text-[10px] font-semibold tracking-[0.3em] uppercase mb-1.5">
+                Welcome to Kynovant
+              </p>
+              <p className="text-white text-sm font-medium">
+                Let&apos;s get your first client on a program.
+              </p>
+              <p className="text-gray-500 text-xs mt-1">
+                Three quick steps — add a client, set up a program, assign the first workout.
+              </p>
+            </div>
+            <Link
+              href="/hq/get-started"
+              className="shrink-0 bg-[#C9A24D] text-black font-bold text-[11px] tracking-[0.14em] uppercase px-6 py-3 hover:bg-[#D4B56A] transition-colors text-center"
+            >
+              Get Started →
+            </Link>
+          </div>
+        </section>
+      )}
+
       {/* ── Section A: Count cards ───────────────────────────── */}
       <section aria-label="Summary counts">
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
