@@ -48,7 +48,9 @@ export default function SetupPasswordPage() {
 
     setState("done");
     setTimeout(() => {
-      window.location.href = "/portal";
+      // Role-aware redirect — a newly-activated coach lands in /hq, a
+      // client lands in /portal. See app/auth/role-redirect/route.ts.
+      window.location.href = "/auth/role-redirect";
     }, 1500);
   }
 
@@ -84,7 +86,7 @@ export default function SetupPasswordPage() {
             <div className="flex flex-col gap-2">
               <p className="text-sm font-semibold text-white/85">Account ready</p>
               <p className="text-xs text-white/40 leading-relaxed">
-                Entering your portal…
+                Taking you in…
               </p>
             </div>
           </div>
