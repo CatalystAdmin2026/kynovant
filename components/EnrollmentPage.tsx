@@ -1,5 +1,10 @@
 import Link from "next/link";
 
+interface TrustIndicator {
+  label: string;
+  body: string;
+}
+
 interface EnrollmentPageProps {
   eyebrow: string;
   headline: string;
@@ -12,8 +17,10 @@ interface EnrollmentPageProps {
   privateNote?: string;
   ctaLabel: string;
   ctaUrl: string;
+  ctaFootnote?: string;
   includes: readonly string[];
   coachQuote?: string;
+  trustIndicators?: readonly TrustIndicator[];
 }
 
 export default function EnrollmentPage({
@@ -28,8 +35,10 @@ export default function EnrollmentPage({
   privateNote,
   ctaLabel,
   ctaUrl,
+  ctaFootnote = "Secure checkout · Powered by Stripe",
   includes,
   coachQuote,
+  trustIndicators,
 }: EnrollmentPageProps) {
   return (
     <main className="bg-[#080909] min-h-screen overflow-x-hidden">
@@ -136,7 +145,7 @@ export default function EnrollmentPage({
                   </Link>
 
                   <p className="text-gray-700 text-[10px] text-center mt-4 tracking-wide">
-                    Secure checkout · Powered by Stripe
+                    {ctaFootnote}
                   </p>
                 </div>
               </div>
@@ -172,6 +181,24 @@ export default function EnrollmentPage({
           </div>
         </div>
       </section>
+
+      {/* ── TRUST INDICATORS ─────────────────────────────────── */}
+      {trustIndicators && trustIndicators.length > 0 && (
+        <section className="py-20 px-6 bg-[#080909] border-t border-white/[0.05]">
+          <div className="max-w-5xl mx-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
+              {trustIndicators.map((item) => (
+                <div key={item.label} className="text-center px-2">
+                  <p className="text-[#C9A24D] text-[10px] tracking-[0.3em] uppercase font-semibold mb-2.5">
+                    {item.label}
+                  </p>
+                  <p className="text-gray-500 text-xs leading-relaxed">{item.body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* ── COACH QUOTE / CLOSING ─────────────────────────────── */}
       <section
