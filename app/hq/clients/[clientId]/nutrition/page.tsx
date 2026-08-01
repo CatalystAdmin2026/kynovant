@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import Link from "next/link";
+import { ArrowLeft, CheckCircle2, Clock, Circle, Archive } from "lucide-react";
 import { getDb } from "@/lib/db/client";
 import { healthProfiles } from "@/lib/db/schema-profile";
 import { getCoachClientWorkspace } from "@/lib/db/coach-client-workspace-service";
@@ -12,6 +13,7 @@ import {
 import { ageFromDob, suggestActivityLevel } from "@/lib/nutrition/calculator";
 import NutritionTargetEditor from "@/components/hq/nutrition/NutritionTargetEditor";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -23,15 +25,15 @@ const GOAL_LABELS: Record<string, string> = {
   fat_loss:               "Fat Loss",
   muscle_gain:            "Muscle Gain",
   body_recomposition:     "Body Recomposition",
-  strength:               "Strength",
+  strength:                "Strength",
   athletic_performance:   "Athletic Performance",
   general_health:         "General Health",
-  mobility:               "Mobility",
+  mobility:                "Mobility",
   competition_prep:       "Competition Prep",
-  reverse_diet:           "Reverse Diet",
-  maintenance:            "Maintenance",
+  reverse_diet:            "Reverse Diet",
+  maintenance:             "Maintenance",
   executive_performance:  "Executive Performance",
-  custom:                 "Custom",
+  custom:                  "Custom",
 };
 
 function fmtDate(d: string | Date | null): string {
@@ -125,9 +127,10 @@ export default async function ClientNutritionPage({
             <p className="text-[9px] text-white/18 uppercase tracking-[0.5em]">Nutrition</p>
             <Link
               href={`/hq/clients/${clientId}`}
-              className="text-[10px] text-white/20 hover:text-white/45 transition-colors"
+              className="inline-flex items-center gap-1.5 text-[10px] text-white/20 hover:text-white/45 transition-colors"
             >
-              ← {firstName}&apos;s workspace
+              <ArrowLeft size={11} aria-hidden />
+              {firstName}&apos;s workspace
             </Link>
           </div>
 
@@ -137,66 +140,52 @@ export default async function ClientNutritionPage({
           </h1>
 
           {/* Profile stats row */}
-          <div className="flex flex-wrap items-center gap-x-7 gap-y-3 mb-6">
+          <div className="flex flex-wrap items-center gap-2 mb-7">
             {goalType && (
-              <div className="flex items-center gap-2">
-                <div className="w-[3px] h-[3px] rounded-full bg-[#C9A24D]/50 shrink-0" />
-                <p className="text-xs text-white/50">
-                  {GOAL_LABELS[goalType] ?? goalType}
-                </p>
-              </div>
+              <span className="inline-flex items-center rounded-full border border-gold/20 bg-gold/[0.06] px-3 py-1 text-[11px] text-gold/70">
+                {GOAL_LABELS[goalType] ?? goalType}
+              </span>
             )}
             {weightLbs && (
-              <div className="flex items-center gap-2">
-                <div className="w-[3px] h-[3px] rounded-full bg-white/15 shrink-0" />
-                <p className="text-xs text-white/35">
-                  {Math.round(weightLbs)} lbs
-                </p>
-              </div>
+              <span className="inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-[11px] text-white/40">
+                {Math.round(weightLbs)} lbs
+              </span>
             )}
             {heightInches && (
-              <div className="flex items-center gap-2">
-                <div className="w-[3px] h-[3px] rounded-full bg-white/15 shrink-0" />
-                <p className="text-xs text-white/35">
-                  {Math.floor(heightInches / 12)}&prime; {Math.round(heightInches % 12)}&Prime;
-                </p>
-              </div>
+              <span className="inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-[11px] text-white/40">
+                {Math.floor(heightInches / 12)}&prime; {Math.round(heightInches % 12)}&Prime;
+              </span>
             )}
             {ageYears && (
-              <div className="flex items-center gap-2">
-                <div className="w-[3px] h-[3px] rounded-full bg-white/15 shrink-0" />
-                <p className="text-xs text-white/35">{ageYears} yrs</p>
-              </div>
+              <span className="inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-[11px] text-white/40">
+                {ageYears} yrs
+              </span>
             )}
           </div>
 
           {/* Nutrition status + profile completeness row */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3 flex-wrap">
               {activeTarget ? (
-                <>
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400/50" />
-                  <p className="text-[10px] text-emerald-400/50 uppercase tracking-[0.35em]">
-                    Targets published
-                  </p>
-                  <p className="text-[10px] text-white/18">
-                    · {activeTarget.calorieTarget.toLocaleString()} kcal &middot; {activeTarget.proteinGrams}g protein
-                  </p>
-                </>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.3em] text-emerald-400">
+                  <CheckCircle2 size={11} aria-hidden />
+                  Targets Published
+                </span>
               ) : draftTargets.length > 0 ? (
-                <>
-                  <div className="w-1.5 h-1.5 rounded-full bg-amber-400/40" />
-                  <p className="text-[10px] text-amber-400/45 uppercase tracking-[0.35em]">
-                    Draft ready to review
-                  </p>
-                </>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.3em] text-amber-400">
+                  <Clock size={11} aria-hidden />
+                  Draft Ready
+                </span>
               ) : (
-                <>
-                  <div className="w-1.5 h-1.5 rounded-full bg-white/12" />
-                  <p className="text-[10px] text-white/22 uppercase tracking-[0.35em]">
-                    No targets set
-                  </p>
-                </>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.3em] text-white/25">
+                  <Circle size={11} aria-hidden />
+                  No Targets Set
+                </span>
+              )}
+              {activeTarget && (
+                <p className="text-[10px] text-white/18">
+                  {activeTarget.calorieTarget.toLocaleString()} kcal &middot; {activeTarget.proteinGrams}g protein
+                </p>
               )}
             </div>
 
@@ -232,34 +221,40 @@ export default async function ClientNutritionPage({
         {archivedTargets.length > 0 && (
           <div className="mt-14">
             <div className="flex items-center gap-4 mb-5">
-              <p className="text-[9px] text-white/18 uppercase tracking-[0.45em] shrink-0">
+              <p className="flex items-center gap-2 text-[9px] text-white/20 uppercase tracking-[0.45em] shrink-0">
+                <Archive size={11} aria-hidden />
                 Archive
               </p>
               <div className="flex-1 h-px bg-white/[0.04]" />
             </div>
-            <div className="space-y-0">
-              {archivedTargets.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex items-center gap-5 py-3.5 border-b border-white/[0.04]"
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-white/32 tabular-nums">
+            <Table tone="dark">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Target</TableHead>
+                  <TableHead>Effective</TableHead>
+                  <TableHead>Archived</TableHead>
+                  <TableHead>Reason</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {archivedTargets.map((t) => (
+                  <TableRow key={t.id}>
+                    <TableCell className="tabular-nums text-white/45 whitespace-nowrap">
                       {t.calorieTarget.toLocaleString()} kcal &middot; {t.proteinGrams}g protein
-                    </p>
-                    <p className="text-[10px] text-white/15 mt-0.5">
-                      Effective {t.effectiveDate}
-                      {t.archivedAt && ` · Archived ${fmtDate(t.archivedAt)}`}
-                    </p>
-                  </div>
-                  {t.adjustmentReason && (
-                    <p className="text-[10px] text-white/18 max-w-[220px] truncate shrink-0">
-                      {t.adjustmentReason}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
+                    </TableCell>
+                    <TableCell className="text-white/30 text-xs whitespace-nowrap">
+                      {t.effectiveDate}
+                    </TableCell>
+                    <TableCell className="text-white/30 text-xs whitespace-nowrap">
+                      {t.archivedAt ? fmtDate(t.archivedAt) : "—"}
+                    </TableCell>
+                    <TableCell className="text-white/30 text-xs max-w-[220px] truncate">
+                      {t.adjustmentReason ?? "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         )}
       </div>

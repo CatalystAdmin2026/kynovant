@@ -8,6 +8,7 @@ import {
   type HistoricalSetLog,
 } from "@/lib/db/coach-dashboard-service";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
+import { Card, EmptyState, cx } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -73,21 +74,20 @@ function repRange(ex: SnapshotExercise): string {
   return "—";
 }
 
+const STATUS_PILL: Record<string, string> = {
+  completed: "border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-400",
+  skipped: "border-white/10 bg-white/[0.04] text-gray-400",
+};
+
 function statusBadge(status: string) {
-  if (status === "completed")
-    return (
-      <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-[0.15em]">
-        Completed
-      </span>
-    );
-  if (status === "skipped")
-    return (
-      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-[0.15em]">
-        Skipped
-      </span>
-    );
+  const cls = STATUS_PILL[status] ?? "border-amber-500/25 bg-amber-500/[0.06] text-amber-400";
   return (
-    <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-[0.15em]">
+    <span
+      className={cx(
+        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.15em]",
+        cls,
+      )}
+    >
       {status}
     </span>
   );
@@ -107,8 +107,8 @@ function ExerciseBlock({
   const totalSets = exercise.sets ?? 1;
 
   return (
-    <div className="border border-white/[0.05] bg-[#0a0b0c] mb-2">
-      <div className="px-4 py-3 border-b border-white/[0.04]">
+    <Card tone="dark" padding="none" className="mb-2">
+      <div className="px-4 py-3 border-b border-white/[0.06]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-white text-sm font-semibold leading-tight">{exercise.exerciseName}</p>
@@ -153,7 +153,7 @@ function ExerciseBlock({
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -248,7 +248,7 @@ export default async function CoachSessionReviewPage({
       ]} />
 
       {/* ── Read-only badge ───────────────────────────────────── */}
-      <div className="mb-4 inline-flex items-center gap-1.5 border border-white/[0.06] px-2.5 py-1">
+      <div className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] px-2.5 py-1">
         <span className="w-1.5 h-1.5 rounded-full bg-[#C9A24D]/60" />
         <span className="text-[9px] text-gray-500 uppercase tracking-[0.25em] font-semibold">
           Coach View · Read Only
@@ -306,11 +306,12 @@ export default async function CoachSessionReviewPage({
 
       {/* ── Skipped ───────────────────────────────────────────── */}
       {detail.status === "skipped" && (
-        <div className="border border-dashed border-white/[0.08] px-5 py-5 mb-6 text-center">
-          <p className="text-gray-400 text-sm">Client skipped this session.</p>
-          {detail.clientNotes && (
-            <p className="text-gray-400 text-xs italic mt-2">{detail.clientNotes}</p>
-          )}
+        <div className="mb-6">
+          <EmptyState
+            tone="dark"
+            title="Client skipped this session."
+            description={detail.clientNotes ?? undefined}
+          />
         </div>
       )}
 
@@ -355,21 +356,22 @@ export default async function CoachSessionReviewPage({
               )}
             </>
           ) : (
-            <div className="border border-dashed border-white/[0.08] px-5 py-5 mb-6">
-              <p className="text-gray-400 text-sm text-center">
-                Workout structure unavailable for this session.
-              </p>
-              {hasLogs && (
-                <p className="text-gray-500 text-xs text-center mt-1">
-                  {detail.setLogs.length} set{detail.setLogs.length !== 1 ? "s" : ""} were logged.
-                </p>
-              )}
+            <div className="mb-6">
+              <EmptyState
+                tone="dark"
+                title="Workout structure unavailable for this session."
+                description={
+                  hasLogs
+                    ? `${detail.setLogs.length} set${detail.setLogs.length !== 1 ? "s" : ""} were logged.`
+                    : undefined
+                }
+              />
             </div>
           )}
 
           {hasSnapshot && !hasLogs && detail.status === "completed" && (
-            <div className="border border-dashed border-white/[0.06] px-5 py-4 mb-6 text-center">
-              <p className="text-gray-400 text-xs">No performance data was logged.</p>
+            <div className="mb-6">
+              <EmptyState tone="dark" title="No performance data was logged." />
             </div>
           )}
 
