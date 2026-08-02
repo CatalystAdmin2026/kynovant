@@ -5,10 +5,22 @@ interface Props {
   confidence?: "certain" | "heuristic";
 }
 
+// Chip background/text pairs mirror StatusChip's dark-tone palette
+// (components/ui/StatusChip.tsx) exactly for the ok/caution/high
+// tiers this badge needs — kept as a plain <span> rather than
+// <StatusChip> because the "~" heuristic-confidence marker needs its
+// own reduced-opacity child, which StatusChip's label-only API can't
+// render alongside the duration text.
+const CHIP_STYLE = {
+  ok: "bg-white/[0.06] text-white/45",
+  caution: "bg-amber-500/10 text-amber-400",
+  high: "bg-orange-500/10 text-orange-400",
+} as const;
+
 export default function DurationBadge({ estimatedMinutes, confidence }: Props) {
   if (!estimatedMinutes) {
     return (
-      <span className="inline-flex items-center text-xs text-gray-400 font-medium">
+      <span className="inline-flex items-center text-xs text-white/25 font-medium">
         Est. —
       </span>
     );
@@ -17,10 +29,10 @@ export default function DurationBadge({ estimatedMinutes, confidence }: Props) {
   const isVeryLong = estimatedMinutes > 120;
   const isLong = estimatedMinutes > 90;
   const chipColor = isVeryLong
-    ? "bg-orange-100 text-orange-700"
+    ? CHIP_STYLE.high
     : isLong
-      ? "bg-amber-100 text-amber-700"
-      : "bg-gray-100 text-gray-600";
+      ? CHIP_STYLE.caution
+      : CHIP_STYLE.ok;
 
   const tooltip =
     confidence === "certain"

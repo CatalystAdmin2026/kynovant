@@ -104,13 +104,15 @@ export default function CheckInReviewPanel({
 
   return (
     <div className="space-y-4">
-      {/* Start Review CTA */}
+      {/* Start Review CTA — a neutral "next step ready" prompt, not
+          an outcome/status, so it stays outside the emerald/red
+          outcome-color vocabulary used elsewhere in this panel. */}
       {currentStatus === "submitted" && (
-        <div className="rounded-xl border border-blue-500/20 bg-blue-500/[0.05] px-5 py-4">
-          <p className="text-blue-400 text-sm font-medium mb-1">
+        <div className="rounded-xl border border-white/[0.1] bg-white/[0.03] px-5 py-4">
+          <p className="text-white/70 text-sm font-medium mb-1">
             Ready to review {clientName}&apos;s check-in?
           </p>
-          <p className="text-blue-300/60 text-xs mb-3">
+          <p className="text-white/40 text-xs mb-3">
             Starting review marks it as &quot;in review&quot; and lets you write a response.
           </p>
           <Button

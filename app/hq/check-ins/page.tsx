@@ -14,6 +14,7 @@ import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import { listCoachCheckIns } from "@/lib/db/coach-check-in-service";
 import { Card, Badge, EmptyState } from "@/components/ui";
 import type { BadgeVariant } from "@/components/ui";
+import { SEVERITY_DOT, SEVERITY_TEXT } from "@/lib/ui/status";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,21 @@ const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
   submitted: "info",
   in_review: "warning",
   reviewed: "success",
+};
+
+// Bare status dot for actionable rows — kept as its own map (rather
+// than reusing the Badge variant name directly) so the hue is
+// explicit and pinned to exactly what the neighboring Badge renders:
+// Badge variant="info" -> text-sky-400, variant="warning" ->
+// text-sky/amber-400 (== SEVERITY_TEXT.caution). Sourcing "in_review"
+// from SEVERITY_DOT ties it to the shared severity module since that
+// hue already coincides with Severity's "caution" bucket; "submitted"
+// has no Severity equivalent (Severity has no sky/info hue), so it's
+// pinned directly to Badge's sky-400 to guarantee the two elements
+// can never drift apart again.
+const STATUS_DOT: Record<string, string> = {
+  submitted: "bg-sky-400",
+  in_review: SEVERITY_DOT.caution,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -95,7 +111,7 @@ function QueueRow({ item, variant }: { item: QueueItem; variant: "actionable" | 
         {variant === "actionable" && (
           <span
             className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-              item.status === "in_review" ? "bg-amber-400" : "bg-blue-400"
+              STATUS_DOT[item.status] ?? SEVERITY_DOT.unknown
             }`}
             aria-hidden
           />
@@ -120,19 +136,19 @@ function QueueRow({ item, variant }: { item: QueueItem; variant: "actionable" | 
           <div className="hidden shrink-0 text-right md:block">
             <p
               className={`text-sm font-bold tabular-nums ${
-                item.waitingDays >= 3 ? "text-amber-400" : "text-white/50"
+                item.waitingDays >= 3 ? SEVERITY_TEXT.caution : "text-white/50"
               }`}
             >
               {item.waitingDays}d
             </p>
-            <p className="text-[9px] uppercase tracking-[0.15em] text-white/25">waiting</p>
+            <p className="text-[9px] uppercase tracking-[0.25em] text-white/25">waiting</p>
           </div>
         )}
 
         {variant === "actionable" && (
           <div className="hidden shrink-0 text-right lg:block">
             <p className="text-xs text-white/50">{fmtDate(item.submittedAt)}</p>
-            <p className="text-[9px] uppercase tracking-[0.15em] text-white/25">submitted</p>
+            <p className="text-[9px] uppercase tracking-[0.25em] text-white/25">submitted</p>
           </div>
         )}
 
@@ -205,7 +221,7 @@ export default async function CheckInQueuePage() {
         />
       ) : (
         <section>
-          <p className="mb-3 text-[9px] uppercase tracking-[0.4em] text-white/30">Needs Review</p>
+          <p className="mb-3 text-[9px] uppercase tracking-[0.3em] text-white/30">Needs Review</p>
           <div className="space-y-2">
             {actionable.map((item) => (
               <QueueRow key={item.id} item={item} variant="actionable" />
@@ -217,7 +233,7 @@ export default async function CheckInQueuePage() {
       {/* Reviewed (recent history) */}
       {reviewed.length > 0 && (
         <section>
-          <p className="mb-3 text-[9px] uppercase tracking-[0.4em] text-white/30">Recently Reviewed</p>
+          <p className="mb-3 text-[9px] uppercase tracking-[0.3em] text-white/30">Recently Reviewed</p>
           <div className="space-y-2">
             {reviewed.slice(0, 20).map((item) => (
               <QueueRow key={item.id} item={item} variant="reviewed" />

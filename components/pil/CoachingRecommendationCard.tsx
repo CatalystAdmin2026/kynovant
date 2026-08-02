@@ -2,15 +2,24 @@
 
 import { useState } from "react";
 import type { CoachingRecommendation, RecommendationCategory } from "@/lib/pil/types";
+import { SEVERITY_BAR, type Severity } from "@/lib/ui/status";
 
 // ─── Priority styling ─────────────────────────────────────────────────────────
 
-const PRIORITY_BAR: Record<string, string> = {
-  critical: "bg-red-500",
-  high: "bg-orange-400",
-  medium: "bg-amber-400",
-  low: "bg-gray-200",
-};
+// Maps this card's own recommendation-priority vocabulary onto the
+// shared canonical Severity scale (lib/ui/status.ts).
+function priorityToSeverity(priority: string): Severity {
+  switch (priority) {
+    case "critical":
+      return "critical";
+    case "high":
+      return "high";
+    case "medium":
+      return "caution";
+    default:
+      return "unknown"; // low
+  }
+}
 
 const CATEGORY_LABEL: Record<string, string> = {
   volume: "Volume",
@@ -35,7 +44,7 @@ export default function CoachingRecommendationCard({
   onViewEvidence,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const barColor = PRIORITY_BAR[recommendation.priority] ?? "bg-gray-200";
+  const barColor = SEVERITY_BAR[priorityToSeverity(recommendation.priority)];
 
   const hasSubstitutes = recommendation.substituteExercises.length > 0;
   const hasMuscles = recommendation.affectedMuscleGroups.length > 0;
@@ -61,25 +70,25 @@ export default function CoachingRecommendationCard({
   }
 
   return (
-    <div className="border border-gray-100 rounded-lg overflow-hidden">
+    <div className="border border-white/[0.08] bg-[var(--surface)] rounded-lg overflow-hidden">
       {/* Priority bar — 3px top accent communicates severity at a glance */}
       <div className={`h-0.5 w-full ${barColor}`} />
 
       <div className="px-3.5 py-3">
         {/* Category + confidence */}
         <div className="flex items-center gap-2 mb-1.5">
-          <span className="text-[10px] text-gray-400 uppercase tracking-wider">
+          <span className="text-[10px] text-white/40 uppercase tracking-wider">
             {CATEGORY_LABEL[recommendation.category] ?? recommendation.category}
           </span>
           {recommendation.confidence === "certain" && (
-            <span className="text-[9px] text-gray-300 border border-gray-100 rounded px-1 py-0.5 tracking-wider uppercase">
+            <span className="text-[9px] text-white/25 border border-white/[0.08] rounded px-1 py-0.5 tracking-wider uppercase">
               Certain
             </span>
           )}
         </div>
 
         {/* Headline — the coaching action */}
-        <p className="text-sm text-gray-900 leading-snug font-medium">
+        <p className="text-sm text-white/70 leading-snug font-medium">
           {recommendation.headline}
         </p>
 
@@ -89,7 +98,7 @@ export default function CoachingRecommendationCard({
           {hasMuscles && onHighlightMuscle && (
             <button
               onClick={handleHighlightClick}
-              className="text-[11px] text-blue-500 hover:text-blue-700 transition-colors"
+              className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
             >
               Show in Brief →
             </button>
@@ -99,7 +108,7 @@ export default function CoachingRecommendationCard({
           {hasSubstitutes && onSubstituteRequest && (
             <button
               onClick={handleSubstituteClick}
-              className="text-[11px] text-indigo-500 hover:text-indigo-700 transition-colors"
+              className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
             >
               Find substitute →
             </button>
@@ -109,7 +118,7 @@ export default function CoachingRecommendationCard({
           {onViewEvidence && (
             <button
               onClick={handleViewEvidence}
-              className="text-[11px] text-gray-400 hover:text-gray-700 transition-colors"
+              className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
             >
               View evidence →
             </button>
@@ -118,7 +127,7 @@ export default function CoachingRecommendationCard({
           {/* Expand toggle — always at end of action row */}
           <button
             onClick={() => setExpanded((x) => !x)}
-            className="text-[11px] text-gray-400 hover:text-gray-700 transition-colors"
+            className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
           >
             {expanded ? "Hide" : "Why →"}
           </button>
@@ -127,7 +136,7 @@ export default function CoachingRecommendationCard({
         {/* Expanded: rationale + supporting codes */}
         {expanded && (
           <div className="mt-2.5 space-y-2">
-            <p className="text-xs text-gray-500 leading-relaxed">
+            <p className="text-xs text-white/40 leading-relaxed">
               {recommendation.rationale}
             </p>
 
@@ -136,7 +145,7 @@ export default function CoachingRecommendationCard({
                 {recommendation.supportingFindingCodes.map((code) => (
                   <span
                     key={code}
-                    className="inline-block font-mono text-[9px] bg-gray-50 border border-gray-100 text-gray-400 rounded px-1.5 py-0.5"
+                    className="inline-block font-mono text-[9px] bg-white/[0.04] border border-white/[0.08] text-white/40 rounded px-1.5 py-0.5"
                   >
                     {code}
                   </span>

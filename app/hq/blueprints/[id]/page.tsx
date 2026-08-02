@@ -50,7 +50,7 @@ export default function HQBlueprintEditorPage({
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#080909]">
+      <div className="min-h-screen bg-ink">
         <div className="max-w-screen-xl mx-auto px-4 md:px-8 py-6 space-y-3">
           <Skeleton tone="dark" height="h-14" rounded="sm" />
           <Skeleton tone="dark" height="h-40" rounded="sm" />
@@ -62,7 +62,7 @@ export default function HQBlueprintEditorPage({
 
   if (error) {
     return (
-      <div className="min-h-screen bg-[#080909] flex items-center justify-center py-32">
+      <div className="min-h-screen bg-ink flex items-center justify-center py-32">
         <EmptyState
           tone="dark"
           icon={<AlertTriangle size={18} />}

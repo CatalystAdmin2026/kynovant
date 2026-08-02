@@ -7,6 +7,8 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import HQPageHeader from "@/components/hq/HQPageHeader";
+import { Badge } from "@/components/ui";
+import type { BadgeVariant } from "@/components/ui";
 import {
   Search, LayoutGrid, List, MoreVertical, Plus,
   ClipboardList, Users, TrendingUp, Trophy,
@@ -44,11 +46,11 @@ type ViewMode = "table" | "grid";
 
 const PAGE_SIZE_OPTIONS = [8, 12, 24] as const;
 
-function statusCls(s: string) {
-  if (s === "active")   return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-  if (s === "archived") return "bg-white/[0.04] text-white/25 border border-white/[0.06]";
-  return "bg-amber-500/10 text-amber-400 border border-amber-500/20";
-}
+const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
+  active:   "success",
+  draft:    "warning",
+  archived: "neutral",
+};
 
 function statusLabel(s: string) {
   if (s === "active") return "Published";
@@ -75,19 +77,24 @@ function fmtRelative(iso: string | undefined): string {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-// Category → visual identity. Purely presentational — no data implied.
-const CATEGORY_STYLE: Record<string, { Icon: typeof Flame; cls: string }> = {
-  fat_loss:              { Icon: Flame,     cls: "bg-orange-500/10 text-orange-400 border-orange-500/20" },
-  muscle_growth:          { Icon: Dumbbell,  cls: "bg-[#C9A24D]/10 text-[#C9A24D] border-[#C9A24D]/20" },
-  body_recomposition:     { Icon: RefreshCw, cls: "bg-sky-500/10 text-sky-400 border-sky-500/20" },
-  athletic_performance:   { Icon: Zap,       cls: "bg-violet-500/10 text-violet-400 border-violet-500/20" },
-  lifestyle:              { Icon: Heart,     cls: "bg-rose-500/10 text-rose-400 border-rose-500/20" },
-  competition_prep:       { Icon: Trophy,    cls: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" },
-  executive_performance:  { Icon: Briefcase, cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" },
+// Category → icon glyph only. Differentiation between categories comes
+// from the icon shape, not from hue — every category shares the same
+// muted gold-tinted container (matching MetricCard's icon treatment)
+// so the categories row doesn't compete for attention with status pills.
+const CATEGORY_ICON: Record<string, typeof Flame> = {
+  fat_loss:              Flame,
+  muscle_growth:          Dumbbell,
+  body_recomposition:     RefreshCw,
+  athletic_performance:   Zap,
+  lifestyle:              Heart,
+  competition_prep:       Trophy,
+  executive_performance:  Briefcase,
 };
 
+const CATEGORY_ICON_CLS = "bg-[#C9A24D]/[0.08] text-[#C9A24D]/60 border-[#C9A24D]/[0.15]";
+
 function categoryStyle(category: string) {
-  return CATEGORY_STYLE[category] ?? { Icon: ClipboardList, cls: "bg-white/[0.04] text-white/30 border-white/[0.08]" };
+  return { Icon: CATEGORY_ICON[category] ?? ClipboardList, cls: CATEGORY_ICON_CLS };
 }
 
 export default function HQProgramsPage() {
@@ -295,7 +302,7 @@ export default function HQProgramsPage() {
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div className="md:col-span-2 lg:col-span-1">
-                <label className="block text-[10px] text-white/25 uppercase tracking-[0.35em] mb-1.5">Program Name *</label>
+                <label className="block text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em] mb-1.5">Program Name *</label>
                 <input
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -304,7 +311,7 @@ export default function HQProgramsPage() {
                 />
               </div>
               <div>
-                <label className="block text-[10px] text-white/25 uppercase tracking-[0.35em] mb-1.5">Category *</label>
+                <label className="block text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em] mb-1.5">Category *</label>
                 <select
                   value={form.category}
                   onChange={(e) => setForm((f) => ({ ...f, category: e.target.value as typeof form.category }))}
@@ -314,7 +321,7 @@ export default function HQProgramsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] text-white/25 uppercase tracking-[0.35em] mb-1.5">Experience Level *</label>
+                <label className="block text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em] mb-1.5">Experience Level *</label>
                 <select
                   value={form.experienceLevel}
                   onChange={(e) => setForm((f) => ({ ...f, experienceLevel: e.target.value as typeof form.experienceLevel }))}
@@ -324,7 +331,7 @@ export default function HQProgramsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] text-white/25 uppercase tracking-[0.35em] mb-1.5">Duration (weeks)</label>
+                <label className="block text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em] mb-1.5">Duration (weeks)</label>
                 <input
                   type="number"
                   value={form.defaultDurationWeeks}
@@ -334,7 +341,7 @@ export default function HQProgramsPage() {
                 />
               </div>
               <div>
-                <label className="block text-[10px] text-white/25 uppercase tracking-[0.35em] mb-1.5">Days / Week</label>
+                <label className="block text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em] mb-1.5">Days / Week</label>
                 <input
                   type="number"
                   value={form.recommendedDaysPerWeek}
@@ -392,7 +399,7 @@ export default function HQProgramsPage() {
           {filtersActive && (
             <button
               onClick={clearFilters}
-              className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] font-semibold text-white/30 hover:text-[#C9A24D]/80 transition-colors px-2"
+              className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.3em] font-semibold text-white/30 hover:text-[#C9A24D]/80 transition-colors px-2"
             >
               <X size={11} /> Clear
             </button>
@@ -447,8 +454,8 @@ export default function HQProgramsPage() {
       {/* ── Empty states ───────────────────────────────────────── */}
       {!loading && !error && programs.length === 0 && (
         <div className="border border-white/[0.06] border-dashed px-8 py-20 text-center">
-          <div className="w-12 h-12 mx-auto mb-5 flex items-center justify-center bg-[#C9A24D]/[0.06] border border-[#C9A24D]/15">
-            <ClipboardList size={20} className="text-[#C9A24D]/50" />
+          <div className="w-12 h-12 mx-auto mb-5 flex items-center justify-center bg-white/[0.04] border border-white/[0.08]">
+            <ClipboardList size={20} className="text-white/40" />
           </div>
           <p className="text-white/60 text-sm font-medium mb-2">No training programs yet</p>
           <p className="text-white/25 text-xs mb-6 max-w-sm mx-auto leading-relaxed">
@@ -464,15 +471,15 @@ export default function HQProgramsPage() {
       )}
 
       {!loading && !error && programs.length > 0 && filtered.length === 0 && (
-        <div className="border border-white/[0.05] border-dashed px-8 py-16 text-center">
-          <div className="w-11 h-11 mx-auto mb-4 flex items-center justify-center bg-white/[0.03] border border-white/[0.06]">
-            <Search size={17} className="text-white/20" />
+        <div className="border border-white/[0.06] border-dashed px-8 py-16 text-center">
+          <div className="w-12 h-12 mx-auto mb-4 flex items-center justify-center bg-white/[0.04] border border-white/[0.08]">
+            <Search size={17} className="text-white/40" />
           </div>
           <p className="text-white/40 text-sm mb-1">No programs match these filters</p>
           <p className="text-white/18 text-xs mb-5">Try adjusting your search or clearing filters.</p>
           <button
             onClick={clearFilters}
-            className="text-[10px] uppercase tracking-[0.25em] font-semibold text-[#C9A24D]/70 hover:text-[#C9A24D] transition-colors border border-[#C9A24D]/20 hover:border-[#C9A24D]/40 px-4 py-2"
+            className="text-[10px] uppercase tracking-[0.3em] font-semibold text-[#C9A24D]/70 hover:text-[#C9A24D] transition-colors border border-[#C9A24D]/20 hover:border-[#C9A24D]/40 px-4 py-2"
           >
             Clear Filters
           </button>
@@ -488,7 +495,7 @@ export default function HQProgramsPage() {
                 {["Program", "Duration", "Active Clients", "Status", "Updated", ""].map((h) => (
                   <th
                     key={h}
-                    className="text-left text-[9px] font-bold tracking-[0.3em] uppercase text-white/25 px-5 py-3.5 whitespace-nowrap"
+                    className="text-left text-[9px] font-semibold tracking-[0.25em] uppercase text-white/25 px-5 py-3.5 whitespace-nowrap"
                   >
                     {h}
                   </th>
@@ -545,9 +552,9 @@ export default function HQProgramsPage() {
                       </div>
                     </td>
                     <td className="px-5 py-4 align-top whitespace-nowrap">
-                      <span className={`inline-block px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase ${statusCls(p.status)}`}>
+                      <Badge tone="dark" variant={STATUS_BADGE_VARIANT[p.status] ?? "neutral"} size="sm">
                         {statusLabel(p.status)}
-                      </span>
+                      </Badge>
                     </td>
                     <td className="px-5 py-4 align-top whitespace-nowrap">
                       <span className="text-white/30 text-[11px]">{fmtRelative(p.updatedAt ?? p.createdAt)}</span>
@@ -581,7 +588,7 @@ export default function HQProgramsPage() {
             return (
               <div
                 key={p.id}
-                className={`group relative bg-[#0d0e0f] border px-5 py-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgba(0,0,0,0.35)] ${
+                className={`group relative bg-[#0d0e0f] border px-5 py-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover ${
                   p.status === "archived" ? "border-white/[0.04] opacity-60 hover:opacity-90" : "border-white/[0.07] hover:border-[#C9A24D]/25"
                 }`}
               >
@@ -621,9 +628,9 @@ export default function HQProgramsPage() {
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <span className={`inline-block px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase ${statusCls(p.status)}`}>
+                  <Badge tone="dark" variant={STATUS_BADGE_VARIANT[p.status] ?? "neutral"} size="sm">
                     {statusLabel(p.status)}
-                  </span>
+                  </Badge>
                   <span className="text-white/20 text-[10px]">{fmtRelative(p.updatedAt ?? p.createdAt)}</span>
                 </div>
               </div>
@@ -644,7 +651,7 @@ export default function HQProgramsPage() {
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={pageSafe <= 1}
                 aria-label="Previous page"
-                className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
+                className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/[0.14] disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
               >
                 <ChevronLeft size={13} />
               </button>
@@ -663,7 +670,7 @@ export default function HQProgramsPage() {
                       key={n}
                       onClick={() => setPage(n)}
                       className={`w-7 h-7 flex items-center justify-center text-xs font-medium transition-colors ${
-                        n === pageSafe ? "bg-[#C9A24D] text-black" : "text-white/40 border border-white/[0.08] hover:text-white hover:border-white/20"
+                        n === pageSafe ? "bg-[#C9A24D] text-black" : "text-white/40 border border-white/[0.08] hover:text-white hover:border-white/[0.14]"
                       }`}
                     >
                       {n}
@@ -674,7 +681,7 @@ export default function HQProgramsPage() {
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={pageSafe >= totalPages}
                 aria-label="Next page"
-                className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
+                className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/[0.14] disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
               >
                 <ChevronRight size={13} />
               </button>
@@ -712,7 +719,7 @@ function MetricCard({
         <div className="w-6 h-6 flex items-center justify-center bg-[#C9A24D]/[0.08] text-[#C9A24D]/70 border border-[#C9A24D]/15">
           {icon}
         </div>
-        <span className="text-[9px] font-bold tracking-[0.3em] uppercase text-white/30">{label}</span>
+        <span className="text-[9px] font-semibold tracking-[0.25em] uppercase text-white/30">{label}</span>
       </div>
       <div className="flex items-end justify-between gap-3">
         <span className="text-2xl font-bold text-white tabular-nums leading-none">{value}</span>
@@ -768,7 +775,7 @@ function RowMenu({
         <MoreVertical size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-40 bg-[#141618] border border-white/[0.08] shadow-[0_8px_24px_rgba(0,0,0,0.5)] z-10 animate-[ws-fade-up_0.15s_ease]">
+        <div className="absolute right-0 top-full mt-1 w-40 bg-[#141618] border border-white/[0.08] shadow-dropdown z-10 animate-[ws-fade-up_0.15s_ease]">
           <Link
             href={`/hq/programs/${program.id}`}
             className="flex items-center gap-2.5 px-3.5 py-2.5 text-[11px] text-white/70 hover:text-white hover:bg-white/[0.04] transition-colors"

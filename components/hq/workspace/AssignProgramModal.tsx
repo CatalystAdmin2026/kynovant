@@ -102,7 +102,7 @@ function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
               {step > s.n ? <Check size={12} strokeWidth={3} /> : s.n}
             </div>
             <p
-              className={`mt-1 text-[8px] font-semibold uppercase tracking-[0.2em] transition-colors duration-150 ${
+              className={`mt-1 text-[9px] font-semibold uppercase tracking-[0.25em] transition-colors duration-150 ${
                 step === s.n ? "text-[#C9A24D]" : step > s.n ? "text-[#C9A24D]/50" : "text-white/25"
               }`}
             >
@@ -447,18 +447,18 @@ export default function AssignProgramModal({
             {selected.defaultDurationWeeks && (
               <div className="shrink-0 text-right">
                 <p className="text-xl font-bold text-[#C9A24D]">{selected.defaultDurationWeeks}</p>
-                <p className="text-[9px] uppercase tracking-[0.2em] text-white/30">weeks</p>
+                <p className="text-[9px] uppercase tracking-[0.25em] text-white/30">weeks</p>
               </div>
             )}
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 border-t border-white/[0.05] pt-3">
             <div>
-              <p className="text-[9px] uppercase tracking-[0.2em] text-white/30">Starts</p>
+              <p className="text-[9px] uppercase tracking-[0.25em] text-white/30">Starts</p>
               <p className="mt-0.5 text-xs font-semibold text-white">{fmtDate(startDate)}</p>
             </div>
             {endDate && (
               <div>
-                <p className="text-[9px] uppercase tracking-[0.2em] text-white/30">Ends</p>
+                <p className="text-[9px] uppercase tracking-[0.25em] text-white/30">Ends</p>
                 <p className="mt-0.5 text-xs font-semibold text-white">{fmtDate(endDate)}</p>
               </div>
             )}
@@ -467,7 +467,7 @@ export default function AssignProgramModal({
 
         {/* Week 1 schedule */}
         <div>
-          <p className="mb-3 text-[9px] uppercase tracking-[0.3em] text-white/30">
+          <p className="mb-3 text-[9px] uppercase tracking-[0.25em] text-white/30">
             Week 1 Schedule
           </p>
           <div className="grid grid-cols-7 gap-1">
@@ -482,7 +482,7 @@ export default function AssignProgramModal({
                       : "border-white/[0.04] bg-[#0a0b0c]"
                   }`}
                 >
-                  <p className="text-[8px] uppercase tracking-[0.15em] text-white/30">
+                  <p className="text-[9px] uppercase tracking-[0.25em] text-white/30">
                     {DAY_LETTER[dow]}
                   </p>
                   <div className="mt-1 flex flex-1 items-center justify-center">

@@ -25,7 +25,7 @@ export default function MuscleSetsTable({ analysis }: Props) {
       <button
         onClick={() => setSort(field)}
         className={`text-left text-xs font-medium uppercase tracking-wider transition-colors ${
-          sort === field ? "text-gray-900" : "text-gray-400 hover:text-gray-600"
+          sort === field ? "text-white/70" : "text-white/40 hover:text-white/70"
         }`}
       >
         {label}
@@ -36,17 +36,17 @@ export default function MuscleSetsTable({ analysis }: Props) {
 
   if (!hasData) {
     return (
-      <div className="py-6 text-center text-xs text-gray-400">
+      <div className="bg-[var(--surface)] border border-white/[0.07] rounded-lg py-6 text-center text-xs text-white/40">
         No muscle data available — add exercise_muscles rows to your exercise library to unlock volume analysis.
       </div>
     );
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="bg-[var(--surface)] border border-white/[0.07] rounded-lg p-4 overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-gray-100">
+          <tr className="border-b border-white/[0.08]">
             <th className="pb-2 pr-6 text-left">
               <SortButton label="Muscle Group" field="muscle" />
             </th>
@@ -54,7 +54,7 @@ export default function MuscleSetsTable({ analysis }: Props) {
               <SortButton label="Direct Sets" field="direct" />
             </th>
             <th className="pb-2 pr-6 text-right">
-              <span className="text-xs font-medium uppercase tracking-wider text-gray-400">
+              <span className="text-xs font-medium uppercase tracking-wider text-white/40">
                 Indirect Sets
               </span>
             </th>
@@ -65,17 +65,17 @@ export default function MuscleSetsTable({ analysis }: Props) {
         </thead>
         <tbody>
           {sorted.map((row) => (
-            <tr key={row.muscleGroup} className="border-b border-gray-50 last:border-0">
-              <td className="py-2 pr-6 text-gray-700 capitalize">
+            <tr key={row.muscleGroup} className="border-b border-white/[0.06] last:border-0">
+              <td className="py-2 pr-6 text-white/70 capitalize">
                 {row.muscleGroup.replace(/_/g, " ")}
               </td>
-              <td className="py-2 pr-6 text-right font-mono text-gray-900">
+              <td className="py-2 pr-6 text-right font-mono text-white/70">
                 {row.directSets}
               </td>
-              <td className="py-2 pr-6 text-right font-mono text-gray-400">
+              <td className="py-2 pr-6 text-right font-mono text-white/40">
                 {row.indirectSets}
               </td>
-              <td className="py-2 text-right font-mono text-gray-600">
+              <td className="py-2 text-right font-mono text-white/40">
                 {row.totalSets}
               </td>
             </tr>
@@ -84,7 +84,7 @@ export default function MuscleSetsTable({ analysis }: Props) {
       </table>
 
       {analysis.unknownVolume.prescriptionsWithNoMuscleData.length > 0 && (
-        <p className="mt-2 text-xs text-gray-400">
+        <p className="mt-2 text-xs text-white/40">
           ~ Volume totals are approximate.{" "}
           {analysis.unknownVolume.prescriptionsWithNoMuscleData.length} exercise
           {analysis.unknownVolume.prescriptionsWithNoMuscleData.length !== 1 ? "s" : ""} lack muscle data.

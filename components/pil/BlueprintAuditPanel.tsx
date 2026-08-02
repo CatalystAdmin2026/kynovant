@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from "react";
 import type { BlueprintAuditResult, BlueprintDimensionStatus, CoachingRecommendation, RecommendationCategory, SubstitutionCandidate } from "@/lib/pil/types";
+import { SEVERITY_DOT, SEVERITY_TEXT, type Severity } from "@/lib/ui/status";
+import { StatusChip } from "@/components/ui";
 import PilFindingCard from "./PilFindingCard";
 import MuscleSetsTable from "./MuscleSetsTable";
 import MovementPatternChart from "./MovementPatternChart";
@@ -45,52 +47,69 @@ const STATUS_LABEL: Record<string, string> = {
   unknown: "—",
 };
 
-const CHIP_STYLE: Record<string, string> = {
-  ok: "bg-gray-100 text-gray-500",
-  moderate: "bg-gray-100 text-gray-500",
-  balanced: "bg-gray-100 text-gray-500",
-  elevated: "bg-amber-100 text-amber-700",
-  incomplete: "bg-amber-100 text-amber-600",
-  long: "bg-amber-100 text-amber-700",
-  high: "bg-orange-100 text-orange-700",
-  imbalanced: "bg-orange-100 text-orange-700",
-  detected: "bg-amber-100 text-amber-700",
-  very_long: "bg-orange-100 text-orange-700",
-  has_errors: "bg-red-100 text-red-700 font-semibold",
-  extreme: "bg-red-100 text-red-700 font-semibold",
-  unknown: "bg-gray-50 text-gray-300 border border-gray-200",
-};
+// Maps this panel's own dimension-status vocabulary onto the shared
+// canonical Severity scale (lib/ui/status.ts) — relative severity
+// order preserved from the original hardcoded chip colors.
+function dimensionSeverity(value: string): Severity {
+  switch (value) {
+    case "ok":
+    case "moderate":
+    case "balanced":
+      return "ok";
+    case "elevated":
+    case "incomplete":
+    case "long":
+    case "detected":
+      return "caution";
+    case "high":
+    case "imbalanced":
+    case "very_long":
+      return "high";
+    case "has_errors":
+    case "extreme":
+      return "critical";
+    default:
+      return "unknown";
+  }
+}
 
 function DimensionChip({ label, value }: { label: string; value: string }) {
-  const chipStyle = CHIP_STYLE[value] ?? "bg-gray-100 text-gray-500";
+  const sev = dimensionSeverity(value);
   const displayLabel = STATUS_LABEL[value] ?? value;
   return (
-    <div className="flex flex-col items-center gap-0.5 min-w-[56px]">
-      <span className="text-[10px] text-gray-400 uppercase tracking-wider">{label}</span>
-      <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${chipStyle}`}>
-        {displayLabel}
-      </span>
+    <div className="flex flex-col items-center gap-1 min-w-[56px]">
+      <span className="text-[9px] font-semibold text-white/40 uppercase tracking-[0.25em]">{label}</span>
+      <StatusChip tone="dark" status={sev} label={displayLabel} size="sm" />
     </div>
   );
 }
 
 // ─── Highest-priority recommendation callout ──────────────────────────────────
 
-const TOP_REC_STYLE: Record<string, string> = {
-  critical: "border-red-200 bg-red-50 text-red-800",
-  high: "border-orange-200 bg-orange-50 text-orange-800",
-  medium: "border-amber-200 bg-amber-50 text-amber-800",
-  low: "border-gray-200 bg-gray-50 text-gray-600",
-};
+// Maps this panel's own recommendation-priority vocabulary onto the
+// shared canonical Severity scale.
+function priorityToSeverity(priority: string): Severity {
+  switch (priority) {
+    case "critical":
+      return "critical";
+    case "high":
+      return "high";
+    case "medium":
+      return "caution";
+    default:
+      return "unknown"; // low
+  }
+}
 
 function HighestPriorityCallout({ recommendation }: { recommendation: CoachingRecommendation }) {
-  const style = TOP_REC_STYLE[recommendation.priority] ?? TOP_REC_STYLE.low;
+  const sev = priorityToSeverity(recommendation.priority);
+  const borderAccent = SEVERITY_DOT[sev].replace("bg-", "border-l-");
   return (
-    <div className={`border rounded-md px-3 py-2 ${style}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider opacity-60 mb-0.5">
+    <div className={`border border-white/[0.08] border-l-2 ${borderAccent} bg-white/[0.04] rounded-md px-3 py-2`}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/40 mb-0.5">
         Highest Priority
       </p>
-      <p className="text-xs font-medium">{recommendation.headline}</p>
+      <p className={`text-xs font-medium ${SEVERITY_TEXT[sev]}`}>{recommendation.headline}</p>
     </div>
   );
 }
@@ -158,16 +177,16 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
 
   if (state === "idle") {
     return (
-      <div className="border border-gray-200 rounded-lg p-4 flex items-center justify-between">
+      <div className="border border-white/[0.08] bg-[var(--surface)] rounded-lg p-4 flex items-center justify-between">
         <div>
-          <p className="text-sm font-medium text-gray-700">Program Intelligence</p>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <p className="text-sm font-medium text-white/70">Program Intelligence</p>
+          <p className="text-xs text-white/40 mt-0.5">
             Volume, fatigue, movement, joint stress, and session duration analysis
           </p>
         </div>
         <button
           onClick={runAnalysis}
-          className="text-xs px-3 py-1.5 bg-gray-900 text-white rounded hover:bg-gray-700 transition-colors"
+          className="text-xs px-3 py-1.5 bg-gold text-black rounded hover:bg-gold-hover transition-colors"
         >
           Run Analysis
         </button>
@@ -179,18 +198,18 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
 
   if (state === "loading") {
     return (
-      <div className="border border-gray-200 rounded-lg p-4">
+      <div className="border border-white/[0.08] bg-[var(--surface)] rounded-lg p-4">
         <div className="flex items-center gap-3 mb-3">
-          <div className="w-3.5 h-3.5 border-2 border-gray-200 border-t-gray-600 rounded-full animate-spin" />
-          <p className="text-xs text-gray-500">Running Kynovant Insights…</p>
+          <div className="w-3.5 h-3.5 border-2 border-white/15 border-t-white/50 rounded-full animate-spin" />
+          <p className="text-xs text-white/40">Running Kynovant Insights…</p>
         </div>
         <div className="space-y-2 animate-pulse">
           <div className="flex gap-2">
             {[1, 2, 3, 4, 5, 6, 7].map((i) => (
-              <div key={i} className="h-6 w-12 bg-gray-100 rounded-full" />
+              <div key={i} className="h-6 w-12 bg-white/[0.06] rounded-full" />
             ))}
           </div>
-          <div className="h-9 bg-gray-50 rounded-md border border-gray-100 mt-3" />
+          <div className="h-9 bg-white/[0.04] rounded-md border border-white/[0.06] mt-3" />
         </div>
       </div>
     );
@@ -200,10 +219,10 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
 
   if (state === "error") {
     return (
-      <div className="border border-red-200 rounded-lg p-4">
+      <div className="border border-red-500/20 bg-[var(--surface)] rounded-lg p-4">
         <div className="flex items-center justify-between">
-          <p className="text-xs text-red-500">{errorMsg}</p>
-          <button onClick={runAnalysis} className="text-xs text-gray-500 hover:text-gray-700">
+          <p className={`text-xs ${SEVERITY_TEXT.critical}`}>{errorMsg}</p>
+          <button onClick={runAnalysis} className="text-xs text-white/40 hover:text-white/70">
             Retry
           </button>
         </div>
@@ -251,14 +270,14 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
   );
 
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
+    <div className="border border-white/[0.08] rounded-lg overflow-hidden">
 
       {/* ── Five-Second Header ─────────────────────────────────────────────── */}
-      <div className="border-b border-gray-100 px-4 py-3 bg-gray-50">
+      <div className="border-b border-white/[0.08] px-4 py-3 bg-[var(--surface)]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-2">
-              <p className="text-sm font-medium text-gray-700">Kynovant Insights</p>
+              <p className="text-sm font-medium text-white/70">Kynovant Insights</p>
               <DurationBadge
                 estimatedMinutes={durationEstimate.estimatedMinutes}
                 confidence={durationEstimate.confidence}
@@ -275,7 +294,7 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
 
           <button
             onClick={runAnalysis}
-            className="text-xs text-gray-400 hover:text-gray-600 transition-colors shrink-0 mt-0.5"
+            className="text-xs text-white/40 hover:text-white/70 transition-colors shrink-0 mt-0.5"
           >
             Re-analyze
           </button>
@@ -290,8 +309,8 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
       </div>
 
       {/* ── Coaching Recommendations ──────────────────────────────────────── */}
-      <div className="border-b border-gray-100 px-4 py-4">
-        <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-3">
+      <div className="border-b border-white/[0.08] bg-[var(--surface)] px-4 py-4">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/40 mb-3">
           Coaching Recommendations
         </p>
         <CoachingRecommendationsPanel
@@ -302,11 +321,11 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
       </div>
 
       {/* ── Detail sections ────────────────────────────────────────────────── */}
-      <div className="p-4 space-y-6">
+      <div className="bg-[var(--surface)] p-4 space-y-6">
 
         {/* Volume by muscle */}
         <div id="pil-section-volume">
-          <p className="text-xs font-medium uppercase tracking-wider text-gray-400 mb-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/40 mb-3">
             Volume by Muscle
           </p>
           <MuscleSetsTable analysis={volumeAnalysis} />
@@ -315,7 +334,7 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
         {/* Movement patterns */}
         {movementAnalysis.byPattern.length >= 2 && (
           <div id="pil-section-movement">
-            <p className="text-xs font-medium uppercase tracking-wider text-gray-400 mb-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/40 mb-3">
               Movement Patterns
             </p>
             <MovementPatternChart analysis={movementAnalysis} />
@@ -325,7 +344,7 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
         {/* Joint stress */}
         {jointStressAnalysis.byJoint.length > 0 && (
           <div id="pil-section-joint-stress">
-            <p className="text-xs font-medium uppercase tracking-wider text-gray-400 mb-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/40 mb-3">
               Joint Stress (cumulative)
             </p>
             <JointStressPanel analysis={jointStressAnalysis} />
@@ -335,13 +354,13 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
         {/* Session fatigue */}
         {fatigueAnalysis.coveragePct > 0 && (
           <div id="pil-section-fatigue">
-            <p className="text-xs font-medium uppercase tracking-wider text-gray-400 mb-1">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/40 mb-1">
               Session Fatigue
             </p>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-white/40">
               Estimated score:{" "}
-              <span className="font-mono text-gray-900">{fatigueAnalysis.totalScore}</span>
-              <span className="text-gray-400 ml-1">({fatigueAnalysis.coveragePct}% coverage)</span>
+              <span className="font-mono text-white/70">{fatigueAnalysis.totalScore}</span>
+              <span className="text-white/25 ml-1">({fatigueAnalysis.coveragePct}% coverage)</span>
             </p>
           </div>
         )}
@@ -349,7 +368,7 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
         {/* Redundancy */}
         {redundancyAnalysis.redundantGroups.length > 0 && (
           <div id="pil-section-redundancy">
-            <p className="text-xs font-medium uppercase tracking-wider text-gray-400 mb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/40 mb-2">
               Exercise Overlap
             </p>
             <RedundancyAlert analysis={redundancyAnalysis} />
@@ -359,13 +378,13 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
         {/* All findings (grouped by category) */}
         {realFindings.length > 0 && (
           <div id="pil-section-findings">
-            <p className="text-xs font-medium uppercase tracking-wider text-gray-400 mb-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/40 mb-3">
               All Findings
             </p>
             <div className="space-y-3">
               {Object.entries(findingsByCategory).map(([category, findings]) => (
                 <div key={category}>
-                  <p className="text-xs text-gray-400 capitalize mb-1.5">
+                  <p className="text-xs text-white/40 capitalize mb-1.5">
                     {category.replace(/_/g, " ")}
                   </p>
                   <div className="space-y-1.5">
@@ -380,7 +399,7 @@ export default function BlueprintAuditPanel({ templateId }: Props) {
         )}
 
         {realFindings.length === 0 && (
-          <p className="text-xs text-gray-400 text-center py-2">
+          <p className="text-xs text-white/40 text-center py-2">
             No findings — this Blueprint passes all checks.
           </p>
         )}

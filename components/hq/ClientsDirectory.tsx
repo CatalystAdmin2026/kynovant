@@ -24,6 +24,7 @@ import {
   TableCell,
   EmptyState,
 } from "@/components/ui";
+import { SEVERITY_DOT, SEVERITY_TEXT, type Severity } from "@/lib/ui/status";
 import type { CoachClientSummary, AttentionLevel } from "@/lib/db/coach-dashboard-service";
 
 // ─────────────────────────────────────────────────────────────
@@ -37,12 +38,49 @@ const ATTENTION_ORDER: Record<AttentionLevel, number> = {
   healthy: 3,
 };
 
-const ATTENTION_META: Record<AttentionLevel, { dot: string; pill: string; label: string }> = {
-  critical: { dot: "bg-red-500", pill: "bg-red-500/10 text-red-400 border-red-500/20", label: "Critical" },
-  high: { dot: "bg-amber-400", pill: "bg-amber-500/10 text-amber-400 border-amber-500/20", label: "High" },
-  medium: { dot: "bg-yellow-400", pill: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20", label: "Medium" },
-  healthy: { dot: "bg-emerald-400", pill: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20", label: "Healthy" },
+// Maps this file's attention vocabulary onto the shared Severity
+// scale (lib/ui/status.ts) so a row's avatar fill, name badge, and
+// filter-pill dot all agree with each other and with every other
+// severity color in HQ. "Medium" reads as caution/amber; "healthy"
+// reads as the muted "ok" tone rather than a competing green.
+const ATTENTION_SEVERITY: Record<AttentionLevel, Severity> = {
+  critical: "critical",
+  high: "high",
+  medium: "caution",
+  healthy: "ok",
 };
+
+// Translucent bg/border/text pill built from the same hues as
+// SEVERITY_DOT/SEVERITY_TEXT (bg/10 + border/20, matching Badge's
+// dark-tone idiom) — used for the avatar fill and name badge.
+const SEVERITY_PILL: Record<Severity, string> = {
+  ok: "bg-white/[0.06] text-white/45 border-white/[0.1]",
+  caution: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+  high: "bg-orange-500/10 text-orange-400 border-orange-500/20",
+  critical: "bg-red-500/10 text-red-400 border-red-500/20",
+  unknown: "bg-white/[0.03] text-white/25 border-white/[0.08]",
+};
+
+const ATTENTION_LABEL: Record<AttentionLevel, string> = {
+  critical: "Critical",
+  high: "High",
+  medium: "Medium",
+  healthy: "Healthy",
+};
+
+const ATTENTION_META: Record<AttentionLevel, { dot: string; pill: string; label: string }> = (
+  Object.keys(ATTENTION_SEVERITY) as AttentionLevel[]
+).reduce((acc, level) => {
+  const severity = ATTENTION_SEVERITY[level];
+  acc[level] = { dot: SEVERITY_DOT[severity], pill: SEVERITY_PILL[severity], label: ATTENTION_LABEL[level] };
+  return acc;
+}, {} as Record<AttentionLevel, { dot: string; pill: string; label: string }>);
+
+function complianceSeverity(pct: number): Severity {
+  if (pct >= 75) return "ok";
+  if (pct >= 50) return "caution";
+  return "critical";
+}
 
 function fmtRelative(d: Date | null): string {
   if (!d) return "Never";
@@ -83,9 +121,9 @@ function MetricTile({
 }) {
   const toneCls: Record<string, string> = {
     neutral: "bg-gold/10 text-gold/80 border-gold/20",
-    critical: "bg-red-500/10 text-red-400 border-red-500/20",
-    warn: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    healthy: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    critical: SEVERITY_PILL.critical,
+    warn: SEVERITY_PILL.caution,
+    healthy: SEVERITY_PILL.ok,
   };
   return (
     <Card tone="dark" padding="sm" className="transition-colors duration-200 hover:border-white/[0.12]">
@@ -399,7 +437,7 @@ export default function ClientsDirectory({ clients }: { clients: CoachClientSumm
                         )}
                       </div>
                     ) : (
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-red-400/80">
+                      <span className={`text-[10px] font-semibold uppercase tracking-[0.15em] ${SEVERITY_TEXT.critical}`}>
                         No program
                       </span>
                     )}
@@ -408,13 +446,7 @@ export default function ClientsDirectory({ clients }: { clients: CoachClientSumm
                   <TableCell className="hidden text-right sm:table-cell">
                     {client.compliancePct !== null ? (
                       <span
-                        className={`text-sm font-bold tabular-nums ${
-                          client.compliancePct >= 75
-                            ? "text-emerald-400"
-                            : client.compliancePct >= 50
-                            ? "text-amber-400"
-                            : "text-red-400"
-                        }`}
+                        className={`text-sm font-bold tabular-nums ${SEVERITY_TEXT[complianceSeverity(client.compliancePct)]}`}
                       >
                         {client.compliancePct}%
                       </span>

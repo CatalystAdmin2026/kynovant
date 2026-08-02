@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Badge } from "@/components/ui";
 import type { BadgeVariant } from "@/components/ui";
+import { type Severity } from "@/lib/ui/status";
 import type { InjurySummary } from "@/lib/db/coach-client-workspace-service";
 
 interface Props {
@@ -20,10 +21,28 @@ const SEVERITY_LABEL: Record<number, string> = {
   9: "Severe", 10: "Severe",
 };
 
+// Buckets the 1-10 injury severity scale into the shared Severity
+// vocabulary (matching the Mild/Moderate/Significant/Severe label
+// groups above), then maps that onto whichever Badge variant reads
+// closest — Badge has no dedicated "high" (orange) tone, so caution
+// and high both render as "warning".
+function injurySeverity(severity: number): Severity {
+  if (severity >= 9) return "critical";
+  if (severity >= 7) return "high";
+  if (severity >= 4) return "caution";
+  return "ok";
+}
+
+const SEVERITY_BADGE_VARIANT: Record<Severity, BadgeVariant> = {
+  ok: "neutral",
+  caution: "warning",
+  high: "warning",
+  critical: "danger",
+  unknown: "neutral",
+};
+
 function severityBadgeVariant(severity: number): BadgeVariant {
-  if (severity >= 9) return "danger";
-  if (severity >= 7) return "warning";
-  return "neutral";
+  return SEVERITY_BADGE_VARIANT[injurySeverity(severity)];
 }
 
 export default function SensitiveHealthPanel({
@@ -90,7 +109,7 @@ export default function SensitiveHealthPanel({
                   <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40">
                     Physician Restrictions
                   </p>
-                  <p className="text-sm leading-relaxed text-red-300">{physicianRestrictions}</p>
+                  <p className="text-sm leading-relaxed text-red-400/80">{physicianRestrictions}</p>
                 </div>
               )}
 

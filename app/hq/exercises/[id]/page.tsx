@@ -275,7 +275,7 @@ function SectionHeader({
           : undefined
       }
     >
-      <span className="text-[10px] text-white/40 uppercase tracking-[0.35em] font-semibold">{label}</span>
+      <span className="text-[10px] text-white/40 uppercase tracking-[0.3em] font-semibold">{label}</span>
       {count !== undefined && <span className="text-[11px] text-white/25">{count}</span>}
       <div className="flex-1 h-px bg-white/[0.06]" />
       {action && <div onClick={(e) => e.stopPropagation()}>{action}</div>}
@@ -348,7 +348,7 @@ function MuscleManager({ exerciseId, muscles, isSystem, onChange }: {
       {(["primary", "secondary", "stabilizer"] as const).map((role) => (
         byRole[role].length > 0 && (
           <div key={role}>
-            <p className="text-[9px] text-white/20 uppercase tracking-[0.45em] mb-2">{roleLabel[role]}</p>
+            <p className="text-[9px] text-white/20 uppercase tracking-[0.25em] mb-2">{roleLabel[role]}</p>
             <div className="space-y-1.5">
               {byRole[role].map((m) => (
                 <div key={m.id} className="flex items-center gap-3">
@@ -474,7 +474,7 @@ function CueManager({ exerciseId, cues, isSystem, onChange }: {
     <div className="space-y-4">
       {CUE_TYPES.map((type) => byType[type].length > 0 && (
         <div key={type}>
-          <p className="text-[9px] text-white/20 uppercase tracking-[0.45em] mb-2">{fmtLabel(type)}</p>
+          <p className="text-[9px] text-white/20 uppercase tracking-[0.25em] mb-2">{fmtLabel(type)}</p>
           <div className="space-y-1.5">
             {byType[type].sort((a, b) => a.orderIndex - b.orderIndex).map((cue, idx) => (
               <div key={cue.id} className="flex items-start gap-3">
@@ -1026,7 +1026,7 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
                   ))}
                 </div>
                 <div>
-                  <p className="text-[9px] text-white/25 uppercase tracking-[0.4em] mb-3">Joint Stress (0–10)</p>
+                  <p className="text-[9px] text-white/25 uppercase tracking-[0.25em] mb-3">Joint Stress (0–10)</p>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {[
                       ["Shoulder", "jointStressShoulder"],
@@ -1149,7 +1149,7 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
           </p>
           <div className="space-y-4">
             <div>
-              <p className="text-[9px] text-white/25 uppercase tracking-[0.4em] mb-3">Default Prescription</p>
+              <p className="text-[9px] text-white/25 uppercase tracking-[0.25em] mb-3">Default Prescription</p>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 {[["Sets", "sets"], ["Reps Min", "repsMin"], ["Reps Max", "repsMax"], ["RPE", "targetRpe"], ["Rest (s)", "restSeconds"]].map(([label, field]) => (
                   <FieldGroup key={field} label={label}>

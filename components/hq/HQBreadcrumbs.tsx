@@ -13,19 +13,19 @@ export default function HQBreadcrumbs({ crumbs }: { crumbs: Crumb[] }) {
         return (
           <span key={i} className="flex items-center gap-1.5">
             {i > 0 && (
-              <span className="text-gray-700 text-[10px]">/</span>
+              <span className="text-white/15 text-[10px]">/</span>
             )}
             {crumb.href && !isLast ? (
               <Link
                 href={crumb.href}
-                className="text-[10px] text-gray-500 uppercase tracking-[0.25em] font-medium hover:text-gray-300 transition-colors"
+                className="text-[10px] text-white/35 uppercase tracking-[0.25em] font-medium hover:text-white/60 transition-colors"
               >
                 {crumb.label}
               </Link>
             ) : (
               <span
                 className={`text-[10px] uppercase tracking-[0.25em] font-medium ${
-                  isLast ? "text-white/60" : "text-gray-500"
+                  isLast ? "text-white/60" : "text-white/35"
                 }`}
               >
                 {crumb.label}

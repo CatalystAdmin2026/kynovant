@@ -6,8 +6,11 @@
 // ─────────────────────────────────────────────────────────────
 
 import Link from "next/link";
+import { Check, Activity, CalendarDays } from "lucide-react";
 import { getCoachMissionControl, type AttentionLevel } from "@/lib/db/coach-dashboard-service";
 import HQPageHeader from "@/components/hq/HQPageHeader";
+import { StatusChip } from "@/components/ui";
+import { SEVERITY_DOT, SEVERITY_TEXT, type Severity } from "@/lib/ui/status";
 
 export const dynamic = "force-dynamic";
 
@@ -15,22 +18,15 @@ export const dynamic = "force-dynamic";
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 
-function attentionBadge(level: AttentionLevel) {
-  const map: Record<AttentionLevel, string> = {
-    critical: "bg-red-500/12 text-red-400 border border-red-500/25",
-    high:     "bg-amber-500/12 text-amber-400 border border-amber-500/25",
-    medium:   "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20",
-    healthy:  "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
-  };
-  return map[level];
-}
-
-function attentionDot(level: AttentionLevel) {
-  const map: Record<AttentionLevel, string> = {
-    critical: "bg-red-500",
-    high:     "bg-amber-400",
-    medium:   "bg-yellow-400",
-    healthy:  "bg-emerald-400",
+// Maps this page's attention vocabulary into the shared severity
+// scale so a client row's dot, reason chip, and compliance % never
+// disagree with each other.
+function attentionSeverity(level: AttentionLevel): Severity {
+  const map: Record<AttentionLevel, Severity> = {
+    critical: "critical",
+    high:     "high",
+    medium:   "caution",
+    healthy:  "ok",
   };
   return map[level];
 }
@@ -74,7 +70,7 @@ export default async function MissionControlPage() {
         action={
           <Link
             href="/hq/clients"
-            className="text-[10px] text-gray-500 uppercase tracking-[0.2em] hover:text-white/70 transition-colors border border-white/[0.07] px-3 py-1.5"
+            className="text-[10px] text-white/50 uppercase tracking-[0.3em] font-semibold hover:text-white/70 transition-colors border border-white/[0.07] px-3 py-1.5"
           >
             All Clients →
           </Link>
@@ -120,21 +116,21 @@ export default async function MissionControlPage() {
             {
               label: "Needs Attention",
               value: data.prioritizedClients.length,
-              color: data.prioritizedClients.length > 0 ? "text-amber-400" : "text-white",
+              color: data.prioritizedClients.length > 0 ? SEVERITY_TEXT.caution : "text-white",
               note: null,
               href: null,
             },
             {
               label: "No Program Assigned",
               value: data.noActiveProgramCount,
-              color: data.noActiveProgramCount > 0 ? "text-red-400" : "text-white",
+              color: data.noActiveProgramCount > 0 ? SEVERITY_TEXT.critical : "text-white",
               note: null,
               href: null,
             },
             {
               label: "Check-Ins Waiting",
               value: data.checkIns.waitingCount,
-              color: data.checkIns.waitingCount > 0 ? "text-blue-400" : "text-white",
+              color: "text-white",
               note: data.checkIns.inReviewCount > 0 ? `${data.checkIns.inReviewCount} in review` : null,
               href: data.checkIns.waitingCount > 0 ? "/hq/check-ins" : null,
             },
@@ -152,10 +148,10 @@ export default async function MissionControlPage() {
                 <p className={`text-3xl font-bold tabular-nums leading-none mb-2 ${color}`}>
                   {value}
                 </p>
-                <p className="text-[10px] text-gray-500 uppercase tracking-[0.3em] leading-relaxed">
+                <p className="text-[10px] text-white/50 uppercase tracking-[0.3em] font-semibold leading-relaxed">
                   {label}
                 </p>
-                {note && <p className="text-[10px] text-gray-600 mt-1">{note}</p>}
+                {note && <p className="text-[10px] text-white/40 mt-1">{note}</p>}
               </>
             );
             return href ? (
@@ -182,20 +178,25 @@ export default async function MissionControlPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* B: Clients requiring attention */}
         <section className="lg:col-span-2" aria-label="Clients requiring attention">
-          <h2 className="text-[10px] text-gray-400 uppercase tracking-[0.4em] font-semibold mb-3">
+          <h2 className="text-[10px] text-white/60 uppercase tracking-[0.3em] font-semibold mb-3">
             Clients Requiring Attention
           </h2>
           {data.prioritizedClients.length === 0 ? (
             <div className="border border-dashed border-white/[0.06] px-5 py-8 text-center">
-              <div className="w-6 h-6 rounded-full bg-emerald-500/15 flex items-center justify-center mx-auto mb-3">
-                <span className="text-emerald-400 text-[10px]">✓</span>
+              <div className="w-10 h-10 flex items-center justify-center bg-white/[0.04] border border-white/[0.08] mx-auto mb-3">
+                <Check size={16} className="text-white/40" />
               </div>
-              <p className="text-gray-400 text-sm font-medium">All clients on track</p>
-              <p className="text-gray-600 text-xs mt-1">No attention triggers at this time.</p>
+              <p className="text-white/60 text-sm font-medium">All clients on track</p>
+              <p className="text-white/40 text-xs mt-1">No attention triggers at this time.</p>
             </div>
           ) : (
             <div className="space-y-1.5">
-              {data.prioritizedClients.map((client) => (
+              {data.prioritizedClients.map((client) => {
+                // Same Severity value drives the dot, the reason chip, and
+                // the compliance % below — a row can never show two colors
+                // that disagree about how urgent it is.
+                const severity = attentionSeverity(client.attentionLevel);
+                return (
                 <Link
                   key={client.userId}
                   href={`/hq/clients/${client.userId}`}
@@ -203,7 +204,7 @@ export default async function MissionControlPage() {
                 >
                   {/* Urgency dot */}
                   <div
-                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${attentionDot(client.attentionLevel)}`}
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${SEVERITY_DOT[severity]}`}
                     aria-hidden
                   />
 
@@ -214,22 +215,18 @@ export default async function MissionControlPage() {
                         {client.preferredName ?? client.fullName}
                       </span>
                       {client.activeProgramName ? (
-                        <span className="text-gray-500 text-[10px] truncate">
+                        <span className="text-white/50 text-[10px] truncate">
                           {client.activeProgramName}
                           {client.currentWeek !== null && client.totalWeeks !== null && (
                             <> · Wk {client.currentWeek}/{client.totalWeeks}</>
                           )}
                         </span>
                       ) : (
-                        <span className="text-gray-600 text-[10px]">No program</span>
+                        <span className="text-white/40 text-[10px]">No program</span>
                       )}
                     </div>
-                    <p className="text-[10px] mt-0.5" aria-label="Reason for attention">
-                      <span
-                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 ${attentionBadge(client.attentionLevel)}`}
-                      >
-                        {client.attentionReason}
-                      </span>
+                    <p className="mt-0.5" aria-label="Reason for attention">
+                      <StatusChip tone="dark" status={severity} label={client.attentionReason} size="sm" />
                     </p>
                   </div>
 
@@ -237,25 +234,17 @@ export default async function MissionControlPage() {
                   <div className="text-right shrink-0 hidden sm:block">
                     {client.compliancePct !== null ? (
                       <>
-                        <p
-                          className={`text-sm font-bold tabular-nums ${
-                            client.compliancePct >= 75
-                              ? "text-emerald-400"
-                              : client.compliancePct >= 50
-                              ? "text-amber-400"
-                              : "text-red-400"
-                          }`}
-                        >
+                        <p className={`text-sm font-bold tabular-nums ${SEVERITY_TEXT[severity]}`}>
                           {client.compliancePct}%
                         </p>
-                        <p className="text-[9px] text-gray-600 uppercase tracking-[0.2em]">
+                        <p className="text-[10px] text-white/40 uppercase tracking-[0.3em] font-semibold">
                           compliance
                         </p>
                       </>
                     ) : (
                       <>
-                        <p className="text-sm font-bold text-gray-600">—</p>
-                        <p className="text-[9px] text-gray-700 uppercase tracking-[0.2em]">
+                        <p className="text-sm font-bold text-white/40">—</p>
+                        <p className="text-[10px] text-white/25 uppercase tracking-[0.3em] font-semibold">
                           compliance
                         </p>
                       </>
@@ -264,29 +253,33 @@ export default async function MissionControlPage() {
 
                   {/* Last workout */}
                   <div className="text-right shrink-0 hidden md:block">
-                    <p className="text-xs text-gray-400">
+                    <p className="text-xs text-white/60">
                       {fmtRelative(client.lastCompletedAt)}
                     </p>
-                    <p className="text-[9px] text-gray-600 uppercase tracking-[0.2em]">
+                    <p className="text-[10px] text-white/40 uppercase tracking-[0.3em] font-semibold">
                       last workout
                     </p>
                   </div>
 
-                  <span className="text-gray-600 text-xs shrink-0">→</span>
+                  <span className="text-white/40 text-xs shrink-0">→</span>
                 </Link>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
 
         {/* C: Recent activity */}
         <section aria-label="Recent activity">
-          <h2 className="text-[10px] text-gray-400 uppercase tracking-[0.4em] font-semibold mb-3">
+          <h2 className="text-[10px] text-white/60 uppercase tracking-[0.3em] font-semibold mb-3">
             Recent Activity
           </h2>
           {data.recentActivity.length === 0 ? (
             <div className="border border-dashed border-white/[0.06] px-4 py-6 text-center">
-              <p className="text-gray-600 text-xs">No recent activity.</p>
+              <div className="w-10 h-10 flex items-center justify-center bg-white/[0.04] border border-white/[0.08] mx-auto mb-3">
+                <Activity size={16} className="text-white/40" />
+              </div>
+              <p className="text-white/40 text-xs">No recent activity.</p>
             </div>
           ) : (
             <div className="space-y-1.5">
@@ -304,19 +297,19 @@ export default async function MissionControlPage() {
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-white text-xs font-medium truncate">{activity.clientName}</p>
-                    <p className="text-gray-500 text-[10px] truncate">{activity.workoutName}</p>
+                    <p className="text-white/50 text-[10px] truncate">{activity.workoutName}</p>
                     {activity.status === "completed" && (
                       <p className="text-[#C9A24D] text-[10px] font-semibold">
                         {activity.completionPercent}%
                       </p>
                     )}
                     {activity.status === "skipped" && (
-                      <p className="text-gray-600 text-[10px] uppercase tracking-[0.1em]">
+                      <p className="text-white/40 text-[10px] uppercase tracking-[0.3em] font-semibold">
                         Skipped
                       </p>
                     )}
                   </div>
-                  <p className="text-gray-600 text-[10px] shrink-0 mt-0.5">
+                  <p className="text-white/40 text-[10px] shrink-0 mt-0.5">
                     {fmtDate(activity.occurredAt)}
                   </p>
                 </Link>
@@ -328,12 +321,15 @@ export default async function MissionControlPage() {
 
       {/* ── Section D: Today's schedule ─────────────────────── */}
       <section aria-label="Today's schedule">
-        <h2 className="text-[10px] text-gray-400 uppercase tracking-[0.4em] font-semibold mb-3">
+        <h2 className="text-[10px] text-white/60 uppercase tracking-[0.3em] font-semibold mb-3">
           Today&apos;s Schedule
         </h2>
         <div className="border border-dashed border-white/[0.06] px-5 py-6 text-center">
-          <p className="text-gray-500 text-sm font-medium">Schedule integration coming soon</p>
-          <p className="text-gray-600 text-xs mt-1">
+          <div className="w-10 h-10 flex items-center justify-center bg-white/[0.04] border border-white/[0.08] mx-auto mb-3">
+            <CalendarDays size={16} className="text-white/40" />
+          </div>
+          <p className="text-white/50 text-sm font-medium">Schedule integration coming soon</p>
+          <p className="text-white/40 text-xs mt-1">
             Calendar sync will surface coaching calls and client sessions here.
           </p>
         </div>

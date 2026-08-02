@@ -1,6 +1,7 @@
 "use client";
 
 import type { CoachingRecommendationResult, RecommendationCategory } from "@/lib/pil/types";
+import { SEVERITY_TEXT } from "@/lib/ui/status";
 import CoachingRecommendationCard from "./CoachingRecommendationCard";
 
 // ─── Category display order ────────────────────────────────────────────────────
@@ -42,8 +43,8 @@ export default function CoachingRecommendationsPanel({
 }: Props) {
   if (!result.hasActionableRecommendations) {
     return (
-      <div className="flex items-center gap-2 py-3 text-xs text-gray-400">
-        <span className="text-gray-200">✓</span>
+      <div className="flex items-center gap-2 py-3 text-xs text-white/40">
+        <span className={SEVERITY_TEXT.ok}>✓</span>
         No significant coaching actions identified — continue current approach.
       </div>
     );
@@ -69,7 +70,7 @@ export default function CoachingRecommendationsPanel({
         return (
           <div key={category}>
             {allCategories.length > 1 && (
-              <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest mb-2">
+              <p className="text-[10px] font-semibold text-white/40 uppercase tracking-[0.3em] mb-2">
                 {CATEGORY_LABEL[category] ?? category}
               </p>
             )}
@@ -88,7 +89,7 @@ export default function CoachingRecommendationsPanel({
         );
       })}
 
-      <p className="text-[10px] text-gray-300 pt-1">
+      <p className="text-[10px] text-white/25 pt-1">
         {result.recommendations.length} recommendation{result.recommendations.length !== 1 ? "s" : ""} · Tap "Why →" on any card to see supporting evidence
       </p>
     </div>

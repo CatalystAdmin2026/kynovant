@@ -9,11 +9,13 @@ import {
 } from "lucide-react";
 import {
   Button,
+  Badge,
   Input as DSInput,
   Textarea as DSTextarea,
   Select as DSSelect,
   Label as DSLabel,
 } from "@/components/ui";
+import type { BadgeVariant } from "@/components/ui";
 
 // ─────────────────────────────────────────────────────────────
 // CLIENT-SIDE TYPES (mirror the API response shape)
@@ -155,16 +157,24 @@ function fmtLabel(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function statusBadge(s: string) {
-  if (s === "active")   return { cls: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Published" };
-  if (s === "archived") return { cls: "bg-white/[0.04] text-white/25 border border-white/[0.06]",         label: "Archived" };
-  return                       { cls: "bg-amber-500/10 text-amber-400 border border-amber-500/20",        label: "Draft" };
+function statusVariant(s: string): BadgeVariant {
+  if (s === "active") return "success";
+  if (s === "archived") return "neutral";
+  return "warning";
 }
 
-// Group colors for superset/triset visualization
+function statusLabel(s: string) {
+  if (s === "active") return "Published";
+  if (s === "archived") return "Archived";
+  return "Draft";
+}
+
+// Group colors for superset/triset visualization — 4 muted hues,
+// cycled if more groups exist. Translucent (not fully saturated) so
+// they read as a quiet structural accent, not a decorative rainbow.
 const GROUP_COLORS = [
-  "border-l-violet-500", "border-l-cyan-500", "border-l-pink-500",
-  "border-l-lime-500",   "border-l-orange-500", "border-l-sky-500",
+  "border-l-violet-500/50", "border-l-cyan-500/50",
+  "border-l-orange-500/50", "border-l-sky-500/50",
 ];
 function groupColor(groupId: string, groupIndex: number): string {
   return GROUP_COLORS[groupIndex % GROUP_COLORS.length];
@@ -408,7 +418,7 @@ function PrescriptionRow({
   }
 
   return (
-    <div className={`border-l-2 ${groupColorClass || "border-l-transparent"} bg-[#0a0b0c] border-y border-r border-white/[0.06] rounded-r-lg overflow-hidden mb-1.5 transition-colors hover:border-white/[0.1]`}>
+    <div className={`border-l-2 ${groupColorClass || "border-l-transparent"} bg-[#0a0b0c] border-y border-r border-white/[0.06] rounded-r-lg overflow-hidden mb-1.5 transition-colors hover:border-white/[0.14]`}>
       {/* Compact row */}
       <div
         className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-white/[0.02] transition-colors"
@@ -807,7 +817,7 @@ function SectionCard({
   const sorted = [...prescriptions].sort((a, b) => a.orderIndex - b.orderIndex);
 
   return (
-    <div className="border border-white/[0.07] bg-[#0d0e0f] rounded-lg overflow-hidden mb-3">
+    <div className="border border-white/[0.07] bg-[var(--surface)] shadow-card rounded-lg overflow-hidden mb-3">
       {/* Section header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.05]">
         <div className="flex flex-col gap-0.5 shrink-0">
@@ -871,7 +881,7 @@ function SectionCard({
               className="flex-1 flex items-center gap-3 text-left min-w-0"
             >
               <span className="text-white text-sm font-semibold truncate">{section.name}</span>
-              <span className="shrink-0 text-white/35 text-[9px] font-bold tracking-[0.25em] uppercase border border-white/[0.08] px-1.5 py-0.5">
+              <span className="shrink-0 text-white/35 text-[9px] font-semibold tracking-[0.25em] uppercase border border-white/[0.08] px-1.5 py-0.5">
                 {fmtLabel(section.sectionType)}
               </span>
               {section.estimatedMinutes && (
@@ -966,7 +976,7 @@ function SectionCard({
                   )}
                   {!recentLoading && recentlyUsed.length > 0 && (
                     <>
-                      <p className="text-[9px] text-white/20 uppercase tracking-[0.45em] mb-1.5 px-1">Recently Used</p>
+                      <p className="text-[9px] text-white/20 uppercase tracking-[0.25em] mb-1.5 px-1">Recently Used</p>
                       {recentlyUsed.map((ex) => (
                         <ExercisePickerRow key={ex.id} exercise={ex} onAdd={handleAddExercise} />
                       ))}
@@ -1080,25 +1090,23 @@ function MetadataPanel({
     }
   }
 
-  const badge = statusBadge(template.status);
-
   return (
-    <div className="border border-white/[0.07] bg-[#0d0e0f] rounded-lg overflow-hidden mb-6">
+    <div className="border border-white/[0.07] bg-[var(--surface)] shadow-card rounded-lg overflow-hidden mb-6">
       <button
         onClick={() => setOpen((x) => !x)}
         className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-white/[0.02] transition-colors"
       >
         <div className="flex items-center gap-3">
           <span className="text-white text-sm font-semibold">Template Metadata</span>
-          <span className={`px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase ${badge.cls}`}>
-            {badge.label}
-          </span>
+          <Badge tone="dark" variant={statusVariant(template.status)} size="sm">
+            {statusLabel(template.status)}
+          </Badge>
           <span className="text-white/30 text-xs">{fmtLabel(template.recommendedExperienceLevel)}</span>
           {template.primaryFocus && (
             <span className="text-white/30 text-xs">· {template.primaryFocus}</span>
           )}
         </div>
-        <span className="flex items-center gap-1.5 text-white/25 text-[10px] uppercase tracking-[0.25em] font-semibold">
+        <span className="flex items-center gap-1.5 text-white/25 text-[10px] uppercase tracking-[0.3em] font-semibold">
           {open ? "Collapse" : "Expand"}
           <ChevronDown size={12} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
         </span>
@@ -1233,9 +1241,9 @@ function ValidationPanel({ templateId }: { templateId: string }) {
   }
 
   return (
-    <div className="border border-white/[0.07] bg-[#0d0e0f] rounded-lg p-5">
+    <div className="border border-white/[0.07] bg-[var(--surface)] shadow-card rounded-lg p-5">
       <div className="flex items-center justify-between mb-4">
-        <p className="text-[10px] tracking-[0.5em] text-white/25 uppercase font-semibold">
+        <p className="text-[10px] tracking-[0.3em] text-white/25 uppercase font-semibold">
           Blueprint Validation
         </p>
         <Button tone="dark" variant="outline" size="sm" onClick={handleValidate} loading={running}>
@@ -1263,7 +1271,7 @@ function ValidationPanel({ templateId }: { templateId: string }) {
               <XCircle size={16} className="text-red-400 shrink-0" />
             )}
             <p
-              className={`text-sm font-semibold ${result.valid ? "text-emerald-300" : "text-red-300"}`}
+              className={`text-sm font-semibold ${result.valid ? "text-emerald-400" : "text-red-400"}`}
             >
               {result.valid ? "Blueprint is valid" : `${result.errors.length} error${result.errors.length !== 1 ? "s" : ""} found`}
             </p>
@@ -1277,9 +1285,9 @@ function ValidationPanel({ templateId }: { templateId: string }) {
               { label: "Groups", value: result.summary.groupCount },
               { label: "Est. Duration", value: result.summary.estimatedMinutes ? `${result.summary.estimatedMinutes} min` : "—" },
             ].map(({ label, value }) => (
-              <div key={label} className="bg-[#0a0b0c] border border-white/[0.05] px-3 py-3">
+              <div key={label} className="bg-[#0a0b0c] border border-white/[0.06] px-3 py-3">
                 <p className="text-white font-bold text-lg tabular-nums">{value}</p>
-                <p className="text-white/25 text-[10px] uppercase tracking-[0.3em]">{label}</p>
+                <p className="text-white/25 text-[10px] uppercase tracking-[0.3em] font-semibold">{label}</p>
               </div>
             ))}
           </div>
@@ -1287,12 +1295,12 @@ function ValidationPanel({ templateId }: { templateId: string }) {
           {/* Errors */}
           {result.errors.length > 0 && (
             <div>
-              <p className="text-[10px] text-red-400/80 uppercase tracking-[0.4em] font-semibold mb-2">
+              <p className="text-[10px] text-red-400/80 uppercase tracking-[0.3em] font-semibold mb-2">
                 Errors
               </p>
               <div className="space-y-1.5">
                 {result.errors.map((e, i) => (
-                  <div key={i} className="flex items-start gap-2.5 bg-red-500/[0.04] border border-red-500/15 px-3 py-2">
+                  <div key={i} className="flex items-start gap-2.5 bg-red-500/[0.04] border border-red-500/20 px-3 py-2">
                     <XCircle size={12} className="text-red-400/70 shrink-0 mt-0.5" />
                     <p className="text-red-400/80 text-xs leading-relaxed">{e}</p>
                   </div>
@@ -1304,12 +1312,12 @@ function ValidationPanel({ templateId }: { templateId: string }) {
           {/* Warnings */}
           {result.warnings.length > 0 && (
             <div>
-              <p className="text-[10px] text-amber-400/80 uppercase tracking-[0.4em] font-semibold mb-2">
+              <p className="text-[10px] text-amber-400/80 uppercase tracking-[0.3em] font-semibold mb-2">
                 Warnings
               </p>
               <div className="space-y-1.5">
                 {result.warnings.map((w, i) => (
-                  <div key={i} className="flex items-start gap-2.5 bg-amber-500/[0.04] border border-amber-500/15 px-3 py-2">
+                  <div key={i} className="flex items-start gap-2.5 bg-amber-500/[0.04] border border-amber-500/20 px-3 py-2">
                     <AlertTriangle size={12} className="text-amber-400/70 shrink-0 mt-0.5" />
                     <p className="text-amber-400/80 text-xs leading-relaxed">{w}</p>
                   </div>
@@ -1392,7 +1400,7 @@ function AddSectionForm({
   }
 
   return (
-    <div className="border border-[#C9A24D]/20 bg-[#0d0e0f] rounded-lg p-4 mb-3">
+    <div className="border border-[#C9A24D]/20 bg-[var(--surface)] shadow-card rounded-lg p-4 mb-3">
       <form onSubmit={handleSubmit}>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3 items-end">
           <DSInput
@@ -1530,8 +1538,6 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
     }
   }
 
-  const badge = statusBadge(template.status);
-
   return (
     <div className="min-h-screen bg-[#080909] text-white">
       {/* Header */}
@@ -1541,7 +1547,7 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
             <div className="flex items-center gap-3 min-w-0">
               <Link
                 href={backHref}
-                className="text-white/25 hover:text-white/50 text-[10px] tracking-[0.35em] uppercase font-semibold transition-colors shrink-0"
+                className="text-white/25 hover:text-white/50 text-[10px] tracking-[0.3em] uppercase font-semibold transition-colors shrink-0"
               >
                 ← Blueprints
               </Link>
@@ -1549,9 +1555,9 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
               <h1 className="text-white/85 font-medium text-sm truncate">
                 {template.name}
               </h1>
-              <span className={`inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase shrink-0 ${badge.cls}`}>
-                {badge.label}
-              </span>
+              <Badge tone="dark" variant={statusVariant(template.status)} size="sm" className="shrink-0">
+                {statusLabel(template.status)}
+              </Badge>
             </div>
 
             <div className="flex items-center gap-3 shrink-0">
@@ -1589,7 +1595,7 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
 
         {/* Section builder */}
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[10px] tracking-[0.5em] text-white/25 uppercase font-semibold flex items-center gap-2">
+          <h2 className="text-[10px] tracking-[0.3em] text-white/25 uppercase font-semibold flex items-center gap-2">
             <Layers size={12} className="text-white/20" />
             Sections &amp; Exercises
           </h2>
@@ -1617,7 +1623,7 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
 
         {/* Unsectioned exercises */}
         {unsectioned.length > 0 && (
-          <div className="border border-white/[0.06] border-dashed rounded-lg bg-[#0d0e0f] mb-3">
+          <div className="border border-white/[0.06] border-dashed rounded-lg bg-[var(--surface)] mb-3">
             <div className="px-4 py-3 border-b border-white/[0.04]">
               <span className="text-white/30 text-xs">Unsectioned Exercises</span>
             </div>

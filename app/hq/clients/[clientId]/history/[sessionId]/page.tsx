@@ -84,7 +84,7 @@ function statusBadge(status: string) {
   return (
     <span
       className={cx(
-        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.15em]",
+        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.25em]",
         cls,
       )}
     >
@@ -188,7 +188,7 @@ function SetRow({
       {parts.length > 0 ? (
         <span className="text-white text-[11px] font-medium">{parts.join(" · ")}</span>
       ) : (
-        <span className="text-emerald-400 text-[10px] font-semibold uppercase tracking-[0.1em]">
+        <span className="text-emerald-400 text-[10px] font-semibold uppercase tracking-[0.25em]">
           Done
         </span>
       )}
@@ -250,7 +250,7 @@ export default async function CoachSessionReviewPage({
       {/* ── Read-only badge ───────────────────────────────────── */}
       <div className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] px-2.5 py-1">
         <span className="w-1.5 h-1.5 rounded-full bg-[#C9A24D]/60" />
-        <span className="text-[9px] text-gray-500 uppercase tracking-[0.25em] font-semibold">
+        <span className="text-[9px] text-gray-500 uppercase tracking-[0.3em] font-semibold">
           Coach View · Read Only
         </span>
       </div>
@@ -287,7 +287,7 @@ export default async function CoachSessionReviewPage({
         <div className="flex flex-col gap-0.5 mt-3">
           {detail.scheduledDate && (
             <p className="text-gray-400 text-xs">
-              <span className="text-gray-600 uppercase tracking-[0.1em] text-[9px] mr-2">
+              <span className="text-gray-600 uppercase tracking-[0.25em] text-[9px] mr-2">
                 Scheduled
               </span>
               {fmtDate(detail.scheduledDate)}
@@ -295,7 +295,7 @@ export default async function CoachSessionReviewPage({
           )}
           {detail.completedAt && (
             <p className="text-gray-400 text-xs">
-              <span className="text-gray-600 uppercase tracking-[0.1em] text-[9px] mr-2">
+              <span className="text-gray-600 uppercase tracking-[0.25em] text-[9px] mr-2">
                 Completed
               </span>
               {fmtDate(detail.completedAt)}
@@ -323,7 +323,7 @@ export default async function CoachSessionReviewPage({
               {sortedSections.map((sec) => (
                 <div key={sec.id} className="mb-5">
                   <div className="flex items-center gap-3 mb-3">
-                    <p className="text-[9px] text-gray-400 uppercase tracking-[0.5em] font-semibold">
+                    <p className="text-[9px] text-gray-400 uppercase tracking-[0.3em] font-semibold">
                       {sec.name}
                     </p>
                     {sec.estimatedMinutes && (

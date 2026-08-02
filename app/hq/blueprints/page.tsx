@@ -11,10 +11,11 @@ import {
   ChevronLeft, ChevronRight, MoreVertical, Trash2,
 } from "lucide-react";
 import {
-  Button, Input, Select, Label,
+  Button, Badge, Card, Input, Select, Label,
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell,
   Dropdown, EmptyState, Skeleton, SkeletonTableRow,
 } from "@/components/ui";
+import type { BadgeVariant } from "@/components/ui";
 
 interface TemplateRow {
   id: string;
@@ -38,10 +39,10 @@ type LevelFilter = "all" | (typeof EXPERIENCE_LEVELS)[number];
 
 const PAGE_SIZE_OPTIONS = [8, 12, 24] as const;
 
-function statusCls(s: string) {
-  if (s === "active")   return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-  if (s === "archived") return "bg-white/[0.04] text-white/25 border border-white/[0.06]";
-  return "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+function statusVariant(s: string): BadgeVariant {
+  if (s === "active") return "success";
+  if (s === "archived") return "neutral";
+  return "warning";
 }
 
 function statusLabel(s: string) {
@@ -50,10 +51,14 @@ function statusLabel(s: string) {
   return "Draft";
 }
 
+// Experience level is a skill-tier attribute, not a severity/status —
+// deliberately kept off the red/amber/emerald traffic-light palette
+// (see lib/ui/status.ts) so "Advanced" never reads as "problem." A
+// neutral/gold tiered scale instead: more experience, more gold.
 function expCls(e: string) {
-  if (e === "advanced") return "text-red-400";
-  if (e === "intermediate") return "text-amber-400";
-  return "text-emerald-400";
+  if (e === "advanced") return "text-[#C9A24D]/70";
+  if (e === "intermediate") return "text-white/55";
+  return "text-white/40";
 }
 
 function fmtLabel(s: string) {
@@ -248,7 +253,7 @@ export default function HQBlueprintsPage() {
       {showNewForm && (
         <div className="mb-8 bg-[#0d0e0f] border border-[#C9A24D]/30 p-6 animate-[ws-fade-up_0.25s_ease]">
           <div className="flex items-center justify-between mb-5">
-            <p className="text-white font-semibold text-sm tracking-wide">New Workout Blueprint</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white">New Workout Blueprint</p>
             <button
               onClick={() => setShowNewForm(false)}
               aria-label="Close"
@@ -296,12 +301,13 @@ export default function HQBlueprintsPage() {
       {!loading && !error && templates.length > 0 && (
         <div className="flex flex-wrap items-center gap-2.5 mb-5">
           <div className="relative flex-1 min-w-[200px] max-w-sm">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25 pointer-events-none" />
-            <input
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25 pointer-events-none z-10" />
+            <Input
+              tone="dark"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search blueprints…"
-              className="w-full bg-[#0a0b0b] border border-white/[0.07] text-white/80 text-xs pl-8 pr-3 py-2.5 focus:outline-none focus:border-[#C9A24D]/40 placeholder-white/20 transition-colors"
+              className="pl-8"
             />
           </div>
 
@@ -324,7 +330,7 @@ export default function HQBlueprintsPage() {
           {filtersActive && (
             <button
               onClick={clearFilters}
-              className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] font-semibold text-white/30 hover:text-[#C9A24D]/80 transition-colors px-2"
+              className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.3em] font-semibold text-white/30 hover:text-[#C9A24D]/80 transition-colors px-2"
             >
               <X size={11} /> Clear
             </button>
@@ -398,7 +404,7 @@ export default function HQBlueprintsPage() {
           </TableHeader>
           <TableBody>
             {paged.map((t) => (
-              <TableRow key={t.id} className={t.status === "archived" ? "opacity-55 hover:opacity-80" : ""}>
+              <TableRow key={t.id} interactive className={t.status === "archived" ? "opacity-55 hover:opacity-80" : ""}>
                 <TableCell>
                   <Link
                     href={`/hq/blueprints/${t.id}`}
@@ -426,9 +432,9 @@ export default function HQBlueprintsPage() {
                   </span>
                 </TableCell>
                 <TableCell className="whitespace-nowrap">
-                  <span className={`inline-block px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase ${statusCls(t.status)}`}>
+                  <Badge tone="dark" variant={statusVariant(t.status)} size="sm">
                     {statusLabel(t.status)}
-                  </span>
+                  </Badge>
                 </TableCell>
                 <TableCell className="whitespace-nowrap">
                   <span className="text-white/30 text-[11px]">{fmtRelative(t.updatedAt ?? t.createdAt)}</span>
@@ -457,7 +463,7 @@ export default function HQBlueprintsPage() {
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={pageSafe <= 1}
                 aria-label="Previous page"
-                className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
+                className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/[0.14] disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
               >
                 <ChevronLeft size={13} />
               </button>
@@ -476,7 +482,7 @@ export default function HQBlueprintsPage() {
                       key={n}
                       onClick={() => setPage(n)}
                       className={`w-7 h-7 flex items-center justify-center text-xs font-medium transition-colors ${
-                        n === pageSafe ? "bg-[#C9A24D] text-black" : "text-white/40 border border-white/[0.08] hover:text-white hover:border-white/20"
+                        n === pageSafe ? "bg-[#C9A24D] text-black" : "text-white/40 border border-white/[0.08] hover:text-white hover:border-white/[0.14]"
                       }`}
                     >
                       {n}
@@ -487,18 +493,20 @@ export default function HQBlueprintsPage() {
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={pageSafe >= totalPages}
                 aria-label="Next page"
-                className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
+                className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/[0.14] disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
               >
                 <ChevronRight size={13} />
               </button>
             </div>
-            <select
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
-              className="bg-[#0a0b0b] border border-white/[0.08] text-white/50 text-[11px] px-2.5 py-1.5 focus:outline-none focus:border-[#C9A24D]/40"
-            >
-              {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} per page</option>)}
-            </select>
+            <div className="w-28 shrink-0">
+              <Select
+                tone="dark"
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} per page</option>)}
+              </Select>
+            </div>
           </div>
         </div>
       )}
@@ -520,12 +528,12 @@ function MetricCard({
   bar?: number;
 }) {
   return (
-    <div className="bg-[#0d0e0f] border border-white/[0.06] px-5 py-4 transition-colors hover:border-white/[0.1]">
+    <Card tone="dark" padding="none" className="px-5 py-4 transition-colors hover:border-white/[0.14]">
       <div className="flex items-center gap-2 mb-3">
         <div className="w-6 h-6 flex items-center justify-center bg-[#C9A24D]/[0.08] text-[#C9A24D]/70 border border-[#C9A24D]/15">
           {icon}
         </div>
-        <span className="text-[9px] font-bold tracking-[0.3em] uppercase text-white/30">{label}</span>
+        <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-white/30">{label}</span>
       </div>
       <div className="flex items-end justify-between gap-3">
         <span className="text-2xl font-bold text-white tabular-nums leading-none">{value}</span>
@@ -538,7 +546,7 @@ function MetricCard({
           </div>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -550,13 +558,11 @@ function FilterSelect({
   options: [string, string][];
 }) {
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="bg-[#0a0b0b] border border-white/[0.07] text-white/60 text-xs px-3 py-2.5 focus:outline-none focus:border-[#C9A24D]/40 transition-colors"
-    >
-      {options.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-    </select>
+    <div className="w-40 shrink-0">
+      <Select tone="dark" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+      </Select>
+    </div>
   );
 }
 

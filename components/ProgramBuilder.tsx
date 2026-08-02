@@ -6,6 +6,8 @@ import {
   ChevronLeft, ChevronRight, Plus, Check, X, Search,
   Copy, Trash2, Clock, CalendarDays, Repeat, Dumbbell,
 } from "lucide-react";
+import { Badge } from "@/components/ui";
+import type { BadgeVariant } from "@/components/ui";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -94,13 +96,19 @@ function fmtLabel(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function statusBadge(s: string) {
-  if (s === "active")   return { cls: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Published" };
-  if (s === "archived") return { cls: "bg-white/[0.05] text-white/30 border border-white/[0.06]",       label: "Archived" };
-  return                       { cls: "bg-amber-500/10 text-amber-400/80 border border-amber-500/20",    label: "Draft" };
+const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
+  active:   "success",
+  draft:    "warning",
+  archived: "neutral",
+};
+
+function statusLabel(s: string) {
+  if (s === "active") return "Published";
+  if (s === "archived") return "Archived";
+  return "Draft";
 }
 
-// Dot-only variant of statusBadge's color logic — used inside compact
+// Dot-only variant of the status color mapping — used inside compact
 // blueprint cards where a full pill badge would be too heavy.
 function statusDotColor(s: string) {
   if (s === "active")   return "bg-emerald-400";
@@ -143,7 +151,7 @@ function BlueprintPicker({
   return (
     <div
       role="menu"
-      className="animate-[ws-fade-up_0.15s_ease] absolute z-30 top-full left-0 mt-1 w-72 bg-[#111213] border border-white/[0.10] shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
+      className="animate-[ws-fade-up_0.15s_ease] absolute z-30 top-full left-0 mt-1 w-72 bg-[#111213] border border-white/[0.08] shadow-dropdown"
       onClick={(e) => e.stopPropagation()}
     >
       {/* Search */}
@@ -167,7 +175,7 @@ function BlueprintPicker({
           <button
             role="menuitem"
             onClick={onClear}
-            className="flex items-center gap-2 w-full text-left px-3 py-2.5 text-[11px] text-white/30 hover:text-red-400/80 hover:bg-red-500/[0.04] border-b border-white/[0.04] transition-colors"
+            className="flex items-center gap-2 w-full text-left px-3 py-2.5 text-[11px] text-white/30 hover:text-red-400/80 hover:bg-red-500/[0.04] border-b border-white/[0.06] transition-colors"
           >
             <X size={11} /> Make rest day
           </button>
@@ -184,7 +192,7 @@ function BlueprintPicker({
             role="menuitem"
             key={b.id}
             onClick={() => onSelect(b)}
-            className={`w-full text-left px-3 py-2.5 border-b border-white/[0.03] last:border-0 transition-colors ${
+            className={`w-full text-left px-3 py-2.5 border-b border-white/[0.06] last:border-0 transition-colors ${
               b.id === currentId
                 ? "bg-[#C9A24D]/[0.08] hover:bg-[#C9A24D]/[0.12]"
                 : "hover:bg-white/[0.03]"
@@ -216,7 +224,7 @@ function BlueprintPicker({
       </div>
 
       {/* Footer */}
-      <div className="px-3 py-2 border-t border-white/[0.05] flex items-center justify-between">
+      <div className="px-3 py-2 border-t border-white/[0.06] flex items-center justify-between">
         <Link
           href="/hq/blueprints/new"
           className="text-[10px] text-[#C9A24D]/50 hover:text-[#C9A24D]/80 transition-colors"
@@ -308,7 +316,7 @@ function DayCell({
 
   if (saving) {
     return (
-      <div className="h-[88px] bg-white/[0.02] border border-white/[0.04] flex items-center justify-center">
+      <div className="h-[88px] bg-white/[0.02] border border-white/[0.06] flex items-center justify-center">
         <div className="w-3 h-3 border border-[#C9A24D]/30 border-t-[#C9A24D]/70 rounded-full animate-spin" />
       </div>
     );
@@ -323,7 +331,7 @@ function DayCell({
           onClick={() => setOpen((x) => !x)}
           aria-haspopup="menu"
           aria-expanded={open}
-          className="group w-full h-[88px] bg-[#C9A24D]/[0.05] border border-[#C9A24D]/[0.18] border-t-2 border-t-[#C9A24D]/70 px-2.5 pt-2 pb-2 text-left flex flex-col justify-between hover:bg-[#C9A24D]/[0.09] hover:border-[#C9A24D]/35 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_-8px_rgba(0,0,0,0.6)] transition-all duration-200 ease-out"
+          className="group w-full h-[88px] bg-[#C9A24D]/[0.05] border border-[#C9A24D]/[0.18] border-t-2 border-t-[#C9A24D]/70 px-2.5 pt-2 pb-2 text-left flex flex-col justify-between hover:bg-[#C9A24D]/[0.09] hover:border-[#C9A24D]/35 hover:-translate-y-0.5 hover:shadow-card-hover transition-all duration-200 ease-out"
         >
           <div className="min-w-0">
             <p className="text-[#C9A24D]/90 text-[10.5px] font-semibold truncate leading-tight">
@@ -344,10 +352,10 @@ function DayCell({
           onClick={() => setOpen((x) => !x)}
           aria-haspopup="menu"
           aria-expanded={open}
-          className="w-full h-[88px] bg-transparent border border-dashed border-white/[0.05] flex flex-col items-center justify-center gap-1 hover:border-white/[0.16] hover:bg-white/[0.015] transition-all duration-200 ease-out group"
+          className="w-full h-[88px] bg-transparent border border-dashed border-white/[0.06] flex flex-col items-center justify-center gap-1 hover:border-white/[0.14] hover:bg-white/[0.015] transition-all duration-200 ease-out group"
         >
           <Plus size={12} strokeWidth={2.5} className="text-white/12 group-hover:text-white/30 transition-colors" />
-          <span className="text-white/10 text-[8.5px] uppercase tracking-[0.15em] group-hover:text-white/25 transition-colors">Rest</span>
+          <span className="text-white/10 text-[9px] font-semibold uppercase tracking-[0.25em] group-hover:text-white/25 transition-colors">Rest</span>
         </button>
       )}
 
@@ -433,10 +441,10 @@ function WeekRow({
   }
 
   return (
-    <div className="border border-white/[0.07] bg-[#0c0d0e] group/week">
+    <div className="border border-white/[0.08] bg-[#0c0d0e] group/week">
       {/* Week header */}
-      <div className="flex items-center gap-3 px-4 h-12 border-b border-white/[0.05]">
-        <span className="text-[#C9A24D]/60 text-[9px] font-bold tracking-[0.45em] uppercase shrink-0 tabular-nums">
+      <div className="flex items-center gap-3 px-4 h-12 border-b border-white/[0.06]">
+        <span className="text-[#C9A24D]/60 text-[9px] font-semibold tracking-[0.25em] uppercase shrink-0 tabular-nums">
           W{String(week.weekNumber).padStart(2, "0")}
         </span>
 
@@ -537,12 +545,12 @@ function MetricCard({
   sub?: string;
 }) {
   return (
-    <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3.5 transition-colors hover:border-white/[0.1]">
+    <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3.5 transition-colors hover:border-white/[0.14]">
       <div className="flex items-center gap-2 mb-2.5">
         <div className="w-6 h-6 flex items-center justify-center bg-[#C9A24D]/[0.08] text-[#C9A24D]/70 border border-[#C9A24D]/15">
           {icon}
         </div>
-        <span className="text-[9px] font-bold tracking-[0.3em] uppercase text-white/30">{label}</span>
+        <span className="text-[9px] font-semibold tracking-[0.25em] uppercase text-white/30">{label}</span>
       </div>
       <span className="text-xl font-bold text-white tabular-nums leading-none">{value}</span>
       {sub && <p className="text-white/22 text-[10px] mt-1.5">{sub}</p>}
@@ -609,7 +617,7 @@ function MetadataPanel({
   return (
     <div className="animate-[ws-fade-up_0.2s_ease] space-y-5 max-w-2xl">
       <div>
-        <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Description</label>
+        <label className="block text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Description</label>
         <textarea
           value={form.description}
           onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
@@ -621,7 +629,7 @@ function MetadataPanel({
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div>
-          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Category</label>
+          <label className="block text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Category</label>
           <select
             value={form.category}
             onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
@@ -631,7 +639,7 @@ function MetadataPanel({
           </select>
         </div>
         <div>
-          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Experience</label>
+          <label className="block text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Experience</label>
           <select
             value={form.experienceLevel}
             onChange={(e) => setForm((f) => ({ ...f, experienceLevel: e.target.value }))}
@@ -641,7 +649,7 @@ function MetadataPanel({
           </select>
         </div>
         <div>
-          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Duration (weeks)</label>
+          <label className="block text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Duration (weeks)</label>
           <input
             type="number"
             min="1"
@@ -652,7 +660,7 @@ function MetadataPanel({
           />
         </div>
         <div>
-          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Days / week</label>
+          <label className="block text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Days / week</label>
           <input
             type="number"
             min="1"
@@ -669,7 +677,7 @@ function MetadataPanel({
         <button
           onClick={handleSave}
           disabled={saving || !dirty}
-          className="flex items-center gap-1.5 text-[10px] tracking-[0.3em] uppercase font-bold bg-white/[0.04] border border-white/[0.08] text-white/50 px-4 py-2 hover:bg-white/[0.07] hover:text-white/70 transition-colors disabled:opacity-30 disabled:cursor-default"
+          className="flex items-center gap-1.5 text-[10px] tracking-[0.3em] uppercase font-bold bg-white/[0.06] border border-white/[0.08] text-white/50 px-4 py-2 hover:bg-white/[0.07] hover:text-white/70 transition-colors disabled:opacity-30 disabled:cursor-default"
         >
           {saving ? "Saving…" : "Save changes"}
         </button>
@@ -718,10 +726,10 @@ function PublishPanel({
   }
 
   return (
-    <div className="border-t border-white/[0.05] mt-8 pt-6">
+    <div className="border-t border-white/[0.06] mt-8 pt-6">
       <div className="flex items-start justify-between gap-6">
         <div>
-          <p className="text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Publish Program</p>
+          <p className="text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Publish Program</p>
           <p className="text-white/25 text-xs leading-relaxed max-w-md">
             Publishing validates that every assigned blueprint is finalized.
             Published programs can be assigned to clients. You can continue
@@ -812,7 +820,7 @@ function AssignPanel({ templateId }: { templateId: string }) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Client</label>
+          <label className="block text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Client</label>
           <input
             value={clientId}
             onChange={(e) => setClientId(e.target.value)}
@@ -827,7 +835,7 @@ function AssignPanel({ templateId }: { templateId: string }) {
           {loadingC && <p className="text-white/20 text-[10px] mt-1">Loading clients…</p>}
         </div>
         <div>
-          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Start Date</label>
+          <label className="block text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Start Date</label>
           <input
             type="date"
             value={startDate}
@@ -836,7 +844,7 @@ function AssignPanel({ templateId }: { templateId: string }) {
           />
         </div>
         <div className="sm:col-span-2">
-          <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Coach Notes</label>
+          <label className="block text-[9px] font-semibold text-white/22 uppercase tracking-[0.25em] mb-1.5">Coach Notes</label>
           <input
             value={coachNotes}
             onChange={(e) => setCoachNotes(e.target.value)}
@@ -896,7 +904,7 @@ export default function ProgramBuilder({
   const [archiving,    setArchiving]    = useState(false);
   const [viewedWeek,   setViewedWeek]   = useState(0);
 
-  const badge = statusBadge(template.status);
+  const badgeVariant = STATUS_BADGE_VARIANT[template.status] ?? "neutral";
 
   // ── Day update ──────────────────────────────────────────────
   function handleUpdateDay(weekId: string, dow: number, data: DayData | null) {
@@ -1028,7 +1036,7 @@ export default function ProgramBuilder({
     <div className="min-h-screen bg-[#070809] text-white">
 
       {/* ── Sticky header ─────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 bg-[#070809]/95 backdrop-blur-sm border-b border-white/[0.05]">
+      <header className="sticky top-0 z-40 bg-[#070809]/95 backdrop-blur-sm border-b border-white/[0.06]">
         <div className="max-w-screen-lg mx-auto px-5 md:px-8">
           <div className="flex items-center h-13 gap-4 py-2">
 
@@ -1036,7 +1044,7 @@ export default function ProgramBuilder({
             <div className="flex items-center gap-3 flex-1 min-w-0">
               <Link
                 href={backHref}
-                className="text-white/25 hover:text-white/50 text-[10px] tracking-[0.35em] uppercase font-semibold transition-colors shrink-0"
+                className="text-white/25 hover:text-white/50 text-[10px] tracking-[0.3em] uppercase font-semibold transition-colors shrink-0"
               >
                 ← Programs
               </Link>
@@ -1070,10 +1078,10 @@ export default function ProgramBuilder({
                 </button>
               )}
 
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase shrink-0 ${badge.cls}`}>
+              <Badge tone="dark" variant={badgeVariant} size="sm" className="shrink-0">
                 <span className={`w-1 h-1 rounded-full ${statusDotColor(template.status)}`} />
-                {badge.label}
-              </span>
+                {statusLabel(template.status)}
+              </Badge>
 
               {template.version > 1 && (
                 <span className="text-white/18 text-[9px] shrink-0">v{template.version}</span>
@@ -1090,7 +1098,7 @@ export default function ProgramBuilder({
                 <button
                   onClick={handleArchive}
                   disabled={archiving}
-                  className="text-[9px] tracking-[0.3em] uppercase font-semibold text-white/25 border border-white/[0.08] px-3 py-1.5 hover:text-white/45 hover:border-white/15 transition-colors disabled:opacity-40"
+                  className="text-[9px] tracking-[0.25em] uppercase font-semibold text-white/25 border border-white/[0.08] px-3 py-1.5 hover:text-white/45 hover:border-white/[0.14] transition-colors disabled:opacity-40"
                 >
                   {archiving ? "…" : "Archive"}
                 </button>
@@ -1107,7 +1115,7 @@ export default function ProgramBuilder({
           {tab === "schedule" && sortedWeeks.length > 0 && (
             <div className="grid grid-cols-7 gap-1.5 pb-1.5 -mx-0">
               {DAY_FULL.map((d, i) => (
-                <p key={d} className="text-white/12 text-[8px] text-center uppercase tracking-[0.2em]">
+                <p key={d} className="text-white/12 text-[9px] text-center font-semibold uppercase tracking-[0.25em]">
                   <span className="hidden sm:inline">{d.slice(0, 3)}</span>
                   <span className="sm:hidden">{DAY_SHORT[i]}</span>
                 </p>
@@ -1120,12 +1128,12 @@ export default function ProgramBuilder({
       <div className="max-w-screen-lg mx-auto px-5 md:px-8 py-6">
 
         {/* ── Tabs ──────────────────────────────────────────── */}
-        <div className="flex gap-0 mb-6 border-b border-white/[0.05]">
+        <div className="flex gap-0 mb-6 border-b border-white/[0.06]">
           {(["schedule", "details", "assign"] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`px-5 py-2.5 text-[9px] uppercase tracking-[0.4em] font-semibold transition-colors border-b-2 -mb-px ${
+              className={`px-5 py-2.5 text-[9px] uppercase tracking-[0.25em] font-semibold transition-colors border-b-2 -mb-px ${
                 tab === t
                   ? "text-[#C9A24D] border-[#C9A24D]"
                   : "text-white/25 border-transparent hover:text-white/45"
@@ -1165,6 +1173,9 @@ export default function ProgramBuilder({
 
             {sortedWeeks.length === 0 ? (
               <div className="border border-dashed border-white/[0.08] px-6 py-12 text-center">
+                <div className="w-10 h-10 flex items-center justify-center bg-white/[0.04] border border-white/[0.08] mx-auto mb-4">
+                  <CalendarDays size={16} className="text-white/40" />
+                </div>
                 <p className="text-white/30 text-sm mb-4">This program doesn&apos;t have any weeks yet.</p>
                 <button
                   onClick={handleAddWeek}
@@ -1184,7 +1195,7 @@ export default function ProgramBuilder({
                       onClick={() => setViewedWeek((i) => Math.max(0, i - 1))}
                       disabled={safeWeekIndex === 0}
                       aria-label="Previous week"
-                      className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
+                      className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/[0.14] disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
                     >
                       <ChevronLeft size={13} />
                     </button>
@@ -1204,18 +1215,18 @@ export default function ProgramBuilder({
                       onClick={() => setViewedWeek((i) => Math.min(sortedWeeks.length - 1, i + 1))}
                       disabled={safeWeekIndex >= sortedWeeks.length - 1}
                       aria-label="Next week"
-                      className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
+                      className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/[0.14] disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
                     >
                       <ChevronRight size={13} />
                     </button>
-                    <span className="text-white/18 text-[10px] uppercase tracking-[0.25em] ml-1 hidden sm:inline">
+                    <span className="text-white/18 text-[10px] uppercase tracking-[0.3em] font-semibold ml-1 hidden sm:inline">
                       Week {safeWeekIndex + 1} of {sortedWeeks.length}
                     </span>
                   </div>
                   <button
                     onClick={handleAddWeek}
                     disabled={addingWeek}
-                    className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.25em] font-semibold text-white/30 hover:text-[#C9A24D] border border-white/[0.08] hover:border-[#C9A24D]/30 px-3 py-1.5 transition-colors disabled:opacity-50"
+                    className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.3em] font-semibold text-white/30 hover:text-[#C9A24D] border border-white/[0.08] hover:border-[#C9A24D]/30 px-3 py-1.5 transition-colors disabled:opacity-50"
                   >
                     <Plus size={12} />
                     {addingWeek ? "Adding…" : "Add Week"}
@@ -1241,14 +1252,14 @@ export default function ProgramBuilder({
 
             {/* Blueprints legend */}
             {blueprints.length > 0 && (
-              <div className="mt-8 pt-6 border-t border-white/[0.04]">
-                <p className="text-[9px] text-white/18 uppercase tracking-[0.45em] mb-3">Blueprints in library</p>
+              <div className="mt-8 pt-6 border-t border-white/[0.06]">
+                <p className="text-[9px] font-semibold text-white/18 uppercase tracking-[0.25em] mb-3">Blueprints in library</p>
                 <div className="flex flex-wrap gap-1.5">
                   {blueprints.map((b) => (
                     <Link
                       key={b.id}
                       href={`/hq/blueprints/${b.id}`}
-                      className="text-[10px] text-white/28 border border-white/[0.05] px-2 py-1 hover:text-white/50 hover:border-white/[0.10] transition-colors truncate max-w-[180px]"
+                      className="text-[10px] text-white/28 border border-white/[0.06] px-2 py-1 hover:text-white/50 hover:border-white/[0.14] transition-colors truncate max-w-[180px]"
                     >
                       {b.name}
                       {b.estimatedDurationMinutes && (
@@ -1289,11 +1300,11 @@ export default function ProgramBuilder({
         {tab === "assign" && (
           <>
             {template.status !== "active" ? (
-              <div className="border border-amber-500/[0.15] bg-amber-500/[0.03] px-5 py-4">
-                <p className="text-amber-400/60 text-sm">
+              <div className="border border-amber-500/20 bg-amber-500/10 px-5 py-4">
+                <p className="text-amber-400 text-sm">
                   Publish this program before assigning it to clients.
                 </p>
-                <p className="text-amber-400/35 text-xs mt-1">
+                <p className="text-amber-400/60 text-xs mt-1">
                   Go to the Schedule tab → Validate &amp; Publish.
                 </p>
               </div>

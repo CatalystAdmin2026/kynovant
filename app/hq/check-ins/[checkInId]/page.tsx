@@ -21,6 +21,7 @@ import CheckInReviewPanel from "@/components/hq/check-ins/CheckInReviewPanel";
 import type { CheckInDetail } from "@/lib/db/check-in-service";
 import { Card, Badge } from "@/components/ui";
 import type { BadgeVariant } from "@/components/ui";
+import { SEVERITY_TEXT, SEVERITY_BAR, type Severity } from "@/lib/ui/status";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,52 @@ const GOAL_TYPE_LABEL: Record<string, string> = {
 };
 
 // ─────────────────────────────────────────────────────────────
+// SHARED COLOR HELPERS
+//
+// RatingBar and ComplianceBar previously hand-rolled identical
+// red/amber/emerald threshold logic independently. Both now derive
+// from the shared Severity source (lib/ui/status.ts) so the same
+// underlying state always renders the same hue. Thresholds are
+// unchanged from the original hand-rolled versions — only the
+// resulting color values are now sourced from SEVERITY_TEXT/
+// SEVERITY_BAR instead of hardcoded tailwind classes.
+// ─────────────────────────────────────────────────────────────
+
+/** value/prev delta trend (RatingBar + ComplianceBar). Positive has
+ *  no Severity equivalent (the module has no "good" hue), so it
+ *  stays a named literal; zero/negative map cleanly onto Severity's
+ *  unknown/critical buckets, which already match the prior literals
+ *  exactly (text-white/25, text-red-400). */
+function trendTextClass(delta: number): string {
+  if (delta > 0) return "text-emerald-400";
+  if (delta < 0) return SEVERITY_TEXT.critical;
+  return SEVERITY_TEXT.unknown;
+}
+
+/** ComplianceBar's 0-100 compliance value, using the same 75/50
+ *  thresholds the component always used. */
+function complianceSeverity(value: number): Severity {
+  if (value >= 75) return "ok";
+  if (value >= 50) return "caution";
+  return "critical";
+}
+
+/** High compliance is a positive/achievement signal, not merely
+ *  "no problem" — Severity's "ok" bucket is deliberately neutral
+ *  (matching StatusChip's PIL semantics), so it's overridden here
+ *  with the same emerald used by trendTextClass's positive deltas,
+ *  consistent with the "success" language used elsewhere in HQ
+ *  (Badge's success variant, published/active status pills). */
+function complianceTextClass(value: number): string {
+  const sev = complianceSeverity(value);
+  return sev === "ok" ? "text-emerald-400" : SEVERITY_TEXT[sev];
+}
+function complianceBarClass(value: number): string {
+  const sev = complianceSeverity(value);
+  return sev === "ok" ? "bg-emerald-400/80" : SEVERITY_BAR[sev];
+}
+
+// ─────────────────────────────────────────────────────────────
 // DATA DISPLAY COMPONENTS
 // ─────────────────────────────────────────────────────────────
 
@@ -78,7 +125,7 @@ function RatingBar({
 
   return (
     <div className="flex items-center gap-3 py-1.5 border-b border-white/[0.04] last:border-0">
-      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-24 shrink-0">
+      <p className="text-[9px] text-white/30 uppercase tracking-[0.25em] w-24 shrink-0">
         {label}
       </p>
       {value !== null ? (
@@ -94,13 +141,7 @@ function RatingBar({
           </span>
           {prev !== null && (
             <span
-              className={`text-[10px] w-8 text-right shrink-0 tabular-nums ${
-                delta! > 0
-                  ? "text-emerald-400"
-                  : delta! < 0
-                  ? "text-red-400"
-                  : "text-white/25"
-              }`}
+              className={`text-[10px] w-8 text-right shrink-0 tabular-nums ${trendTextClass(delta!)}`}
             >
               {delta! > 0 ? "+" : ""}
               {delta}
@@ -127,7 +168,7 @@ function MetricPair({
 }) {
   return (
     <div className="flex items-center gap-3 py-1.5 border-b border-white/[0.04] last:border-0">
-      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-28 shrink-0">
+      <p className="text-[9px] text-white/30 uppercase tracking-[0.25em] w-28 shrink-0">
         {label}
       </p>
       {current !== null ? (
@@ -163,31 +204,17 @@ function ComplianceBar({
   return (
     <div className="py-1.5 border-b border-white/[0.04] last:border-0">
       <div className="flex items-center justify-between mb-1">
-        <p className="text-[9px] text-white/30 uppercase tracking-[0.2em]">{label}</p>
+        <p className="text-[9px] text-white/30 uppercase tracking-[0.25em]">{label}</p>
         <div className="flex items-center gap-3">
           {value !== null ? (
             <>
               <span
-                className={`text-sm font-bold tabular-nums ${
-                  value >= 75
-                    ? "text-emerald-400"
-                    : value >= 50
-                    ? "text-amber-400"
-                    : "text-red-400"
-                }`}
+                className={`text-sm font-bold tabular-nums ${complianceTextClass(value)}`}
               >
                 {value}%
               </span>
               {delta !== null && (
-                <span
-                  className={`text-[10px] tabular-nums ${
-                    delta > 0
-                      ? "text-emerald-400"
-                      : delta < 0
-                      ? "text-red-400"
-                      : "text-white/25"
-                  }`}
-                >
+                <span className={`text-[10px] tabular-nums ${trendTextClass(delta)}`}>
                   {delta > 0 ? "+" : ""}
                   {delta}%
                 </span>
@@ -201,13 +228,7 @@ function ComplianceBar({
       {value !== null && (
         <div className="h-1 bg-white/[0.06]">
           <div
-            className={`h-full ${
-              value >= 75
-                ? "bg-emerald-500/50"
-                : value >= 50
-                ? "bg-amber-500/50"
-                : "bg-red-500/50"
-            }`}
+            className={`h-full ${complianceBarClass(value)}`}
             style={{ width: `${value}%` }}
           />
         </div>
@@ -242,7 +263,7 @@ function CheckInDataPanel({
   return (
     <div className="space-y-5">
       {label && (
-        <p className="text-[9px] text-white/30 uppercase tracking-[0.4em]">{label}</p>
+        <p className="text-[9px] text-white/30 uppercase tracking-[0.3em]">{label}</p>
       )}
 
       {/* Body */}
@@ -377,7 +398,7 @@ export default async function CheckInReviewPage({
             {checkIn.lastEditedAt && (
               <>
                 <span className="text-white/15 text-[10px]">·</span>
-                <span className="text-[10px] text-amber-400/80">
+                <span className={`text-[10px] ${SEVERITY_TEXT.caution}`}>
                   Edited after submission
                 </span>
                 <span className="text-[10px] text-white/25">
@@ -387,7 +408,7 @@ export default async function CheckInReviewPage({
             )}
             <Link
               href={`/hq/clients/${checkIn.clientId}`}
-              className="inline-flex items-center gap-1 text-[10px] text-gold/60 uppercase tracking-[0.15em] transition-colors hover:text-gold"
+              className="inline-flex items-center gap-1 text-[10px] text-gold/60 uppercase tracking-[0.25em] transition-colors hover:text-gold"
             >
               View Client Workspace
               <ArrowUpRight size={11} />
@@ -396,7 +417,7 @@ export default async function CheckInReviewPage({
         </div>
         <Link
           href="/hq/check-ins"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] text-white/50 transition-colors hover:border-white/25 hover:text-white/80"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-[10px] uppercase tracking-[0.25em] text-white/50 transition-colors hover:border-white/25 hover:text-white/80"
         >
           <ChevronLeft size={12} />
           Queue
@@ -436,7 +457,7 @@ export default async function CheckInReviewPage({
               without navigating to the client workspace. */}
           {goalContext && (
             <Card tone="dark" padding="sm" className="space-y-2">
-              <p className="text-[9px] text-white/30 uppercase tracking-[0.4em]">
+              <p className="text-[9px] text-white/30 uppercase tracking-[0.3em]">
                 Goal Context
               </p>
               <p className="text-white text-sm font-medium">
@@ -449,7 +470,7 @@ export default async function CheckInReviewPage({
                 <div className="pt-2 space-y-1 border-t border-white/[0.04]">
                   {goalContext.targetValue && goalContext.targetUnit && (
                     <div className="flex items-center gap-3">
-                      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-16 shrink-0">
+                      <p className="text-[9px] text-white/30 uppercase tracking-[0.25em] w-16 shrink-0">
                         Target
                       </p>
                       <p className="text-white text-sm">
@@ -459,7 +480,7 @@ export default async function CheckInReviewPage({
                   )}
                   {checkIn.bodyWeightLbs && (
                     <div className="flex items-center gap-3">
-                      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-16 shrink-0">
+                      <p className="text-[9px] text-white/30 uppercase tracking-[0.25em] w-16 shrink-0">
                         This week
                       </p>
                       <p className="text-white text-sm">
@@ -469,7 +490,7 @@ export default async function CheckInReviewPage({
                   )}
                   {goalContext.targetDate && (
                     <div className="flex items-center gap-3">
-                      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-16 shrink-0">
+                      <p className="text-[9px] text-white/30 uppercase tracking-[0.25em] w-16 shrink-0">
                         By
                       </p>
                       <p className="text-white text-sm">

@@ -18,8 +18,8 @@ export default function DataQualityBanner({ report }: Props) {
   if (!isIncomplete) return null;
 
   return (
-    <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-500 space-y-2">
-      <p className="font-medium text-gray-600 uppercase tracking-wider text-xs">
+    <div className="bg-[var(--surface)] border border-white/[0.08] rounded p-3 text-xs text-white/40 space-y-2">
+      <p className="text-[10px] font-semibold text-white/40 uppercase tracking-[0.3em]">
         Data Quality
       </p>
       <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -27,7 +27,7 @@ export default function DataQualityBanner({ report }: Props) {
         <span>Fatigue coverage: {coveragePct.fatigue}%</span>
         <span>Joint stress coverage: {coveragePct.jointStress}%</span>
       </div>
-      <p className="text-gray-400 leading-relaxed">{recommendation}</p>
+      <p className="text-white/25 leading-relaxed">{recommendation}</p>
     </div>
   );
 }

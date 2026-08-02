@@ -20,6 +20,7 @@ import AssignProgramButton from "@/components/hq/workspace/AssignProgramButton";
 import AssignProgramModal from "@/components/hq/workspace/AssignProgramModal";
 import ProgramTimeline from "@/components/hq/workspace/ProgramTimeline";
 import { Card, EmptyState, cx } from "@/components/ui";
+import { SEVERITY_DOT, SEVERITY_TEXT, SEVERITY_BAR, type Severity } from "@/lib/ui/status";
 import type {
   CoachClientWorkspace,
   ExercisePerformance,
@@ -58,47 +59,71 @@ function fmtRelative(d: Date | null): string {
   return `${Math.floor(diffDays / 7)}w ago`;
 }
 
-function attentionColor(level: AttentionLevel) {
-  const map: Record<AttentionLevel, string> = {
-    critical: "text-red-400",
-    high:     "text-amber-400",
-    medium:   "text-yellow-400",
-    healthy:  "text-emerald-400",
-  };
-  return map[level];
+// Every domain concept below (attention level, readiness %, readiness
+// section state, compliance %) maps into the shared Severity type
+// (lib/ui/status.ts) so their colors always agree with each other and
+// with every other severity indicator in HQ — no more independently
+// hand-tuned red/amber/yellow/emerald per concept.
+
+const ATTENTION_SEVERITY: Record<AttentionLevel, Severity> = {
+  critical: "critical",
+  high: "high",
+  medium: "caution",
+  healthy: "ok",
+};
+
+function attentionSeverity(level: AttentionLevel): Severity {
+  return ATTENTION_SEVERITY[level];
 }
 
+function attentionColor(level: AttentionLevel) {
+  return SEVERITY_TEXT[attentionSeverity(level)];
+}
+
+// Border + tinted bg for the attention pill/banner — built from the
+// same hue as SEVERITY_DOT/SEVERITY_TEXT for that severity.
+const SEVERITY_BORDER_BG: Record<Severity, string> = {
+  ok: "border-white/10 bg-white/[0.03]",
+  caution: "border-amber-500/25 bg-amber-500/[0.05]",
+  high: "border-orange-500/25 bg-orange-500/[0.05]",
+  critical: "border-red-500/25 bg-red-500/[0.05]",
+  unknown: "border-white/10 bg-white/[0.03]",
+};
+
 function attentionBorder(level: AttentionLevel) {
-  const map: Record<AttentionLevel, string> = {
-    critical: "border-red-500/25 bg-red-500/[0.05]",
-    high:     "border-amber-500/25 bg-amber-500/[0.05]",
-    medium:   "border-yellow-500/20 bg-yellow-500/[0.04]",
-    healthy:  "border-emerald-500/20 bg-emerald-500/[0.04]",
-  };
-  return map[level];
+  return SEVERITY_BORDER_BG[attentionSeverity(level)];
+}
+
+function readinessSeverity(pct: number): Severity {
+  if (pct >= 80) return "ok";
+  if (pct >= 50) return "caution";
+  return "critical";
 }
 
 function readinessColor(pct: number) {
-  if (pct >= 80) return "text-emerald-400";
-  if (pct >= 50) return "text-yellow-400";
-  return "text-red-400";
+  return SEVERITY_TEXT[readinessSeverity(pct)];
 }
 
+const READINESS_LEVEL_SEVERITY: Record<string, Severity> = {
+  complete: "ok",
+  partial: "caution",
+  missing: "critical",
+  not_applicable: "unknown",
+};
+
 function readinessBar(level: string) {
-  const map: Record<string, string> = {
-    complete: "bg-emerald-400",
-    partial: "bg-yellow-400",
-    missing: "bg-red-500/50",
-    not_applicable: "bg-gray-600",
-  };
-  return map[level] ?? "bg-gray-700";
+  return SEVERITY_BAR[READINESS_LEVEL_SEVERITY[level] ?? "unknown"];
+}
+
+function complianceSeverity(pct: number | null): Severity {
+  if (pct === null) return "unknown";
+  if (pct >= 75) return "ok";
+  if (pct >= 50) return "caution";
+  return "critical";
 }
 
 function complianceColor(pct: number | null) {
-  if (pct === null) return "text-gray-600";
-  if (pct >= 75) return "text-emerald-400";
-  if (pct >= 50) return "text-amber-400";
-  return "text-red-400";
+  return SEVERITY_TEXT[complianceSeverity(pct)];
 }
 
 function deltaIndicator(delta: number | null) {
@@ -124,9 +149,11 @@ function SectionHeader({ title, action }: { title: string; action?: React.ReactN
 // SECTION: CLIENT HEADER
 // ─────────────────────────────────────────────────────────────
 
+// "invited" uses sky (not blue) to match Badge's dark "info" variant —
+// the only other "info"-toned state used across HQ.
 const STATUS_PILL: Record<string, string> = {
   active: "border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-400",
-  invited: "border-blue-500/25 bg-blue-500/[0.06] text-blue-400",
+  invited: "border-sky-500/25 bg-sky-500/[0.06] text-sky-400",
   suspended: "border-red-500/25 bg-red-500/[0.06] text-red-400",
   archived: "border-white/10 bg-white/[0.04] text-white/40",
 };
@@ -149,7 +176,7 @@ function ClientHeader({
           <h1 className="text-2xl font-bold tracking-wide text-white">{displayName}</h1>
           <span
             className={cx(
-              "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[9px] uppercase tracking-[0.3em] font-semibold",
+              "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[9px] uppercase tracking-[0.25em] font-semibold",
               statusClass,
             )}
           >
@@ -207,9 +234,9 @@ function ClientHeader({
 function AttentionBanner({ level, reason }: { level: AttentionLevel; reason: string }) {
   if (level === "healthy") {
     return (
-      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3 flex items-center gap-3">
-        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-        <p className="text-emerald-400 text-xs font-medium">
+      <div className={cx("rounded-xl border px-4 py-3 flex items-center gap-3", attentionBorder(level))}>
+        <div className={cx("w-1.5 h-1.5 rounded-full shrink-0", SEVERITY_DOT[attentionSeverity(level)])} />
+        <p className={cx("text-xs font-medium", attentionColor(level))}>
           On Track — no immediate coaching action required.
         </p>
       </div>
@@ -220,7 +247,7 @@ function AttentionBanner({ level, reason }: { level: AttentionLevel; reason: str
     <div className={cx("rounded-xl border px-4 py-3 flex items-start gap-3", attentionBorder(level))}>
       <div className={cx(
         "w-1.5 h-1.5 rounded-full mt-1 shrink-0",
-        level === "critical" ? "bg-red-500" : level === "high" ? "bg-amber-400" : "bg-yellow-400",
+        SEVERITY_DOT[attentionSeverity(level)],
       )} />
       <div>
         <p className={cx("text-xs font-semibold uppercase tracking-[0.15em]", attentionColor(level))}>
@@ -256,7 +283,7 @@ function CoachingSnapshot({ w }: { w: CoachClientWorkspace }) {
     {
       label: "Last Workout",
       value: fmtRelative(stats.lastCompletedAt),
-      color: stats.completedLast7d > 0 ? "text-emerald-400" : "text-amber-400",
+      color: SEVERITY_TEXT[stats.completedLast7d > 0 ? "ok" : "caution"],
       sub: `${stats.completedLast7d} this week`,
     },
     {
@@ -297,7 +324,7 @@ function CoachingSnapshot({ w }: { w: CoachClientWorkspace }) {
           <Card key={label} tone="dark" padding="sm" className="relative overflow-hidden">
             <div className="h-px absolute top-0 inset-x-0 bg-gradient-to-r from-transparent via-white/[0.05] to-transparent" />
             <p className={cx("text-2xl font-bold tabular-nums leading-none mb-1.5", color)}>{value}</p>
-            <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] leading-relaxed">{label}</p>
+            <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em] leading-relaxed">{label}</p>
             {sub && <p className="text-[9px] text-gray-600 mt-0.5">{sub}</p>}
           </Card>
         ))}
@@ -329,7 +356,7 @@ function TrainingPerformance({
 
       {/* A: Recent sessions */}
       <div>
-        <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">Recent Sessions</p>
+        <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em] mb-2">Recent Sessions</p>
         {recentSessions.length === 0 ? (
           <EmptyState tone="dark" title="No sessions recorded yet." />
         ) : (
@@ -369,7 +396,7 @@ function TrainingPerformance({
 
       {/* B: Volume summary */}
       <div>
-        <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">Volume Summary</p>
+        <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em] mb-2">Volume Summary</p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {[
             {
@@ -395,7 +422,7 @@ function TrainingPerformance({
           ].map(({ label, value }) => (
             <Card key={label} tone="dark" padding="sm">
               <p className="text-base font-bold text-white tabular-nums">{value}</p>
-              <p className="text-[9px] text-gray-600 uppercase tracking-[0.25em] mt-1">{label}</p>
+              <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] mt-1">{label}</p>
             </Card>
           ))}
         </div>
@@ -409,7 +436,7 @@ function TrainingPerformance({
       {/* C: Exercise highlights */}
       {exerciseHighlights.length > 0 && (
         <div>
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">
+          <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em] mb-2">
             Exercise Performance (last 90d)
           </p>
           <div className="space-y-1.5">
@@ -471,7 +498,7 @@ function BodyProgress({
           <Card tone="dark" padding="sm" className="space-y-3">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em]">Weight</p>
+                <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em]">Weight</p>
                 <p className="text-white text-2xl font-bold tabular-nums leading-tight">
                   {latest.weightPounds !== null ? `${latest.weightPounds} lb` : "—"}
                 </p>
@@ -495,14 +522,14 @@ function BodyProgress({
               </div>
               {latest.bodyFatPercent !== null && (
                 <div className="text-right">
-                  <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em]">Body Fat</p>
+                  <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em]">Body Fat</p>
                   <p className="text-white text-xl font-bold">{latest.bodyFatPercent}%</p>
                 </div>
               )}
             </div>
             {latest.waistInches !== null && (
               <div>
-                <p className="text-[9px] text-gray-600 uppercase tracking-[0.2em]">Waist</p>
+                <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em]">Waist</p>
                 <p className="text-gray-300 text-sm font-medium">{latest.waistInches}&quot;</p>
               </div>
             )}
@@ -514,7 +541,7 @@ function BodyProgress({
           {/* Mini sparkline (weight trend) */}
           {history.length >= 2 && (
             <Card tone="dark" padding="sm">
-              <p className="text-[9px] text-gray-600 uppercase tracking-[0.2em] mb-2">Weight Trend</p>
+              <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] mb-2">Weight Trend</p>
               <WeightSparkline records={history} />
             </Card>
           )}
@@ -607,14 +634,14 @@ function GoalsReadiness({
 
       {/* Goals */}
       <div>
-        <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">Active Goals</p>
+        <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em] mb-2">Active Goals</p>
         <GoalManager goals={goals} clientId={clientId} />
       </div>
 
       {/* Profile readiness */}
       <Card tone="dark" padding="sm">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em]">Profile Readiness</p>
+          <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em]">Profile Readiness</p>
           <p className={cx("text-sm font-bold tabular-nums", readinessColor(readiness.overallPercent))}>
             {readiness.overallPercent}%
           </p>
@@ -638,7 +665,7 @@ function GoalsReadiness({
 
         {readiness.blockersForWorkoutGeneration.length > 0 && (
           <div className="mt-3 space-y-1">
-            <p className="text-[9px] text-gray-600 uppercase tracking-[0.2em]">Blockers</p>
+            <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em]">Blockers</p>
             {readiness.blockersForWorkoutGeneration.map((b, i) => (
               <p key={i} className="text-[10px] text-amber-400/70 flex items-start gap-1">
                 <span className="shrink-0 mt-px">·</span>
@@ -660,7 +687,7 @@ function ProfileRow({ label, value }: { label: string; value: string | number | 
   if (value === null || value === undefined || value === "") return null;
   return (
     <div className="flex items-start gap-2 py-1 border-b border-white/[0.04] last:border-0">
-      <p className="text-[9px] text-gray-600 uppercase tracking-[0.2em] w-28 shrink-0 pt-px">{label}</p>
+      <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] w-28 shrink-0 pt-px">{label}</p>
       <p className="text-xs text-gray-300">{String(value)}</p>
     </div>
   );
@@ -700,7 +727,7 @@ function ProfileSummary({ w }: { w: CoachClientWorkspace }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Training */}
         <Card tone="dark" padding="sm">
-          <p className="text-[10px] text-gray-400 uppercase tracking-[0.35em] mb-3">Training</p>
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-[0.4em] mb-3">Training</p>
           {tp ? (
             <div>
               <ProfileRow label="Experience" value={tp.experienceLevel ?? null} />
@@ -718,7 +745,7 @@ function ProfileSummary({ w }: { w: CoachClientWorkspace }) {
 
         {/* Nutrition */}
         <Card tone="dark" padding="sm">
-          <p className="text-[10px] text-gray-400 uppercase tracking-[0.35em] mb-3">Nutrition</p>
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-[0.4em] mb-3">Nutrition</p>
           {np ? (
             <div>
               <ProfileRow label="Meals/Day" value={np.currentMealsPerDay ?? null} />
@@ -739,7 +766,7 @@ function ProfileSummary({ w }: { w: CoachClientWorkspace }) {
 
         {/* Preferences */}
         <Card tone="dark" padding="sm">
-          <p className="text-[10px] text-gray-400 uppercase tracking-[0.35em] mb-3">Preferences</p>
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-[0.4em] mb-3">Preferences</p>
           {prefs ? (
             <div>
               <ProfileRow label="Communication" value={prefs.communicationPreference ?? null} />
@@ -952,18 +979,18 @@ export default async function ClientWorkspacePage({
               <p className="text-2xl font-bold text-white tabular-nums">
                 {checkInSummary.totalCheckIns}
               </p>
-              <p className="text-[9px] text-gray-600 uppercase tracking-[0.25em] mt-1">
+              <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] mt-1">
                 Total Check-Ins
               </p>
             </Card>
             <Card tone="dark" padding="sm">
               <p className={cx(
                 "text-2xl font-bold tabular-nums",
-                checkInSummary.pendingCount > 0 ? "text-blue-400" : "text-white",
+                checkInSummary.pendingCount > 0 ? SEVERITY_TEXT.caution : "text-white",
               )}>
                 {checkInSummary.pendingCount}
               </p>
-              <p className="text-[9px] text-gray-600 uppercase tracking-[0.25em] mt-1">
+              <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] mt-1">
                 Pending Review
               </p>
             </Card>
@@ -973,7 +1000,7 @@ export default async function ClientWorkspacePage({
                   <p className="text-sm font-semibold text-white">
                     Week of {fmtDate(checkInSummary.lastCheckIn.weekStartDate, true)}
                   </p>
-                  <p className="text-[9px] text-gray-600 uppercase tracking-[0.25em] mt-1">
+                  <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] mt-1">
                     Last Check-In · {checkInSummary.lastCheckIn.status}
                   </p>
                   <Link

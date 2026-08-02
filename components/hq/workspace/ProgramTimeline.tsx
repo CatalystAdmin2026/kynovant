@@ -45,10 +45,14 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Archived",
 };
 
+// "completed" reads as a finished/successful program run — same
+// emerald "success" language the timeline already uses for completed
+// weeks — not an "info" (sky) state, which would introduce a 3rd hue
+// into a list that's otherwise just emerald/neutral.
 const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
   active: "success",
   inactive: "neutral",
-  completed: "info",
+  completed: "success",
   cancelled: "neutral",
 };
 
@@ -96,7 +100,7 @@ function WeekRow({
         <div
           className={`h-3 w-3 rounded-full border-2 transition-colors duration-150 ${
             status === "completed"
-              ? "border-emerald-500/60 bg-emerald-500/30"
+              ? "border-emerald-500/40 bg-emerald-500/15"
               : status === "current"
               ? "border-[#C9A24D] bg-[#C9A24D]"
               : "border-white/[0.10] bg-transparent"
@@ -134,7 +138,7 @@ function WeekRow({
             Week {weekNumber}
           </span>
           {status === "current" && (
-            <span className="text-[8px] font-semibold uppercase tracking-[0.25em] text-[#C9A24D]/70">
+            <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-[#C9A24D]/70">
               Current
             </span>
           )}
@@ -144,7 +148,7 @@ function WeekRow({
           <Check size={12} strokeWidth={3} className="text-emerald-400" />
         )}
         {status === "upcoming" && (
-          <span className="text-[9px] uppercase tracking-[0.15em] text-white/25">Upcoming</span>
+          <span className="text-[9px] uppercase tracking-[0.25em] text-white/25">Upcoming</span>
         )}
       </div>
     </div>
@@ -216,7 +220,7 @@ function ActiveTimeline({
         {program.programCompletionPct !== null && (
           <div className="mt-4">
             <div className="mb-1.5 flex items-center justify-between">
-              <p className="text-[9px] uppercase tracking-[0.2em] text-white/30">Progress</p>
+              <p className="text-[9px] uppercase tracking-[0.25em] text-white/30">Progress</p>
               <p className="text-[10px] font-bold text-[#C9A24D]">
                 {program.programCompletionPct}%
               </p>
@@ -234,16 +238,16 @@ function ActiveTimeline({
         {totalWeeks > 0 && (
           <div className="mt-3 flex items-center gap-4 border-t border-white/[0.04] pt-3">
             <div>
-              <p className="text-[9px] uppercase tracking-[0.15em] text-white/30">Completed</p>
+              <p className="text-[9px] uppercase tracking-[0.25em] text-white/30">Completed</p>
               <p className="text-sm font-bold text-emerald-400">{completedWeeks}</p>
             </div>
             <div>
-              <p className="text-[9px] uppercase tracking-[0.15em] text-white/30">Remaining</p>
+              <p className="text-[9px] uppercase tracking-[0.25em] text-white/30">Remaining</p>
               <p className="text-sm font-bold text-white/70">{upcomingWeeks}</p>
             </div>
             {program.recommendedDaysPerWeek && (
               <div>
-                <p className="text-[9px] uppercase tracking-[0.15em] text-white/30">Days/Wk</p>
+                <p className="text-[9px] uppercase tracking-[0.25em] text-white/30">Days/Wk</p>
                 <p className="text-sm font-bold text-white/70">{program.recommendedDaysPerWeek}</p>
               </div>
             )}

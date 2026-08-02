@@ -106,7 +106,7 @@ export default async function ClientNutritionPage({
   const archivedTargets = history.filter((t) => t.status === "archived");
 
   return (
-    <div className="min-h-screen bg-[#070809] text-white">
+    <div className="min-h-screen text-white">
       <div className="max-w-3xl mx-auto px-6 py-10">
 
         {/* Breadcrumbs */}
@@ -124,7 +124,7 @@ export default async function ClientNutritionPage({
 
           {/* Back link */}
           <div className="flex items-center justify-between mb-8">
-            <p className="text-[9px] text-white/18 uppercase tracking-[0.5em]">Nutrition</p>
+            <p className="text-[9px] text-white/18 uppercase tracking-[0.3em]">Nutrition</p>
             <Link
               href={`/hq/clients/${clientId}`}
               className="inline-flex items-center gap-1.5 text-[10px] text-white/20 hover:text-white/45 transition-colors"
@@ -134,8 +134,9 @@ export default async function ClientNutritionPage({
             </Link>
           </div>
 
-          {/* Name */}
-          <h1 className="text-3xl font-light tracking-tight text-white mb-5">
+          {/* Name — matches the "client name" weight/size used on the
+              client detail and session-history pages. */}
+          <h1 className="text-2xl font-bold tracking-wide text-white mb-5">
             {displayName}
           </h1>
 
@@ -167,17 +168,17 @@ export default async function ClientNutritionPage({
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3 flex-wrap">
               {activeTarget ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.3em] text-emerald-400">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.25em] text-emerald-400">
                   <CheckCircle2 size={11} aria-hidden />
                   Targets Published
                 </span>
               ) : draftTargets.length > 0 ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.3em] text-amber-400">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.25em] text-amber-400">
                   <Clock size={11} aria-hidden />
                   Draft Ready
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.3em] text-white/25">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.25em] text-white/25">
                   <Circle size={11} aria-hidden />
                   No Targets Set
                 </span>
@@ -221,7 +222,7 @@ export default async function ClientNutritionPage({
         {archivedTargets.length > 0 && (
           <div className="mt-14">
             <div className="flex items-center gap-4 mb-5">
-              <p className="flex items-center gap-2 text-[9px] text-white/20 uppercase tracking-[0.45em] shrink-0">
+              <p className="flex items-center gap-2 text-[9px] text-white/20 uppercase tracking-[0.3em] shrink-0">
                 <Archive size={11} aria-hidden />
                 Archive
               </p>

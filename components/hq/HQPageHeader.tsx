@@ -12,7 +12,7 @@ export default function HQPageHeader({ title, subtitle, action }: Props) {
           {title}
         </h1>
         {subtitle && (
-          <p className="text-gray-500 text-sm leading-relaxed max-w-xl">{subtitle}</p>
+          <p className="text-white/40 text-sm leading-relaxed max-w-xl">{subtitle}</p>
         )}
       </div>
       {action && <div className="shrink-0 pt-1">{action}</div>}

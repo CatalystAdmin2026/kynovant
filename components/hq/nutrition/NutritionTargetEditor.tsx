@@ -364,7 +364,7 @@ export default function NutritionTargetEditor({
       {activeTarget && (
         <Card tone="dark" padding="lg" className="mb-8">
           <div className="flex items-center justify-between gap-4 mb-7">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.3em] text-emerald-400">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.3em] text-emerald-400">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden />
               Published
             </span>
@@ -580,7 +580,7 @@ export default function NutritionTargetEditor({
                 </div>
               </div>
             ) : (
-              <div className="flex items-start gap-3 rounded-lg border border-amber-500/15 bg-amber-500/[0.04] px-5 py-4">
+              <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-5 py-4">
                 <AlertCircle size={14} className="mt-0.5 shrink-0 text-amber-400/50" aria-hidden />
                 <p className="text-xs leading-relaxed text-amber-400/50">
                   The calculator requires height, weight, and date of birth from the
@@ -740,7 +740,7 @@ export default function NutritionTargetEditor({
             {/* Guidance preview */}
             {coachNotes.trim() && (
               <div className="mb-4 border-t border-white/[0.05] pt-4">
-                <p className="mb-2 text-[9px] uppercase tracking-[0.35em] text-gold/28">
+                <p className="mb-2 text-[9px] uppercase tracking-[0.3em] text-gold/28">
                   Guidance
                 </p>
                 <p className="line-clamp-2 text-xs leading-relaxed text-white/28">

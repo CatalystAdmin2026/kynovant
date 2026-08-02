@@ -2,6 +2,8 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import type { PerMuscleWeeklyBriefData, PerMuscleWeekRow, MuscleGroup } from "@/lib/pil/types";
+import { SEVERITY_DOT } from "@/lib/ui/status";
+import { StatusChip } from "@/components/ui";
 
 // ─── Muscle group metadata ────────────────────────────────────────────────────
 
@@ -57,21 +59,13 @@ function RecoveryChip({ row }: { row: PerMuscleWeekRow }) {
   if (row.minRecoveryDays === null) return null;
 
   if (row.recoveryStatus === "same_day") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-red-100 text-red-700">
-        Same day
-      </span>
-    );
+    return <StatusChip tone="dark" status="critical" label="Same day" size="sm" />;
   }
   if (row.recoveryStatus === "consecutive") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700">
-        Back-to-back
-      </span>
-    );
+    return <StatusChip tone="dark" status="caution" label="Back-to-back" size="sm" />;
   }
   return (
-    <span className="text-xs text-gray-400 tabular-nums">
+    <span className="text-xs text-white/40 tabular-nums">
       {row.minRecoveryDays}d
     </span>
   );
@@ -132,12 +126,12 @@ function SortableHeader({
   const isActive = colKey === activeKey;
   return (
     <th
-      className={`text-right text-[10px] font-medium text-gray-400 uppercase tracking-wider cursor-pointer select-none whitespace-nowrap pb-2 ${className}`}
+      className={`text-right text-[10px] font-medium text-white/40 uppercase tracking-wider cursor-pointer select-none whitespace-nowrap pb-2 ${className}`}
       onClick={() => onSort(colKey)}
     >
       {label}
       {isActive && (
-        <span className="ml-0.5 text-gray-300">{dir === "desc" ? " ↓" : " ↑"}</span>
+        <span className="ml-0.5 text-white/25">{dir === "desc" ? " ↓" : " ↑"}</span>
       )}
     </th>
   );
@@ -187,7 +181,7 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
 
   if (data.rows.length === 0) {
     return (
-      <div className="py-8 text-center text-xs text-gray-400">
+      <div className="py-8 text-center text-xs text-white/40">
         No training data — add blueprints to program days to generate weekly brief.
       </div>
     );
@@ -210,8 +204,8 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
             onClick={() => setFilter(key)}
             className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
               filter === key
-                ? "bg-gray-900 text-white"
-                : "text-gray-400 hover:text-gray-700"
+                ? "bg-gold text-black"
+                : "text-white/40 hover:text-white/70"
             }`}
           >
             {label}
@@ -222,7 +216,7 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
       {/* Table */}
       <table className="w-full text-sm border-collapse">
         <thead>
-          <tr className="border-b border-gray-100">
+          <tr className="border-b border-white/[0.08]">
             <SortableHeader
               label="Muscle"
               colKey="muscle"
@@ -255,7 +249,7 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
               onSort={handleSort}
               className="pr-3"
             />
-            <th className="text-right text-[10px] font-medium text-gray-400 uppercase tracking-wider pb-2 pr-3 whitespace-nowrap">
+            <th className="text-right text-[10px] font-medium text-white/40 uppercase tracking-wider pb-2 pr-3 whitespace-nowrap">
               Days
             </th>
             <SortableHeader
@@ -267,7 +261,7 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
             />
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-50">
+        <tbody className="divide-y divide-white/[0.06]">
           {filtered.map((row) => {
             const hasAlert =
               row.recoveryStatus === "same_day" || row.recoveryStatus === "consecutive";
@@ -282,32 +276,32 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
                 }}
                 className={`transition-colors duration-200 ${
                   isHighlighted
-                    ? "bg-blue-50 ring-1 ring-inset ring-blue-200"
+                    ? "bg-[#C9A24D]/[0.06] ring-1 ring-inset ring-[#C9A24D]/25"
                     : hasAlert
-                    ? "bg-amber-50/40"
+                    ? "bg-amber-500/[0.06]"
                     : ""
-                } hover:bg-gray-50/60`}
+                } hover:bg-white/[0.04]`}
               >
                 {/* Muscle name */}
-                <td className="py-2.5 pr-3 font-medium text-gray-800 text-xs whitespace-nowrap">
+                <td className="py-2.5 pr-3 font-medium text-white/70 text-xs whitespace-nowrap">
                   {hasAlert && row.recoveryStatus === "same_day" && (
-                    <span className="inline-block w-1 h-1 rounded-full bg-red-400 mr-1.5 mb-0.5" />
+                    <span className={`inline-block w-1 h-1 rounded-full ${SEVERITY_DOT.critical} mr-1.5 mb-0.5`} />
                   )}
                   {hasAlert && row.recoveryStatus === "consecutive" && (
-                    <span className="inline-block w-1 h-1 rounded-full bg-amber-400 mr-1.5 mb-0.5" />
+                    <span className={`inline-block w-1 h-1 rounded-full ${SEVERITY_DOT.caution} mr-1.5 mb-0.5`} />
                   )}
                   {MUSCLE_LABELS[row.muscleGroup] ?? row.muscleGroup}
                 </td>
 
                 {/* Direct sets */}
-                <td className="py-2.5 pr-3 text-right tabular-nums text-xs text-gray-700 font-medium">
+                <td className="py-2.5 pr-3 text-right tabular-nums text-xs text-white/70 font-medium">
                   {row.directSetsPerWeek % 1 === 0
                     ? row.directSetsPerWeek
                     : row.directSetsPerWeek.toFixed(1)}
                 </td>
 
                 {/* Indirect sets */}
-                <td className="py-2.5 pr-3 text-right tabular-nums text-xs text-gray-400">
+                <td className="py-2.5 pr-3 text-right tabular-nums text-xs text-white/40">
                   {row.indirectSetsPerWeek > 0
                     ? row.indirectSetsPerWeek % 1 === 0
                       ? row.indirectSetsPerWeek
@@ -316,7 +310,7 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
                 </td>
 
                 {/* Sessions per week */}
-                <td className="py-2.5 pr-3 text-right tabular-nums text-xs text-gray-600">
+                <td className="py-2.5 pr-3 text-right tabular-nums text-xs text-white/40">
                   {row.sessionsPerWeek % 1 === 0
                     ? row.sessionsPerWeek
                     : row.sessionsPerWeek.toFixed(1)}
@@ -332,8 +326,8 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
                         title={label}
                         className={`inline-block w-3.5 h-3.5 rounded-sm text-[7px] flex items-center justify-center font-medium ${
                           row.trainingDays.includes(idx)
-                            ? "bg-gray-800 text-white"
-                            : "bg-gray-100 text-gray-300"
+                            ? "bg-white/70 text-[#0d0e0f]"
+                            : "bg-white/[0.06] text-white/20"
                         }`}
                       >
                         {label[0]}
@@ -353,13 +347,13 @@ export default function PerMuscleWeeklyBrief({ data, highlightedMuscle }: Props)
       </table>
 
       {filtered.length === 0 && (
-        <p className="text-center text-xs text-gray-400 py-4">
+        <p className="text-center text-xs text-white/40 py-4">
           No {filter} body muscles in this program.
         </p>
       )}
 
       {/* Footer metadata */}
-      <div className="mt-3 flex gap-4 text-[10px] text-gray-300">
+      <div className="mt-3 flex gap-4 text-[10px] text-white/25">
         <span>{data.weekCount} week{data.weekCount !== 1 ? "s" : ""}</span>
         <span>{data.distinctBlueprintsAnalyzed} blueprint{data.distinctBlueprintsAnalyzed !== 1 ? "s" : ""} analyzed</span>
         <span>Sets averaged per week</span>
