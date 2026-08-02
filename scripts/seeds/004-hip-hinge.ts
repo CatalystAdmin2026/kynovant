@@ -3,7 +3,7 @@
 // Catalyst OS — Exercise Library Seed 004: Hip Hinge
 //
 // Usage:
-//   source .env.local && npx tsx scripts/seeds/004-hip-hinge.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seeds/004-hip-hinge.ts
 //
 // Covers:
 //   Hip hinge — barbell, dumbbell, kettlebell, machine

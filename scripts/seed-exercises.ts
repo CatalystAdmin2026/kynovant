@@ -3,7 +3,7 @@
 // Catalyst OS — Exercise Library Dev Seed (Sprint 5C.1)
 //
 // Usage (run AFTER applying the Sprint 5C.1 migration):
-//   source .env.local && npx tsx scripts/seed-exercises.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seed-exercises.ts
 //
 // Requires DATABASE_URL_DIRECT in the environment.
 // Idempotent — safe to run multiple times. Uses ON CONFLICT DO NOTHING

@@ -9,6 +9,14 @@
 -- Because GENERATED ALWAYS columns cannot be altered in-place, the column
 -- must be dropped and re-added. Postgres will recompute the value for every
 -- existing row at migration time.
+--
+-- NOTE: PostgreSQL generated-column expressions must be immutable and may
+-- not contain subqueries — ARRAY(SELECT jsonb_array_elements_text(...))
+-- is a subquery and fails with "cannot use subquery in column generation
+-- expression". alternate_names is included instead via a direct ::text
+-- cast; to_tsvector's parser treats the surrounding JSON punctuation
+-- (brackets, quotes, commas) as token separators, so this still indexes
+-- each alias as its own lexeme without needing a subquery.
 -- ─────────────────────────────────────────────────────────────
 
 -- 1. Drop the GIN index before dropping the column
@@ -25,13 +33,7 @@ ALTER TABLE "exercises"
         'english',
         "name" || ' ' ||
         coalesce("default_notes", '') || ' ' ||
-        coalesce(
-          array_to_string(
-            ARRAY(SELECT jsonb_array_elements_text("alternate_names")),
-            ' '
-          ),
-          ''
-        )
+        coalesce("alternate_names"::text, '')
       )
     ) STORED;
 

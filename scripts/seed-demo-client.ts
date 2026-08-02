@@ -7,7 +7,7 @@
 // the canonical Catalyst demo account across all future modules.
 //
 // Usage:
-//   source .env.local && \
+//   set -a && source .env.local && set +a && \
 //   DEMO_CLIENT_EMAIL=emma@example.com npx tsx scripts/seed-demo-client.ts
 //
 // Or set a default in .env.local:
@@ -55,14 +55,14 @@ import { clientNotifications } from "../lib/db/schema-notifications";
 const rawUrl = process.env.DATABASE_URL_DIRECT;
 if (!rawUrl) {
   console.error("ERROR: DATABASE_URL_DIRECT is not set.");
-  console.error("  Run: source .env.local && DEMO_CLIENT_EMAIL=you@example.com npx tsx scripts/seed-demo-client.ts");
+  console.error("  Run: set -a && source .env.local && set +a && DEMO_CLIENT_EMAIL=you@example.com npx tsx scripts/seed-demo-client.ts");
   process.exit(1);
 }
 
 const DEMO_CLIENT_EMAIL = (process.env.DEMO_CLIENT_EMAIL ?? "").toLowerCase().trim();
 if (!DEMO_CLIENT_EMAIL) {
   console.error("ERROR: DEMO_CLIENT_EMAIL is not set.");
-  console.error("  Run: DEMO_CLIENT_EMAIL=you@example.com source .env.local && npx tsx scripts/seed-demo-client.ts");
+  console.error("  Run: DEMO_CLIENT_EMAIL=you@example.com set -a && source .env.local && set +a && npx tsx scripts/seed-demo-client.ts");
   process.exit(1);
 }
 

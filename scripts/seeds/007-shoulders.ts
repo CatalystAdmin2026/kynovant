@@ -3,7 +3,7 @@
 // Catalyst OS — Exercise Library Seed 007: Shoulders
 //
 // Usage:
-//   source .env.local && npx tsx scripts/seeds/007-shoulders.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seeds/007-shoulders.ts
 //
 // Covers:
 //   Shoulder abduction — lateral deltoid isolation: dumbbell, cable,

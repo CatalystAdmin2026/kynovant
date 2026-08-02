@@ -7,7 +7,7 @@
 // every issue as a prioritized bug list without fixing anything.
 //
 // Usage:
-//   source .env.local && npx tsx scripts/acceptance-test-sprint61.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/acceptance-test-sprint61.ts
 //
 // Prerequisites:
 //   - Run scripts/create-sprint61-fixtures.ts first
@@ -26,7 +26,7 @@ import { clientPrograms, programWeeks, programWeekDays, workoutSessions, workout
 
 const rawUrl = process.env.DATABASE_URL_DIRECT;
 if (!rawUrl) {
-  console.error("DATABASE_URL_DIRECT is not set. Run: source .env.local");
+  console.error("DATABASE_URL_DIRECT is not set. Run: set -a && source .env.local && set +a");
   process.exit(1);
 }
 

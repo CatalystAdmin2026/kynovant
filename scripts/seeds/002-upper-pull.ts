@@ -3,7 +3,7 @@
 // Catalyst OS — Exercise Library Seed 002: Upper Body Pull
 //
 // Usage:
-//   source .env.local && npx tsx scripts/seeds/002-upper-pull.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seeds/002-upper-pull.ts
 //
 // Covers:
 //   Horizontal pull — barbell, dumbbell, cable, machine, bodyweight

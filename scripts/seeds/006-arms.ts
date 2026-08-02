@@ -3,7 +3,7 @@
 // Catalyst OS — Exercise Library Seed 006: Arms
 //
 // Usage:
-//   source .env.local && npx tsx scripts/seeds/006-arms.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seeds/006-arms.ts
 //
 // Covers:
 //   Elbow flexion — barbell, EZ-bar, dumbbell, cable, machine, band curls

@@ -19,7 +19,7 @@
 //      • No redundant exercise pairs
 //
 // Usage:
-//   source .env.local && npx tsx scripts/seed-pil-demo.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seed-pil-demo.ts
 //
 // Idempotency:
 //   Cleans up sentinel-tagged templates before reseeding.

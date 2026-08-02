@@ -3,7 +3,7 @@
 // Catalyst OS — Exercise Library Seed 003: Lower Body Quad-Dominant
 //
 // Usage:
-//   source .env.local && npx tsx scripts/seeds/003-lower-quad.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seeds/003-lower-quad.ts
 //
 // Covers:
 //   Bilateral squat — barbell, smith/machine, dumbbell/kettlebell, bodyweight

@@ -10,7 +10,7 @@
 // Run AFTER seed-demo-client.ts (requires client profile to exist).
 //
 // Usage:
-//   source .env.local && \
+//   set -a && source .env.local && set +a && \
 //   DEMO_CLIENT_EMAIL=you@example.com npx tsx scripts/seed-demo-programs.ts
 //
 // Requires:

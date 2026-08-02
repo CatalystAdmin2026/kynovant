@@ -339,7 +339,7 @@ A template must have zero errors before it can be published (`status = active`).
 `scripts/seed-exercises.ts` seeds 15 representative exercises for local development and testing. Run after applying the Sprint 5C.1 migration:
 
 ```bash
-source .env.local && npx tsx scripts/seed-exercises.ts
+set -a && source .env.local && set +a && npx tsx scripts/seed-exercises.ts
 ```
 
 The script is **idempotent** — all inserts use `ON CONFLICT DO NOTHING`. Re-running it will not create duplicates.

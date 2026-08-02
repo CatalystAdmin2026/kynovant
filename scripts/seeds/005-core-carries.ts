@@ -3,7 +3,7 @@
 // Catalyst OS — Exercise Library Seed 005: Core & Carries
 //
 // Usage:
-//   source .env.local && npx tsx scripts/seeds/005-core-carries.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seeds/005-core-carries.ts
 //
 // Covers:
 //   Anti-rotation — pallof press, ab wheel, dead bug, bird dog

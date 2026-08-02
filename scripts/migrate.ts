@@ -8,7 +8,7 @@
 //
 // Requires DATABASE_URL_DIRECT in the environment.
 // Load from .env.local before calling:
-//   source .env.local && npx tsx scripts/migrate.ts <file>
+//   set -a && source .env.local && set +a && npx tsx scripts/migrate.ts <file>
 //
 // When to use this script vs. drizzle-kit migrate:
 //   - drizzle-kit migrate is preferred for standard Drizzle-generated

@@ -3,7 +3,7 @@
 // Catalyst OS — Exercise Library Seed 001: Upper Body Push
 //
 // Usage:
-//   source .env.local && npx tsx scripts/seeds/001-upper-push.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/seeds/001-upper-push.ts
 //
 // Covers:
 //   Horizontal push — barbell, dumbbell, cable, machine, bodyweight
