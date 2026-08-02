@@ -2,8 +2,26 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Star } from "lucide-react";
+import { Star, Plus, Dumbbell } from "lucide-react";
 import HQPageHeader from "@/components/hq/HQPageHeader";
+import {
+  Button,
+  Card,
+  Badge,
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  Input,
+  Select,
+  Label,
+  FieldError,
+  SkeletonTableRow,
+  EmptyState,
+} from "@/components/ui";
+import type { BadgeVariant } from "@/components/ui";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -51,20 +69,18 @@ function fmtLabel(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function statusCls(s: string) {
-  if (s === "active") return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-  if (s === "archived") return "bg-gray-500/10 text-gray-500 border border-gray-500/20";
-  return "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+function statusVariant(s: string): BadgeVariant {
+  if (s === "active") return "success";
+  if (s === "archived") return "neutral";
+  return "warning";
 }
 
-function scopeCls(s: string) {
-  if (s === "system") return "text-white/25 border border-white/10";
-  if (s === "coach") return "text-[#C9A24D]/70 border border-[#C9A24D]/20";
-  return "text-white/20 border border-white/08";
+function scopeVariant(s: string): BadgeVariant {
+  return s === "coach" ? "gold" : "neutral";
 }
 
 function fatigueDots(cost: number | null) {
-  if (cost === null) return null;
+  if (cost === null) return <span className="text-white/15 text-xs">—</span>;
   const filled = Math.round((cost / 10) * 5);
   return (
     <span className="flex gap-0.5 items-center" title={`Fatigue: ${cost}/10`}>
@@ -122,85 +138,69 @@ function NewExerciseForm({ onCreated, onCancel }: NewExerciseFormProps) {
   }
 
   return (
-    <div className="mb-8 bg-[#0d0e0f] border border-[#C9A24D]/30 p-6">
+    <Card tone="dark" padding="md" className="mb-8 !border-[#C9A24D]/30">
       <p className="text-white font-semibold text-sm mb-5 tracking-wide">New Exercise</p>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1.5">
-              Name *
-            </label>
-            <input
+            <Label tone="dark">Name *</Label>
+            <Input
+              tone="dark"
               type="text"
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               placeholder="e.g. Romanian Deadlift"
               autoFocus
-              className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2.5 text-sm focus:outline-none focus:border-[#C9A24D]/50 placeholder-gray-700"
             />
           </div>
           <div>
-            <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1.5">
-              Movement Pattern *
-            </label>
-            <select
+            <Label tone="dark">Movement Pattern *</Label>
+            <Select
+              tone="dark"
               value={form.movementPattern}
               onChange={(e) => setForm((f) => ({ ...f, movementPattern: e.target.value }))}
-              className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2.5 text-sm focus:outline-none focus:border-[#C9A24D]/50"
             >
               {["hip_hinge","squat_bilateral","squat_unilateral","lunge","push_vertical","push_horizontal","pull_vertical","pull_horizontal","carry","rotation","anti_rotation","gait","jump","iso_hold","elbow_flexion","elbow_extension","shoulder_abduction","knee_flexion","knee_extension","hip_extension","hip_flexion","scapular_retraction","external_rotation","internal_rotation"].map((p) => (
                 <option key={p} value={p}>{fmtLabel(p)}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
-            <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1.5">
-              Classification *
-            </label>
-            <select
+            <Label tone="dark">Classification *</Label>
+            <Select
+              tone="dark"
               value={form.classification}
               onChange={(e) => setForm((f) => ({ ...f, classification: e.target.value }))}
-              className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2.5 text-sm focus:outline-none focus:border-[#C9A24D]/50"
             >
               {["compound","isolation","cardio","mobility","power","skill"].map((c) => (
                 <option key={c} value={c}>{fmtLabel(c)}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
-            <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1.5">
-              Difficulty *
-            </label>
-            <select
+            <Label tone="dark">Difficulty *</Label>
+            <Select
+              tone="dark"
               value={form.difficulty}
               onChange={(e) => setForm((f) => ({ ...f, difficulty: e.target.value }))}
-              className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2.5 text-sm focus:outline-none focus:border-[#C9A24D]/50"
             >
               {["beginner","intermediate","advanced","specialist"].map((d) => (
                 <option key={d} value={d}>{fmtLabel(d)}</option>
               ))}
-            </select>
+            </Select>
           </div>
         </div>
-        {error && <p className="text-red-400 text-xs">{error}</p>}
+        <FieldError>{error}</FieldError>
         <div className="flex gap-3">
-          <button
-            type="submit"
-            disabled={creating}
-            className="bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.3em] uppercase px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
-          >
+          <Button type="submit" variant="primary" tone="dark" loading={creating}>
             {creating ? "Creating…" : "Create Exercise"}
-          </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="text-gray-600 text-[11px] tracking-wide hover:text-gray-400 transition-colors px-3"
-          >
+          </Button>
+          <Button type="button" variant="ghost" tone="dark" onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         </div>
       </form>
-    </div>
+    </Card>
   );
 }
 
@@ -208,7 +208,7 @@ function NewExerciseForm({ onCreated, onCancel }: NewExerciseFormProps) {
 // EXERCISE ROW
 // ─────────────────────────────────────────────────────────────
 
-function ExerciseListRow({
+function ExerciseTableRow({
   exercise,
   onFavoriteToggle,
 }: {
@@ -231,51 +231,51 @@ function ExerciseListRow({
   }
 
   return (
-    <div className="bg-[#0d0e0f] border border-white/[0.06] px-5 py-4 flex flex-wrap items-center gap-x-5 gap-y-2 hover:border-white/10 transition-colors">
-      {/* Star */}
-      <button
-        onClick={handleStar}
-        disabled={starring}
-        aria-label={exercise.isFavorited ? "Remove from favorites" : "Add to favorites"}
-        className={`shrink-0 transition-colors ${exercise.isFavorited ? "text-[#C9A24D]" : "text-white/20 hover:text-white/45"}`}
-      >
-        <Star size={13} fill={exercise.isFavorited ? "currentColor" : "none"} />
-      </button>
-
-      {/* Identity */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-white font-semibold text-sm">{exercise.name}</span>
-          <span className={`px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ${statusCls(exercise.status)}`}>
-            {exercise.status}
-          </span>
-          <span className={`px-1.5 py-0.5 text-[9px] tracking-[0.2em] uppercase ${scopeCls(exercise.scope)}`}>
-            {exercise.scope}
-          </span>
+    <TableRow>
+      <TableCell className="w-8">
+        <button
+          onClick={handleStar}
+          disabled={starring}
+          aria-label={exercise.isFavorited ? "Remove from favorites" : "Add to favorites"}
+          className={`ds-focus-ring rounded-md p-0.5 transition-colors ${exercise.isFavorited ? "text-[#C9A24D]" : "text-white/20 hover:text-white/45"}`}
+        >
+          <Star size={13} fill={exercise.isFavorited ? "currentColor" : "none"} />
+        </button>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link
+            href={`/hq/exercises/${exercise.id}`}
+            className="text-sm font-semibold text-white hover:text-[#C9A24D] transition-colors"
+          >
+            {exercise.name}
+          </Link>
+          <Badge tone="dark" variant={statusVariant(exercise.status)} size="sm">{exercise.status}</Badge>
+          <Badge tone="dark" variant={scopeVariant(exercise.scope)} size="sm">{exercise.scope}</Badge>
         </div>
-        <div className="flex items-center gap-3 mt-1 flex-wrap">
-          <span className="text-gray-700 text-[10px] font-mono">{exercise.slug}</span>
-          {exercise.primaryMuscleGroup && (
-            <span className="text-white/45 text-[11px]">{fmtLabel(exercise.primaryMuscleGroup)}</span>
-          )}
-          <span className="text-gray-600 text-[11px]">{fmtLabel(exercise.movementPattern)}</span>
-          <span className="text-gray-600 text-[11px]">{fmtLabel(exercise.classification)}</span>
-        </div>
-      </div>
-
-      {/* Fatigue indicator */}
-      <div className="shrink-0">{fatigueDots(exercise.fatigueCost)}</div>
-
-      {/* Action */}
-      <div className="shrink-0">
+        <p className="text-white/25 text-[11px] font-mono mt-0.5">{exercise.slug}</p>
+      </TableCell>
+      <TableCell className="whitespace-nowrap">
+        {exercise.primaryMuscleGroup ? (
+          <span className="text-white/60 text-xs">{fmtLabel(exercise.primaryMuscleGroup)}</span>
+        ) : (
+          <span className="text-white/15 text-xs">—</span>
+        )}
+      </TableCell>
+      <TableCell className="whitespace-nowrap">
+        <span className="text-white/60 text-xs">{fmtLabel(exercise.movementPattern)}</span>
+        <span className="block text-white/30 text-[11px] mt-0.5">{fmtLabel(exercise.classification)}</span>
+      </TableCell>
+      <TableCell>{fatigueDots(exercise.fatigueCost)}</TableCell>
+      <TableCell className="text-right whitespace-nowrap">
         <Link
           href={`/hq/exercises/${exercise.id}`}
-          className="text-[10px] tracking-[0.25em] uppercase font-semibold text-gray-500 border border-white/[0.08] px-3 py-1.5 hover:text-white hover:border-white/20 transition-colors"
+          className="ds-focus-ring inline-flex h-8 items-center rounded-lg border border-white/15 px-3 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/5 hover:border-white/25 hover:text-white"
         >
-          {exercise.scope === "system" ? "View →" : "Edit →"}
+          {exercise.scope === "system" ? "View" : "Edit"}
         </Link>
-      </div>
-    </div>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -331,18 +331,22 @@ export default function HQExercisesPage() {
     window.location.href = `/hq/exercises/${id}`;
   }
 
+  const filtersActive = Boolean(muscleGroup || query.trim() || favoritesOnly);
+
   return (
     <div>
       <HQPageHeader
         title="Exercise Library"
         subtitle="The canonical knowledge base behind every blueprint, program, and future AI-generated plan."
         action={
-          <button
+          <Button
+            variant="primary"
+            tone="dark"
+            leftIcon={<Plus size={13} strokeWidth={2.5} />}
             onClick={() => setShowNewForm(true)}
-            className="bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.3em] uppercase px-4 py-2 hover:bg-[#D4B56A] transition-colors"
           >
             New Exercise
-          </button>
+          </Button>
         }
       />
 
@@ -354,39 +358,47 @@ export default function HQExercisesPage() {
       )}
 
       {/* Filter strip */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search exercises…"
-          className="bg-[#0d0e0f] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700 w-52"
-        />
-        <select
-          value={muscleGroup}
-          onChange={(e) => setMuscleGroup(e.target.value)}
-          className="bg-[#0d0e0f] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40"
-        >
-          <option value="">All Muscles</option>
-          {MUSCLE_GROUPS.map((g) => (
-            <option key={g} value={g}>{fmtLabel(g)}</option>
-          ))}
-        </select>
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="bg-[#0d0e0f] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40"
-        >
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
+      <div className="flex flex-wrap items-center gap-2.5 mb-5">
+        <div className="flex-1 min-w-[200px] max-w-sm">
+          <Input
+            tone="dark"
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search exercises…"
+            aria-label="Search exercises"
+          />
+        </div>
+        <div className="w-44 shrink-0">
+          <Select
+            tone="dark"
+            value={muscleGroup}
+            onChange={(e) => setMuscleGroup(e.target.value)}
+          >
+            <option value="">All Muscles</option>
+            {MUSCLE_GROUPS.map((g) => (
+              <option key={g} value={g}>{fmtLabel(g)}</option>
+            ))}
+          </Select>
+        </div>
+        <div className="w-36 shrink-0">
+          <Select
+            tone="dark"
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+          >
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </Select>
+        </div>
         <button
           onClick={() => setFavoritesOnly((v) => !v)}
-          className={`flex items-center gap-1.5 px-3 py-2 text-xs border transition-colors ${
+          aria-pressed={favoritesOnly}
+          className={`ds-focus-ring flex items-center gap-1.5 h-[42px] rounded-lg px-3.5 text-xs border transition-colors ${
             favoritesOnly
               ? "border-[#C9A24D]/40 text-[#C9A24D] bg-[#C9A24D]/[0.06]"
-              : "border-white/[0.08] text-gray-500 hover:text-gray-300"
+              : "border-white/10 text-white/50 hover:text-white/80 hover:border-white/20"
           }`}
         >
           <Star size={11} fill={favoritesOnly ? "currentColor" : "none"} />
@@ -394,58 +406,79 @@ export default function HQExercisesPage() {
         </button>
       </div>
 
-      {/* Section header */}
-      <div className="flex items-center gap-3 mb-4">
-        <span className="text-[10px] tracking-[0.4em] text-gray-600 uppercase font-semibold">Exercises</span>
-        {!loading && (
-          <span className="text-[10px] text-gray-700">
-            {exercises.length} {exercises.length === 1 ? "exercise" : "exercises"}
-          </span>
-        )}
-        <div className="flex-1 h-px bg-white/[0.04]" />
-      </div>
+      {/* Result count */}
+      {!loading && (
+        <p className="text-white/25 text-[11px] mb-3">
+          {exercises.length} {exercises.length === 1 ? "exercise" : "exercises"}
+        </p>
+      )}
 
       {loading && (
-        <div className="space-y-2">
-          {[1, 2, 3, 4].map((i) => <div key={i} className="h-16 bg-white/[0.02] animate-pulse" />)}
-        </div>
+        <Table tone="dark">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-8" aria-hidden />
+              <TableHead>Exercise</TableHead>
+              <TableHead>Muscle Group</TableHead>
+              <TableHead>Movement</TableHead>
+              <TableHead>Fatigue</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {[1, 2, 3, 4].map((i) => <SkeletonTableRow key={i} tone="dark" columns={6} />)}
+          </TableBody>
+        </Table>
       )}
 
       {error && (
-        <div className="bg-red-500/[0.05] border border-red-500/20 px-4 py-3 text-red-400 text-sm">
+        <div className="rounded-lg bg-red-500/[0.05] border border-red-500/20 px-4 py-3 text-red-400 text-sm">
           {error}
         </div>
       )}
 
       {!loading && !error && exercises.length === 0 && (
-        <div className="border border-white/[0.06] border-dashed px-8 py-12 text-center">
-          <p className="text-gray-600 text-sm mb-2">
-            {favoritesOnly ? "No favorites yet" : muscleGroup || query ? "No exercises match these filters" : "No exercises found"}
-          </p>
-          <p className="text-gray-700 text-xs">
-            {!favoritesOnly && !muscleGroup && !query && (
-              <>
-                Click{" "}
-                <button onClick={() => setShowNewForm(true)} className="text-[#C9A24D] hover:text-[#D4B56A]">
-                  New Exercise
-                </button>{" "}
-                or run the seed script to populate the library.
-              </>
-            )}
-          </p>
-        </div>
+        <EmptyState
+          tone="dark"
+          icon={<Dumbbell className="size-5" />}
+          title={favoritesOnly ? "No favorites yet" : filtersActive ? "No exercises match these filters" : "No exercises found"}
+          description={
+            !favoritesOnly && !muscleGroup && !query
+              ? "Create your first exercise or run the seed script to populate the library."
+              : undefined
+          }
+          action={
+            !favoritesOnly && !muscleGroup && !query ? (
+              <Button variant="outline" tone="dark" size="sm" onClick={() => setShowNewForm(true)}>
+                New Exercise
+              </Button>
+            ) : undefined
+          }
+        />
       )}
 
-      {!loading && exercises.length > 0 && (
-        <div className="space-y-2">
-          {exercises.map((ex) => (
-            <ExerciseListRow
-              key={ex.id}
-              exercise={ex}
-              onFavoriteToggle={handleFavoriteToggle}
-            />
-          ))}
-        </div>
+      {!loading && !error && exercises.length > 0 && (
+        <Table tone="dark">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-8" aria-hidden />
+              <TableHead>Exercise</TableHead>
+              <TableHead>Muscle Group</TableHead>
+              <TableHead>Movement</TableHead>
+              <TableHead>Fatigue</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {exercises.map((ex) => (
+              <ExerciseTableRow
+                key={ex.id}
+                exercise={ex}
+                onFavoriteToggle={handleFavoriteToggle}
+              />
+            ))}
+          </TableBody>
+        </Table>
       )}
     </div>
   );

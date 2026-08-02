@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Plus } from "lucide-react";
 import { saveGoalAction, archiveGoalAction } from "@/app/hq/clients/[clientId]/actions";
 import type { WorkspaceGoal } from "@/lib/db/coach-client-workspace-service";
 import type { GoalType } from "@/lib/db/schema-profile";
+import { Button, Select, Textarea, Input, Label } from "@/components/ui";
 
 const GOAL_TYPES: { value: GoalType; label: string }[] = [
   { value: "fat_loss",              label: "Fat Loss" },
@@ -73,24 +75,21 @@ export default function GoalManager({ goals, clientId }: Props) {
     });
   }
 
-  const fieldCls =
-    "w-full bg-[#111] border border-white/[0.08] text-white text-xs px-3 py-2 focus:outline-none focus:border-white/20 placeholder:text-gray-600";
-
   return (
     <div className="space-y-2">
       {goals.length === 0 && !adding && (
-        <p className="text-gray-600 text-xs py-1">No active goals on file.</p>
+        <p className="py-1 text-xs text-white/30">No active goals on file.</p>
       )}
 
       {goals.map((g) => (
         <div
           key={g.id}
-          className="bg-[#0d0e0f] border border-white/[0.06] px-3 py-2.5"
+          className="rounded-lg border border-white/[0.06] bg-[#0d0e0f] px-3 py-2.5"
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-white text-xs font-medium">{g.description}</p>
-              <p className="text-gray-500 text-[9px]">
+              <p className="text-xs font-medium text-white">{g.description}</p>
+              <p className="text-[9px] text-white/30">
                 {fmtGoalType(g.goalType)}
                 {g.targetDate && ` · ${fmtDate(g.targetDate)}`}
                 {g.priority !== null && ` · Priority ${g.priority}`}
@@ -99,7 +98,7 @@ export default function GoalManager({ goals, clientId }: Props) {
             <button
               onClick={() => handleArchive(g.id)}
               disabled={isPending}
-              className="text-[9px] text-gray-600 hover:text-red-400/70 transition-colors shrink-0 disabled:opacity-40 pt-0.5"
+              className="ds-focus-ring shrink-0 rounded-md pt-0.5 text-[9px] text-white/30 transition-colors duration-150 hover:text-red-400/70 disabled:opacity-40"
             >
               Archive
             </button>
@@ -110,68 +109,88 @@ export default function GoalManager({ goals, clientId }: Props) {
       {adding ? (
         <form
           onSubmit={handleSubmit}
-          className="bg-[#0d0e0f] border border-white/[0.06] p-3 space-y-2.5"
+          className="space-y-2.5 rounded-lg border border-white/[0.06] bg-[#0d0e0f] p-3"
         >
-          <select
-            value={goalType}
-            onChange={(e) => setGoalType(e.target.value as GoalType)}
-            className={`${fieldCls} bg-[#111]`}
-          >
-            {GOAL_TYPES.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
-              </option>
-            ))}
-          </select>
+          <div>
+            <Label tone="dark" htmlFor="goal-type">Goal Type</Label>
+            <Select
+              id="goal-type"
+              tone="dark"
+              value={goalType}
+              onChange={(e) => setGoalType(e.target.value as GoalType)}
+            >
+              {GOAL_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </Select>
+          </div>
 
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="e.g. Lose 20 lbs"
-            required
-            rows={2}
-            className={`${fieldCls} resize-none`}
-          />
+          <div>
+            <Label tone="dark" htmlFor="goal-description">Description</Label>
+            <Textarea
+              id="goal-description"
+              tone="dark"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="e.g. Lose 20 lbs"
+              required
+              rows={2}
+            />
+          </div>
 
-          <input
-            type="date"
-            value={targetDate}
-            onChange={(e) => setTargetDate(e.target.value)}
-            className={fieldCls}
-            title="Target date (optional)"
-          />
+          <div>
+            <Label tone="dark" htmlFor="goal-target-date">Target Date (optional)</Label>
+            <Input
+              id="goal-target-date"
+              type="date"
+              tone="dark"
+              value={targetDate}
+              onChange={(e) => setTargetDate(e.target.value)}
+            />
+          </div>
 
           {error && (
-            <p className="text-red-400/70 text-[10px]">{error}</p>
+            <p className="text-[10px] text-red-400/70">{error}</p>
           )}
 
           <div className="flex items-center gap-2 pt-1">
-            <button
+            <Button
               type="submit"
+              variant="primary"
+              tone="dark"
+              size="sm"
               disabled={isPending || !description.trim()}
-              className="text-[10px] font-semibold text-black bg-[#c9a24d] px-4 py-2 hover:bg-[#d4af63] transition-colors disabled:opacity-40 uppercase tracking-[0.2em]"
+              loading={isPending}
             >
               {isPending ? "Saving…" : "Save Goal"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              tone="dark"
+              size="sm"
               onClick={() => {
                 setAdding(false);
                 setError(null);
               }}
-              className="text-[10px] text-gray-500 hover:text-white transition-colors px-3"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
       ) : (
-        <button
+        <Button
+          type="button"
+          variant="ghost"
+          tone="dark"
+          size="sm"
           onClick={() => setAdding(true)}
-          className="text-[9px] text-gray-500 hover:text-[#c9a24d]/80 transition-colors py-1 uppercase tracking-[0.2em]"
+          leftIcon={<Plus size={12} />}
         >
-          + Add Goal
-        </button>
+          Add Goal
+        </Button>
       )}
     </div>
   );

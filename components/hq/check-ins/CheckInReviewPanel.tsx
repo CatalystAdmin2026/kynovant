@@ -16,6 +16,7 @@ import {
   markReviewedAction,
   reopenCheckInAction,
 } from "@/app/hq/check-ins/[checkInId]/actions";
+import { Button, Card, Badge, Textarea, Label } from "@/components/ui";
 
 interface Props {
   checkInId: string;
@@ -99,43 +100,49 @@ export default function CheckInReviewPanel({
     isPendingMarkReviewed ||
     isPendingReopen;
 
+  const responseFieldId = `coach-response-${checkInId}`;
+
   return (
     <div className="space-y-4">
       {/* Start Review CTA */}
       {currentStatus === "submitted" && (
-        <div className="bg-blue-500/[0.05] border border-blue-500/20 px-5 py-4">
+        <div className="rounded-xl border border-blue-500/20 bg-blue-500/[0.05] px-5 py-4">
           <p className="text-blue-400 text-sm font-medium mb-1">
             Ready to review {clientName}&apos;s check-in?
           </p>
           <p className="text-blue-300/60 text-xs mb-3">
             Starting review marks it as &quot;in review&quot; and lets you write a response.
           </p>
-          <button
+          <Button
             type="button"
+            variant="primary"
+            tone="dark"
             onClick={handleStartReview}
-            disabled={isPendingStart || isAnyPending}
-            className="bg-blue-500/20 text-blue-400 border border-blue-500/30 text-[10px] font-bold uppercase tracking-[0.2em] px-4 py-2 hover:bg-blue-500/30 disabled:opacity-50 transition-colors"
+            disabled={isAnyPending}
+            loading={isPendingStart}
           >
-            {isPendingStart ? "Starting…" : "Start Review"}
-          </button>
+            Start Review
+          </Button>
         </div>
       )}
 
       {/* Response editor */}
       {(currentStatus === "in_review" || currentStatus === "reviewed") && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[9px] text-gray-400 uppercase tracking-[0.4em]">
-              Coach Response
-            </p>
+        <Card tone="dark" padding="md">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <Label htmlFor={responseFieldId} tone="dark" className="mb-0">
+              Response to {clientName}
+            </Label>
             {currentStatus === "reviewed" && (
-              <span className="text-[9px] text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 uppercase tracking-[0.2em]">
+              <Badge tone="dark" variant="success" size="sm">
                 Reviewed
-              </span>
+              </Badge>
             )}
           </div>
 
-          <textarea
+          <Textarea
+            id={responseFieldId}
+            tone="dark"
             value={response}
             onChange={(e) => {
               setResponse(e.target.value);
@@ -143,11 +150,11 @@ export default function CheckInReviewPanel({
             }}
             placeholder={`Write your response to ${clientName}…`}
             rows={8}
-            className="w-full bg-[#0a0b0c] border border-white/[0.09] text-white text-sm px-4 py-3 placeholder:text-gray-600 focus:outline-none focus:border-[#C9A24D]/40 transition-colors resize-none leading-relaxed"
+            className="leading-relaxed"
           />
 
           {/* Save status */}
-          <div className="text-[10px] text-gray-600 h-4">
+          <div className="text-[10px] text-white/30 h-4 mt-2">
             {isPendingSaveDraft && <span>Saving draft…</span>}
             {!isPendingSaveDraft && savedAt && (
               <span>
@@ -161,54 +168,62 @@ export default function CheckInReviewPanel({
           </div>
 
           {/* Action buttons */}
-          <div className="flex flex-wrap gap-2 pt-2">
+          <div className="flex flex-wrap gap-2 pt-3">
             {currentStatus === "in_review" && (
               <>
-                <button
+                <Button
                   type="button"
+                  variant="primary"
+                  tone="dark"
                   onClick={handleMarkReviewed}
                   disabled={isAnyPending}
-                  className="bg-[#C9A24D] text-black text-[10px] font-bold uppercase tracking-[0.2em] px-5 py-2.5 hover:bg-[#d4af63] disabled:opacity-50 transition-colors"
+                  loading={isPendingMarkReviewed}
                 >
-                  {isPendingMarkReviewed ? "Saving…" : "Mark Reviewed"}
-                </button>
-                <button
+                  Mark Reviewed
+                </Button>
+                <Button
                   type="button"
+                  variant="outline"
+                  tone="dark"
                   onClick={handleSaveDraft}
                   disabled={isAnyPending}
-                  className="border border-white/[0.10] text-gray-400 text-[10px] font-medium uppercase tracking-[0.15em] px-4 py-2.5 hover:text-white/70 hover:border-white/20 disabled:opacity-50 transition-colors"
+                  loading={isPendingSaveDraft}
                 >
-                  {isPendingSaveDraft ? "Saving…" : "Save Draft"}
-                </button>
+                  Save Draft
+                </Button>
               </>
             )}
             {currentStatus === "reviewed" && (
               <>
-                <button
+                <Button
                   type="button"
+                  variant="outline"
+                  tone="dark"
                   onClick={handleMarkReviewed}
                   disabled={isAnyPending}
-                  className="border border-[#C9A24D]/25 text-[#C9A24D] text-[10px] font-medium uppercase tracking-[0.15em] px-4 py-2.5 hover:bg-[#C9A24D]/10 disabled:opacity-50 transition-colors"
+                  loading={isPendingMarkReviewed}
                 >
-                  {isPendingMarkReviewed ? "Saving…" : "Update Response"}
-                </button>
-                <button
+                  Update Response
+                </Button>
+                <Button
                   type="button"
+                  variant="ghost"
+                  tone="dark"
                   onClick={handleReopen}
                   disabled={isAnyPending}
-                  className="border border-white/[0.10] text-gray-500 text-[10px] font-medium uppercase tracking-[0.15em] px-4 py-2.5 hover:text-gray-300 hover:border-white/20 disabled:opacity-50 transition-colors"
+                  loading={isPendingReopen}
                 >
-                  {isPendingReopen ? "Reopening…" : "Reopen"}
-                </button>
+                  Reopen
+                </Button>
               </>
             )}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Error state */}
       {actionError && (
-        <div className="bg-red-500/[0.08] border border-red-500/25 px-4 py-3">
+        <div className="rounded-xl border border-red-500/25 bg-red-500/[0.08] px-4 py-3" role="alert">
           <p className="text-red-400 text-xs">{actionError}</p>
           <button
             type="button"

@@ -2,6 +2,18 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import {
+  ChevronUp, ChevronDown, Plus, Search,
+  Trash2, PencilLine, Check, CheckCircle2, XCircle, AlertTriangle,
+  ExternalLink, Layers,
+} from "lucide-react";
+import {
+  Button,
+  Input as DSInput,
+  Textarea as DSTextarea,
+  Select as DSSelect,
+  Label as DSLabel,
+} from "@/components/ui";
 
 // ─────────────────────────────────────────────────────────────
 // CLIENT-SIDE TYPES (mirror the API response shape)
@@ -143,10 +155,10 @@ function fmtLabel(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function statusCls(s: string) {
-  if (s === "active") return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-  if (s === "archived") return "bg-gray-500/10 text-gray-500 border border-gray-500/20";
-  return "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+function statusBadge(s: string) {
+  if (s === "active")   return { cls: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Published" };
+  if (s === "archived") return { cls: "bg-white/[0.04] text-white/25 border border-white/[0.06]",         label: "Archived" };
+  return                       { cls: "bg-amber-500/10 text-amber-400 border border-amber-500/20",        label: "Draft" };
 }
 
 // Group colors for superset/triset visualization
@@ -173,11 +185,11 @@ function ExercisePickerRow({
   return (
     <button
       onClick={() => onAdd(exercise)}
-      className="w-full text-left px-3 py-2 hover:bg-white/[0.03] transition-colors flex items-center gap-3 border-b border-white/[0.04] last:border-0"
+      className="w-full text-left px-3 py-2.5 hover:bg-white/[0.03] transition-colors flex items-center gap-3 border-b border-white/[0.04] last:border-0"
     >
       <div className="flex-1 min-w-0">
-        <span className="text-white text-xs font-medium block truncate">{exercise.name}</span>
-        <span className="text-gray-600 text-[10px]">
+        <span className="text-white/85 text-xs font-medium block truncate">{exercise.name}</span>
+        <span className="text-white/25 text-[10px]">
           {exercise.primaryMuscleGroup ? fmtLabel(exercise.primaryMuscleGroup) + " · " : ""}
           {fmtLabel(exercise.classification)}
         </span>
@@ -194,10 +206,10 @@ function ExercisePickerRow({
         target="_blank"
         rel="noreferrer"
         onClick={(e) => e.stopPropagation()}
-        className="text-gray-700 hover:text-gray-400 text-[9px] uppercase tracking-[0.2em] shrink-0"
+        className="text-white/20 hover:text-white/50 shrink-0 transition-colors"
         title="Open in Library"
       >
-        ↗
+        <ExternalLink size={11} />
       </a>
     </button>
   );
@@ -206,6 +218,11 @@ function ExercisePickerRow({
 // ─────────────────────────────────────────────────────────────
 // SUB-COMPONENTS
 // ─────────────────────────────────────────────────────────────
+
+// Thin label+field wrappers around the design-system form primitives
+// (tone="dark"). Kept as same-signature local components so every
+// call site throughout this file (there are dozens) upgrades for
+// free without touching each usage individually.
 
 function Input({
   label,
@@ -224,15 +241,14 @@ function Input({
 }) {
   return (
     <div className={className}>
-      <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1">
-        {label}
-      </label>
-      <input
+      <DSLabel tone="dark">{label}</DSLabel>
+      <DSInput
+        tone="dark"
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700"
+        className="text-xs py-2"
       />
     </div>
   );
@@ -253,20 +269,19 @@ function Select({
 }) {
   return (
     <div className={className}>
-      <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1">
-        {label}
-      </label>
-      <select
+      <DSLabel tone="dark">{label}</DSLabel>
+      <DSSelect
+        tone="dark"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40"
+        className="text-xs py-2"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
           </option>
         ))}
-      </select>
+      </DSSelect>
     </div>
   );
 }
@@ -288,15 +303,14 @@ function Textarea({
 }) {
   return (
     <div className={className}>
-      <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1">
-        {label}
-      </label>
-      <textarea
+      <DSLabel tone="dark">{label}</DSLabel>
+      <DSTextarea
+        tone="dark"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         rows={rows}
         placeholder={placeholder}
-        className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700 resize-none"
+        className="text-xs py-2 min-h-0"
       />
     </div>
   );
@@ -394,35 +408,37 @@ function PrescriptionRow({
   }
 
   return (
-    <div className={`border-l-2 ${groupColorClass || "border-l-white/[0.08]"} bg-[#0a0b0c] border border-white/[0.05] border-l-0 mb-1`}>
+    <div className={`border-l-2 ${groupColorClass || "border-l-transparent"} bg-[#0a0b0c] border-y border-r border-white/[0.06] rounded-r-lg overflow-hidden mb-1.5 transition-colors hover:border-white/[0.1]`}>
       {/* Compact row */}
       <div
         className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-white/[0.02] transition-colors"
         onClick={() => setExpanded((x) => !x)}
       >
-        <div className="flex flex-col gap-0.5">
+        <div className="flex flex-col gap-0.5 shrink-0">
           <button
             onClick={(e) => { e.stopPropagation(); onMove(prescription.id, "up"); }}
             disabled={isFirst}
-            className="text-gray-700 hover:text-gray-400 disabled:opacity-20 text-[10px] leading-none transition-colors"
+            aria-label="Move exercise up"
+            className="text-white/25 hover:text-white/60 disabled:opacity-20 disabled:hover:text-white/25 leading-none transition-colors"
           >
-            ▲
+            <ChevronUp size={11} />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onMove(prescription.id, "down"); }}
             disabled={isLast}
-            className="text-gray-700 hover:text-gray-400 disabled:opacity-20 text-[10px] leading-none transition-colors"
+            aria-label="Move exercise down"
+            className="text-white/25 hover:text-white/60 disabled:opacity-20 disabled:hover:text-white/25 leading-none transition-colors"
           >
-            ▼
+            <ChevronDown size={11} />
           </button>
         </div>
 
-        <span className="text-white text-xs font-medium flex-1 min-w-0 truncate">
+        <span className="text-white/90 text-xs font-medium flex-1 min-w-0 truncate">
           {prescription.exerciseName}
         </span>
 
         {/* Quick summary */}
-        <div className="flex items-center gap-3 text-gray-500 text-[11px] shrink-0">
+        <div className="flex items-center gap-3 text-white/35 text-[11px] shrink-0 tabular-nums">
           {prescription.sets && (
             <span>{prescription.sets} × {prescription.repsMin ?? "?"}{prescription.repsMax ? `–${prescription.repsMax}` : ""}</span>
           )}
@@ -433,11 +449,14 @@ function PrescriptionRow({
             <span>RPE {prescription.targetRpe}</span>
           )}
           {prescription.setTechnique && prescription.setTechnique !== "straight_set" && (
-            <span className="text-[#C9A24D] text-[10px]">{fmtLabel(prescription.setTechnique)}</span>
+            <span className="text-[#C9A24D]/80 text-[10px] font-medium">{fmtLabel(prescription.setTechnique)}</span>
           )}
         </div>
 
-        <span className="text-gray-700 text-[10px]">{expanded ? "▲" : "▼"}</span>
+        <ChevronDown
+          size={13}
+          className={`text-white/25 shrink-0 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+        />
       </div>
 
       {/* Expanded form */}
@@ -531,25 +550,27 @@ function PrescriptionRow({
           {isGrouped && (
             <div className="grid grid-cols-2 gap-3 mt-3">
               <div>
-                <label className="block text-[10px] text-gray-600 uppercase tracking-[0.35em] mb-1">
-                  Group ID (shared with superset partners)
-                </label>
+                <DSLabel tone="dark">Group ID (shared with superset partners)</DSLabel>
                 <div className="flex gap-2">
-                  <input
+                  <DSInput
+                    tone="dark"
                     value={form.groupId}
                     onChange={(e) => setForm((f) => ({ ...f, groupId: e.target.value }))}
-                    className="flex-1 bg-[#080909] border border-white/[0.08] text-gray-400 px-3 py-2 text-[10px] font-mono focus:outline-none focus:border-[#C9A24D]/40"
+                    className="flex-1 text-[10px] font-mono py-2"
                     placeholder="auto-generated UUID"
                   />
-                  <button
+                  <Button
                     type="button"
+                    tone="dark"
+                    variant="outline"
+                    size="sm"
                     onClick={() => setForm((f) => ({ ...f, groupId: crypto.randomUUID() }))}
-                    className="text-[10px] text-gray-600 border border-white/[0.06] px-2 hover:text-gray-400 transition-colors whitespace-nowrap"
+                    className="whitespace-nowrap text-[10px]"
                   >
                     New Group
-                  </button>
+                  </Button>
                 </div>
-                <p className="text-gray-700 text-[10px] mt-1">
+                <p className="text-white/25 text-[10px] mt-1.5">
                   Copy this UUID to other exercises to group them into the same superset.
                 </p>
               </div>
@@ -573,7 +594,7 @@ function PrescriptionRow({
             />
           </div>
 
-          <div className="flex items-center justify-between mt-3">
+          <div className="flex items-center justify-between mt-4">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -581,22 +602,15 @@ function PrescriptionRow({
                 onChange={(e) => setForm((f) => ({ ...f, isRequired: e.target.checked }))}
                 className="accent-[#C9A24D]"
               />
-              <span className="text-gray-500 text-xs">Required (cannot be substituted)</span>
+              <span className="text-white/40 text-xs">Required (cannot be substituted)</span>
             </label>
             <div className="flex gap-2">
-              <button
-                onClick={handleDelete}
-                className="text-[10px] text-gray-700 border border-white/[0.05] px-3 py-1.5 hover:text-red-400 hover:border-red-500/30 tracking-wide uppercase transition-colors"
-              >
+              <Button tone="dark" variant="ghost" size="sm" onClick={handleDelete} className="text-white/40 hover:text-red-400">
                 Remove
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="text-[10px] tracking-[0.25em] uppercase font-semibold bg-[#C9A24D] text-black px-4 py-1.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
-              >
+              </Button>
+              <Button tone="dark" variant="primary" size="sm" onClick={handleSave} loading={saving}>
                 {saving ? "Saving…" : "Save"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -793,99 +807,102 @@ function SectionCard({
   const sorted = [...prescriptions].sort((a, b) => a.orderIndex - b.orderIndex);
 
   return (
-    <div className="border border-white/[0.08] bg-[#0d0e0f] mb-3">
+    <div className="border border-white/[0.07] bg-[#0d0e0f] rounded-lg overflow-hidden mb-3">
       {/* Section header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.05]">
-        <div className="flex flex-col gap-0.5">
+        <div className="flex flex-col gap-0.5 shrink-0">
           <button
             onClick={() => onMove(section.id, "up")}
             disabled={isFirst}
-            className="text-gray-700 hover:text-gray-400 disabled:opacity-20 text-[10px] leading-none transition-colors"
+            aria-label={`Move ${section.name} up`}
+            className="text-white/25 hover:text-white/60 disabled:opacity-20 disabled:hover:text-white/25 leading-none transition-colors"
           >
-            ▲
+            <ChevronUp size={12} />
           </button>
           <button
             onClick={() => onMove(section.id, "down")}
             disabled={isLast}
-            className="text-gray-700 hover:text-gray-400 disabled:opacity-20 text-[10px] leading-none transition-colors"
+            aria-label={`Move ${section.name} down`}
+            className="text-white/25 hover:text-white/60 disabled:opacity-20 disabled:hover:text-white/25 leading-none transition-colors"
           >
-            ▼
+            <ChevronDown size={12} />
           </button>
         </div>
 
         {editing ? (
-          <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <input
+          <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+            <DSInput
+              tone="dark"
               value={editForm.name}
               onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
-              className="col-span-2 sm:col-span-1 bg-[#080909] border border-white/[0.08] text-white px-2 py-1.5 text-xs focus:outline-none focus:border-[#C9A24D]/40"
+              className="col-span-2 sm:col-span-1 text-xs py-1.5"
             />
-            <select
+            <DSSelect
+              tone="dark"
               value={editForm.sectionType}
               onChange={(e) => setEditForm((f) => ({ ...f, sectionType: e.target.value }))}
-              className="bg-[#080909] border border-white/[0.08] text-white px-2 py-1.5 text-xs focus:outline-none focus:border-[#C9A24D]/40"
+              className="text-xs py-1.5"
             >
               {SECTION_TYPES.map((t) => (
                 <option key={t} value={t}>{fmtLabel(t)}</option>
               ))}
-            </select>
-            <input
+            </DSSelect>
+            <DSInput
+              tone="dark"
               type="number"
               value={editForm.estimatedMinutes}
               onChange={(e) => setEditForm((f) => ({ ...f, estimatedMinutes: e.target.value }))}
               placeholder="Est. min"
-              className="bg-[#080909] border border-white/[0.08] text-white px-2 py-1.5 text-xs focus:outline-none focus:border-[#C9A24D]/40"
+              className="text-xs py-1.5"
             />
             <div className="flex gap-1.5">
-              <button
-                onClick={handleSaveSection}
-                disabled={saving}
-                className="text-[10px] bg-[#C9A24D] text-black font-bold px-3 py-1.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
-              >
+              <Button tone="dark" variant="primary" size="sm" onClick={handleSaveSection} loading={saving}>
                 {saving ? "…" : "Save"}
-              </button>
-              <button
-                onClick={() => setEditing(false)}
-                className="text-[10px] text-gray-600 border border-white/[0.06] px-2 py-1.5 hover:text-gray-400 transition-colors"
-              >
+              </Button>
+              <Button tone="dark" variant="ghost" size="sm" onClick={() => setEditing(false)}>
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
           <>
             <button
               onClick={() => setExpanded((x) => !x)}
-              className="flex-1 flex items-center gap-3 text-left"
+              className="flex-1 flex items-center gap-3 text-left min-w-0"
             >
-              <span className="text-white text-sm font-semibold">{section.name}</span>
-              <span className="text-gray-600 text-[10px] border border-white/[0.08] px-1.5 py-0.5">
+              <span className="text-white text-sm font-semibold truncate">{section.name}</span>
+              <span className="shrink-0 text-white/35 text-[9px] font-bold tracking-[0.25em] uppercase border border-white/[0.08] px-1.5 py-0.5">
                 {fmtLabel(section.sectionType)}
               </span>
               {section.estimatedMinutes && (
-                <span className="text-gray-600 text-[11px]">{section.estimatedMinutes} min</span>
+                <span className="shrink-0 text-white/25 text-[11px]">{section.estimatedMinutes} min</span>
               )}
-              <span className="text-gray-700 text-[11px] ml-auto">
+              <span className="shrink-0 text-white/20 text-[11px] ml-auto">
                 {prescriptions.length} {prescriptions.length === 1 ? "exercise" : "exercises"}
               </span>
             </button>
             <button
               onClick={() => setEditing(true)}
-              className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors"
+              aria-label={`Edit ${section.name}`}
+              title="Edit section"
+              className="shrink-0 w-6 h-6 flex items-center justify-center text-white/25 hover:text-white/60 hover:bg-white/[0.05] transition-colors"
             >
-              Edit
+              <PencilLine size={12} />
             </button>
             <button
               onClick={handleDeleteSection}
-              className="text-[10px] text-gray-700 hover:text-red-400 transition-colors"
+              aria-label={`Delete ${section.name}`}
+              title="Delete section"
+              className="shrink-0 w-6 h-6 flex items-center justify-center text-white/20 hover:text-red-400/80 hover:bg-red-500/[0.06] transition-colors"
             >
-              ×
+              <Trash2 size={12} />
             </button>
             <button
               onClick={() => setExpanded((x) => !x)}
-              className="text-gray-700 text-[11px]"
+              aria-label={expanded ? `Collapse ${section.name}` : `Expand ${section.name}`}
+              className="shrink-0 text-white/25 hover:text-white/50 transition-colors"
             >
-              {expanded ? "▲" : "▼"}
+              <ChevronDown size={13} className={`transition-transform duration-200 ${expanded ? "rotate-180" : ""}`} />
             </button>
           </>
         )}
@@ -893,8 +910,8 @@ function SectionCard({
 
       {/* Section notes */}
       {expanded && section.notes && !editing && (
-        <div className="px-4 py-2 border-b border-white/[0.04]">
-          <p className="text-gray-600 text-xs italic">{section.notes}</p>
+        <div className="px-4 py-2.5 border-b border-white/[0.04]">
+          <p className="text-white/35 text-xs italic leading-relaxed">{section.notes}</p>
         </div>
       )}
 
@@ -917,29 +934,35 @@ function SectionCard({
 
           {/* Add exercise */}
           {showSearch ? (
-            <div className="border border-white/[0.08] p-3 mb-3 bg-[#0a0b0c]">
+            <div className="border border-white/[0.08] rounded-lg p-3 mb-3 bg-[#0a0b0c]">
               <div className="flex gap-2 mb-3">
-                <input
-                  autoFocus
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search exercises by name…"
-                  className="flex-1 bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700"
-                />
-                <button
+                <div className="relative flex-1">
+                  <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20 pointer-events-none" />
+                  <DSInput
+                    autoFocus
+                    tone="dark"
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search exercises by name…"
+                    className="pl-8 text-xs py-2"
+                  />
+                </div>
+                <Button
+                  tone="dark"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => { setShowSearch(false); setSearchQuery(""); setSearchResults([]); }}
-                  className="text-gray-600 text-xs px-3 border border-white/[0.06] hover:text-gray-400 transition-colors"
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
 
               {/* Recently Used — shown only when search is empty */}
               {!searchQuery && (
                 <>
                   {recentLoading && (
-                    <p className="text-gray-600 text-[10px] py-2 animate-pulse">Loading recent…</p>
+                    <p className="text-white/25 text-[10px] py-2 animate-pulse">Loading recent…</p>
                   )}
                   {!recentLoading && recentlyUsed.length > 0 && (
                     <>
@@ -948,21 +971,21 @@ function SectionCard({
                         <ExercisePickerRow key={ex.id} exercise={ex} onAdd={handleAddExercise} />
                       ))}
                       <div className="h-px bg-white/[0.04] my-2" />
-                      <p className="text-gray-700 text-[10px] py-1 px-1">Type to search the full library.</p>
+                      <p className="text-white/20 text-[10px] py-1 px-1">Type to search the full library.</p>
                     </>
                   )}
                   {!recentLoading && recentlyUsed.length === 0 && (
-                    <p className="text-gray-700 text-xs py-2">Type to search exercises.</p>
+                    <p className="text-white/25 text-xs py-2">Type to search exercises.</p>
                   )}
                 </>
               )}
 
               {/* Search results */}
               {searchLoading && (
-                <p className="text-gray-600 text-xs py-2 animate-pulse">Searching…</p>
+                <p className="text-white/25 text-xs py-2 animate-pulse">Searching…</p>
               )}
               {!searchLoading && searchQuery && searchResults.length === 0 && (
-                <p className="text-gray-700 text-xs py-2">No active exercises found.</p>
+                <p className="text-white/25 text-xs py-2">No active exercises found.</p>
               )}
               {searchQuery && searchResults.map((ex) => (
                 <ExercisePickerRow key={ex.id} exercise={ex} onAdd={handleAddExercise} />
@@ -971,9 +994,10 @@ function SectionCard({
           ) : (
             <button
               onClick={() => setShowSearch(true)}
-              className="w-full text-left text-[11px] text-gray-600 border border-dashed border-white/[0.06] px-4 py-2.5 hover:text-gray-400 hover:border-white/[0.12] transition-colors mb-3"
+              className="group w-full flex items-center justify-center gap-1.5 text-[11px] text-white/30 border border-dashed border-white/[0.08] px-4 py-2.5 hover:text-[#C9A24D]/80 hover:border-[#C9A24D]/25 transition-colors mb-3"
             >
-              + Add Exercise
+              <Plus size={12} className="transition-transform duration-200 group-hover:rotate-90" />
+              Add Exercise
             </button>
           )}
         </div>
@@ -1056,23 +1080,28 @@ function MetadataPanel({
     }
   }
 
+  const badge = statusBadge(template.status);
+
   return (
-    <div className="border border-white/[0.08] bg-[#0d0e0f] mb-6">
+    <div className="border border-white/[0.07] bg-[#0d0e0f] rounded-lg overflow-hidden mb-6">
       <button
         onClick={() => setOpen((x) => !x)}
         className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-white/[0.02] transition-colors"
       >
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <span className="text-white text-sm font-semibold">Template Metadata</span>
-          <span className={`px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ${statusCls(template.status)}`}>
-            {template.status}
+          <span className={`px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase ${badge.cls}`}>
+            {badge.label}
           </span>
-          <span className="text-gray-600 text-xs">{template.recommendedExperienceLevel}</span>
+          <span className="text-white/30 text-xs">{fmtLabel(template.recommendedExperienceLevel)}</span>
           {template.primaryFocus && (
-            <span className="text-gray-600 text-xs">· {template.primaryFocus}</span>
+            <span className="text-white/30 text-xs">· {template.primaryFocus}</span>
           )}
         </div>
-        <span className="text-gray-600 text-xs">{open ? "▲ collapse" : "▼ expand"}</span>
+        <span className="flex items-center gap-1.5 text-white/25 text-[10px] uppercase tracking-[0.25em] font-semibold">
+          {open ? "Collapse" : "Expand"}
+          <ChevronDown size={12} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </span>
       </button>
 
       {open && (
@@ -1159,20 +1188,13 @@ function MetadataPanel({
           {saveError && (
             <p className="text-red-400 text-xs mt-3">{saveError}</p>
           )}
-          <div className="flex gap-3 mt-4">
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.3em] uppercase px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
-            >
+          <div className="flex items-center gap-3 mt-4">
+            <Button tone="dark" variant="primary" onClick={handleSave} loading={saving}>
               {saving ? "Saving…" : "Save Metadata"}
-            </button>
-            <button
-              onClick={() => setOpen(false)}
-              className="text-gray-600 text-[11px] hover:text-gray-400 transition-colors"
-            >
+            </Button>
+            <Button tone="dark" variant="ghost" onClick={() => setOpen(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -1211,18 +1233,14 @@ function ValidationPanel({ templateId }: { templateId: string }) {
   }
 
   return (
-    <div className="border border-white/[0.08] bg-[#0d0e0f] p-5">
+    <div className="border border-white/[0.07] bg-[#0d0e0f] rounded-lg p-5">
       <div className="flex items-center justify-between mb-4">
-        <p className="text-[10px] tracking-[0.5em] text-gray-600 uppercase font-semibold">
+        <p className="text-[10px] tracking-[0.5em] text-white/25 uppercase font-semibold">
           Blueprint Validation
         </p>
-        <button
-          onClick={handleValidate}
-          disabled={running}
-          className="text-[10px] tracking-[0.25em] uppercase font-semibold text-gray-400 border border-white/[0.1] px-4 py-2 hover:text-white hover:border-white/20 transition-colors disabled:opacity-50"
-        >
+        <Button tone="dark" variant="outline" size="sm" onClick={handleValidate} loading={running}>
           {running ? "Running…" : "Run Validation"}
-        </button>
+        </Button>
       </div>
 
       {error && (
@@ -1239,9 +1257,11 @@ function ValidationPanel({ templateId }: { templateId: string }) {
                 : "bg-red-500/[0.04] border-red-500/20"
             }`}
           >
-            <div
-              className={`w-2 h-2 rounded-full shrink-0 ${result.valid ? "bg-emerald-400" : "bg-red-400"}`}
-            />
+            {result.valid ? (
+              <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+            ) : (
+              <XCircle size={16} className="text-red-400 shrink-0" />
+            )}
             <p
               className={`text-sm font-semibold ${result.valid ? "text-emerald-300" : "text-red-300"}`}
             >
@@ -1258,8 +1278,8 @@ function ValidationPanel({ templateId }: { templateId: string }) {
               { label: "Est. Duration", value: result.summary.estimatedMinutes ? `${result.summary.estimatedMinutes} min` : "—" },
             ].map(({ label, value }) => (
               <div key={label} className="bg-[#0a0b0c] border border-white/[0.05] px-3 py-3">
-                <p className="text-white font-bold text-lg">{value}</p>
-                <p className="text-gray-600 text-[10px] uppercase tracking-[0.3em]">{label}</p>
+                <p className="text-white font-bold text-lg tabular-nums">{value}</p>
+                <p className="text-white/25 text-[10px] uppercase tracking-[0.3em]">{label}</p>
               </div>
             ))}
           </div>
@@ -1267,13 +1287,13 @@ function ValidationPanel({ templateId }: { templateId: string }) {
           {/* Errors */}
           {result.errors.length > 0 && (
             <div>
-              <p className="text-[10px] text-red-500 uppercase tracking-[0.4em] font-semibold mb-2">
+              <p className="text-[10px] text-red-400/80 uppercase tracking-[0.4em] font-semibold mb-2">
                 Errors
               </p>
               <div className="space-y-1.5">
                 {result.errors.map((e, i) => (
-                  <div key={i} className="flex items-start gap-2 bg-red-500/[0.04] border border-red-500/15 px-3 py-2">
-                    <span className="text-red-400 text-xs shrink-0 mt-0.5">✗</span>
+                  <div key={i} className="flex items-start gap-2.5 bg-red-500/[0.04] border border-red-500/15 px-3 py-2">
+                    <XCircle size={12} className="text-red-400/70 shrink-0 mt-0.5" />
                     <p className="text-red-400/80 text-xs leading-relaxed">{e}</p>
                   </div>
                 ))}
@@ -1284,13 +1304,13 @@ function ValidationPanel({ templateId }: { templateId: string }) {
           {/* Warnings */}
           {result.warnings.length > 0 && (
             <div>
-              <p className="text-[10px] text-amber-500 uppercase tracking-[0.4em] font-semibold mb-2">
+              <p className="text-[10px] text-amber-400/80 uppercase tracking-[0.4em] font-semibold mb-2">
                 Warnings
               </p>
               <div className="space-y-1.5">
                 {result.warnings.map((w, i) => (
-                  <div key={i} className="flex items-start gap-2 bg-amber-500/[0.04] border border-amber-500/15 px-3 py-2">
-                    <span className="text-amber-400 text-xs shrink-0 mt-0.5">⚠</span>
+                  <div key={i} className="flex items-start gap-2.5 bg-amber-500/[0.04] border border-amber-500/15 px-3 py-2">
+                    <AlertTriangle size={12} className="text-amber-400/70 shrink-0 mt-0.5" />
                     <p className="text-amber-400/80 text-xs leading-relaxed">{w}</p>
                   </div>
                 ))}
@@ -1299,15 +1319,15 @@ function ValidationPanel({ templateId }: { templateId: string }) {
           )}
 
           {result.valid && result.warnings.length === 0 && (
-            <p className="text-emerald-400/70 text-xs">
-              No issues found. Blueprint is ready to publish.
+            <p className="text-emerald-400/70 text-xs flex items-center gap-1.5">
+              <Check size={12} /> No issues found. Blueprint is ready to publish.
             </p>
           )}
         </div>
       )}
 
       {!result && !running && (
-        <p className="text-gray-700 text-xs">
+        <p className="text-white/25 text-xs">
           Run validation to check this blueprint for structural errors before publishing.
         </p>
       )}
@@ -1372,54 +1392,50 @@ function AddSectionForm({
   }
 
   return (
-    <div className="border border-[#C9A24D]/20 bg-[#0d0e0f] p-4 mb-3">
+    <div className="border border-[#C9A24D]/20 bg-[#0d0e0f] rounded-lg p-4 mb-3">
       <form onSubmit={handleSubmit}>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-          <input
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3 items-end">
+          <DSInput
             autoFocus
+            tone="dark"
             value={form.name}
             onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             placeholder="Section name *"
-            className="col-span-2 sm:col-span-1 bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700"
+            className="col-span-2 sm:col-span-1 text-xs py-2"
           />
-          <select
+          <DSSelect
+            tone="dark"
             value={form.sectionType}
             onChange={(e) => setForm((f) => ({ ...f, sectionType: e.target.value }))}
-            className="bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40"
+            className="text-xs py-2"
           >
             {SECTION_TYPES.map((t) => (
               <option key={t} value={t}>{fmtLabel(t)}</option>
             ))}
-          </select>
-          <input
+          </DSSelect>
+          <DSInput
+            tone="dark"
             type="number"
             value={form.estimatedMinutes}
             onChange={(e) => setForm((f) => ({ ...f, estimatedMinutes: e.target.value }))}
             placeholder="Est. minutes"
-            className="bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700"
+            className="text-xs py-2"
           />
           <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex-1 bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.2em] uppercase py-2 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
-            >
+            <Button type="submit" tone="dark" variant="primary" size="sm" loading={saving} className="flex-1">
               {saving ? "…" : "Add"}
-            </button>
-            <button
-              type="button"
-              onClick={onCancel}
-              className="text-gray-600 text-xs border border-white/[0.06] px-3 hover:text-gray-400 transition-colors"
-            >
+            </Button>
+            <Button type="button" tone="dark" variant="ghost" size="sm" onClick={onCancel}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
-        <input
+        <DSInput
+          tone="dark"
           value={form.notes}
           onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
           placeholder="Section notes (optional)"
-          className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700"
+          className="text-xs py-2"
         />
         {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
       </form>
@@ -1514,49 +1530,49 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
     }
   }
 
+  const badge = statusBadge(template.status);
+
   return (
     <div className="min-h-screen bg-[#080909] text-white">
       {/* Header */}
       <header className="border-b border-white/[0.06] bg-[#080909]/95 backdrop-blur-sm sticky top-0 z-40">
         <div className="max-w-screen-xl mx-auto px-4 md:px-8">
           <div className="flex items-center justify-between h-14 gap-4">
-            <div className="flex items-center gap-4 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
               <Link
                 href={backHref}
-                className="text-gray-600 hover:text-gray-400 text-xs tracking-widest uppercase font-semibold transition-colors shrink-0"
+                className="text-white/25 hover:text-white/50 text-[10px] tracking-[0.35em] uppercase font-semibold transition-colors shrink-0"
               >
                 ← Blueprints
               </Link>
-              <div className="w-px h-4 bg-white/10 shrink-0" />
-              <h1 className="text-white font-semibold text-sm tracking-wide truncate">
+              <div className="w-px h-4 bg-white/[0.08] shrink-0" />
+              <h1 className="text-white/85 font-medium text-sm truncate">
                 {template.name}
               </h1>
-              <span className={`px-1.5 py-0.5 text-[10px] font-semibold tracking-wide shrink-0 ${statusCls(template.status)}`}>
-                {template.status}
+              <span className={`inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase shrink-0 ${badge.cls}`}>
+                {badge.label}
               </span>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-3 shrink-0">
               {publishError && (
                 <span className="text-red-400 text-[11px]">{publishError}</span>
               )}
               {template.status !== "active" && (
-                <button
-                  onClick={handlePublish}
-                  disabled={publishing}
-                  className="text-[10px] tracking-[0.25em] uppercase font-semibold bg-[#C9A24D] text-black px-4 py-2 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
-                >
+                <Button tone="dark" variant="primary" size="sm" onClick={handlePublish} loading={publishing}>
                   {publishing ? "Publishing…" : "Publish"}
-                </button>
+                </Button>
               )}
               {template.status === "active" && (
-                <button
+                <Button
+                  tone="dark"
+                  variant="outline"
+                  size="sm"
                   onClick={() => setTemplate((t) => ({ ...t, status: "draft" }))}
-                  className="text-[10px] tracking-[0.25em] uppercase font-semibold text-gray-500 border border-white/[0.1] px-4 py-2 hover:text-white hover:border-white/20 transition-colors"
                   title="Revert to draft"
                 >
                   Unpublish
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -1573,10 +1589,11 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
 
         {/* Section builder */}
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[10px] tracking-[0.5em] text-gray-600 uppercase font-semibold">
-            Sections & Exercises
+          <h2 className="text-[10px] tracking-[0.5em] text-white/25 uppercase font-semibold flex items-center gap-2">
+            <Layers size={12} className="text-white/20" />
+            Sections &amp; Exercises
           </h2>
-          <span className="text-gray-700 text-[11px]">
+          <span className="text-white/25 text-[11px] tabular-nums">
             {sections.length} section{sections.length !== 1 ? "s" : ""}
             {" · "}
             {sections.reduce((s, sec) => s + sec.prescriptions.length, 0) + unsectioned.length} total exercises
@@ -1600,9 +1617,9 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
 
         {/* Unsectioned exercises */}
         {unsectioned.length > 0 && (
-          <div className="border border-white/[0.06] border-dashed bg-[#0d0e0f] mb-3">
+          <div className="border border-white/[0.06] border-dashed rounded-lg bg-[#0d0e0f] mb-3">
             <div className="px-4 py-3 border-b border-white/[0.04]">
-              <span className="text-gray-600 text-xs">Unsectioned Exercises</span>
+              <span className="text-white/30 text-xs">Unsectioned Exercises</span>
             </div>
             <div className="px-3 pt-2">
               {[...unsectioned]
@@ -1659,9 +1676,10 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
         ) : (
           <button
             onClick={() => setShowAddSection(true)}
-            className="w-full border border-dashed border-white/[0.08] px-5 py-4 text-gray-600 text-xs hover:text-gray-400 hover:border-white/[0.15] transition-colors mb-6"
+            className="group w-full flex items-center justify-center gap-1.5 border border-dashed border-white/[0.08] px-5 py-4 text-white/30 text-xs hover:text-[#C9A24D]/80 hover:border-[#C9A24D]/25 transition-colors mb-6"
           >
-            + Add Section
+            <Plus size={13} className="transition-transform duration-200 group-hover:rotate-90" />
+            Add Section
           </button>
         )}
 

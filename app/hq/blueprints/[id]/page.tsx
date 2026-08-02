@@ -8,6 +8,8 @@ import { use } from "react";
 import BlueprintEditor from "@/components/BlueprintEditor";
 import type { BlueprintData } from "@/components/BlueprintEditor";
 import BlueprintAuditPanel from "@/components/pil/BlueprintAuditPanel";
+import { Skeleton, EmptyState } from "@/components/ui";
+import { AlertTriangle } from "lucide-react";
 
 export default function HQBlueprintEditorPage({
   params,
@@ -48,16 +50,25 @@ export default function HQBlueprintEditorPage({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-32">
-        <div className="text-gray-600 text-xs tracking-widest uppercase animate-pulse">Loading…</div>
+      <div className="min-h-screen bg-[#080909]">
+        <div className="max-w-screen-xl mx-auto px-4 md:px-8 py-6 space-y-3">
+          <Skeleton tone="dark" height="h-14" rounded="sm" />
+          <Skeleton tone="dark" height="h-40" rounded="sm" />
+          <Skeleton tone="dark" height="h-64" rounded="sm" />
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center py-32">
-        <div className="text-red-400 text-sm">{error}</div>
+      <div className="min-h-screen bg-[#080909] flex items-center justify-center py-32">
+        <EmptyState
+          tone="dark"
+          icon={<AlertTriangle size={18} />}
+          title="Couldn't load this blueprint"
+          description={error}
+        />
       </div>
     );
   }

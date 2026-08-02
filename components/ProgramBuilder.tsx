@@ -2,6 +2,10 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
+import {
+  ChevronLeft, ChevronRight, Plus, Check, X, Search,
+  Copy, Trash2, Clock, CalendarDays, Repeat, Dumbbell,
+} from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -73,7 +77,7 @@ const CATEGORIES = [
   ["muscle_growth",         "Muscle Growth"],
   ["body_recomposition",    "Body Recomposition"],
   ["athletic_performance",  "Athletic Performance"],
-  ["lifestyle",             "Lifestyle"],
+  ["lifestyle",              "Lifestyle"],
   ["competition_prep",      "Competition Prep"],
   ["executive_performance", "Executive Performance"],
 ] as const;
@@ -94,6 +98,14 @@ function statusBadge(s: string) {
   if (s === "active")   return { cls: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20", label: "Published" };
   if (s === "archived") return { cls: "bg-white/[0.05] text-white/30 border border-white/[0.06]",       label: "Archived" };
   return                       { cls: "bg-amber-500/10 text-amber-400/80 border border-amber-500/20",    label: "Draft" };
+}
+
+// Dot-only variant of statusBadge's color logic — used inside compact
+// blueprint cards where a full pill badge would be too heavy.
+function statusDotColor(s: string) {
+  if (s === "active")   return "bg-emerald-400";
+  if (s === "archived") return "bg-white/25";
+  return "bg-amber-400";
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -130,29 +142,34 @@ function BlueprintPicker({
 
   return (
     <div
-      className="absolute z-30 top-full left-0 mt-1 w-72 bg-[#111213] border border-white/[0.10] shadow-2xl"
+      role="menu"
+      className="animate-[ws-fade-up_0.15s_ease] absolute z-30 top-full left-0 mt-1 w-72 bg-[#111213] border border-white/[0.10] shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
       onClick={(e) => e.stopPropagation()}
     >
       {/* Search */}
       <div className="p-2 border-b border-white/[0.06]">
-        <input
-          ref={inputRef}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-          placeholder="Search blueprints…"
-          className="w-full bg-[#0a0b0b] border border-white/[0.06] text-white text-xs px-2.5 py-1.5 focus:outline-none focus:border-[#C9A24D]/40 placeholder-white/20"
-        />
+        <div className="relative">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/20 pointer-events-none" />
+          <input
+            ref={inputRef}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+            placeholder="Search blueprints…"
+            className="w-full bg-[#0a0b0b] border border-white/[0.06] text-white text-xs pl-7 pr-2.5 py-1.5 focus:outline-none focus:border-[#C9A24D]/40 placeholder-white/20 transition-colors"
+          />
+        </div>
       </div>
 
       {/* Options list */}
       <div className="max-h-64 overflow-y-auto">
         {currentId && (
           <button
+            role="menuitem"
             onClick={onClear}
-            className="w-full text-left px-3 py-2.5 text-[11px] text-white/30 hover:text-red-400/80 hover:bg-red-500/[0.04] border-b border-white/[0.04] transition-colors"
+            className="flex items-center gap-2 w-full text-left px-3 py-2.5 text-[11px] text-white/30 hover:text-red-400/80 hover:bg-red-500/[0.04] border-b border-white/[0.04] transition-colors"
           >
-            ✕ Make rest day
+            <X size={11} /> Make rest day
           </button>
         )}
 
@@ -164,6 +181,7 @@ function BlueprintPicker({
 
         {filtered.map((b) => (
           <button
+            role="menuitem"
             key={b.id}
             onClick={() => onSelect(b)}
             className={`w-full text-left px-3 py-2.5 border-b border-white/[0.03] last:border-0 transition-colors ${
@@ -173,13 +191,16 @@ function BlueprintPicker({
             }`}
           >
             <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className={`text-[11px] font-medium truncate leading-tight ${b.id === currentId ? "text-[#C9A24D]" : "text-white/75"}`}>
-                  {b.name}
-                </p>
-                {b.primaryFocus && (
-                  <p className="text-[10px] text-white/25 mt-0.5 truncate">{b.primaryFocus}</p>
-                )}
+              <div className="min-w-0 flex items-start gap-1.5">
+                {b.id === currentId && <Check size={12} className="text-[#C9A24D] shrink-0 mt-0.5" />}
+                <div className="min-w-0">
+                  <p className={`text-[11px] font-medium truncate leading-tight ${b.id === currentId ? "text-[#C9A24D]" : "text-white/75"}`}>
+                    {b.name}
+                  </p>
+                  {b.primaryFocus && (
+                    <p className="text-[10px] text-white/25 mt-0.5 truncate">{b.primaryFocus}</p>
+                  )}
+                </div>
               </div>
               <div className="flex flex-col items-end shrink-0 gap-0.5">
                 {b.estimatedDurationMinutes && (
@@ -287,7 +308,7 @@ function DayCell({
 
   if (saving) {
     return (
-      <div className="h-[72px] bg-white/[0.02] border border-white/[0.04] flex items-center justify-center">
+      <div className="h-[88px] bg-white/[0.02] border border-white/[0.04] flex items-center justify-center">
         <div className="w-3 h-3 border border-[#C9A24D]/30 border-t-[#C9A24D]/70 rounded-full animate-spin" />
       </div>
     );
@@ -300,15 +321,20 @@ function DayCell({
       {hasWorkout ? (
         <button
           onClick={() => setOpen((x) => !x)}
-          className="w-full h-[72px] bg-[#C9A24D]/[0.05] border border-[#C9A24D]/[0.18] px-2 pt-1.5 pb-2 text-left hover:bg-[#C9A24D]/[0.09] hover:border-[#C9A24D]/30 transition-colors group"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className="group w-full h-[88px] bg-[#C9A24D]/[0.05] border border-[#C9A24D]/[0.18] border-t-2 border-t-[#C9A24D]/70 px-2.5 pt-2 pb-2 text-left flex flex-col justify-between hover:bg-[#C9A24D]/[0.09] hover:border-[#C9A24D]/35 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_-8px_rgba(0,0,0,0.6)] transition-all duration-200 ease-out"
         >
-          <p className="text-[#C9A24D]/85 text-[10px] font-semibold truncate leading-tight">
-            {data?.workoutName}
-          </p>
-          {bp?.primaryFocus && (
-            <p className="text-white/20 text-[9px] mt-0.5 truncate">{bp.primaryFocus}</p>
-          )}
-          <p className="text-white/15 text-[9px] mt-auto flex gap-1.5">
+          <div className="min-w-0">
+            <p className="text-[#C9A24D]/90 text-[10.5px] font-semibold truncate leading-tight">
+              {data?.workoutName}
+            </p>
+            {bp?.primaryFocus && (
+              <p className="text-white/25 text-[9px] mt-0.5 truncate">{bp.primaryFocus}</p>
+            )}
+          </div>
+          <p className="text-white/20 text-[9px] flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDotColor(data?.workoutStatus ?? "draft")}`} />
             {bp?.estimatedDurationMinutes && <span>~{bp.estimatedDurationMinutes}m</span>}
             {bp && bp.exerciseCount > 0 && <span>{bp.exerciseCount}ex</span>}
           </p>
@@ -316,9 +342,12 @@ function DayCell({
       ) : (
         <button
           onClick={() => setOpen((x) => !x)}
-          className="w-full h-[72px] bg-transparent border border-dashed border-white/[0.05] flex items-center justify-center hover:border-white/[0.14] hover:bg-white/[0.015] transition-colors group"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className="w-full h-[88px] bg-transparent border border-dashed border-white/[0.05] flex flex-col items-center justify-center gap-1 hover:border-white/[0.16] hover:bg-white/[0.015] transition-all duration-200 ease-out group"
         >
-          <span className="text-white/12 text-[11px] group-hover:text-white/25 transition-colors">+</span>
+          <Plus size={12} strokeWidth={2.5} className="text-white/12 group-hover:text-white/30 transition-colors" />
+          <span className="text-white/10 text-[8.5px] uppercase tracking-[0.15em] group-hover:text-white/25 transition-colors">Rest</span>
         </button>
       )}
 
@@ -404,10 +433,10 @@ function WeekRow({
   }
 
   return (
-    <div className="border border-white/[0.06] bg-[#0c0d0e] mb-2 group/week">
+    <div className="border border-white/[0.07] bg-[#0c0d0e] group/week">
       {/* Week header */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-white/[0.04]">
-        <span className="text-white/20 text-[9px] font-bold tracking-[0.45em] uppercase shrink-0 tabular-nums">
+      <div className="flex items-center gap-3 px-4 h-12 border-b border-white/[0.05]">
+        <span className="text-[#C9A24D]/60 text-[9px] font-bold tracking-[0.45em] uppercase shrink-0 tabular-nums">
           W{String(week.weekNumber).padStart(2, "0")}
         </span>
 
@@ -441,13 +470,13 @@ function WeekRow({
           <>
             <button
               onClick={() => setEditLabel(true)}
-              className="flex-1 text-left text-white/60 text-xs hover:text-white/85 transition-colors"
+              className="flex-1 text-left text-white/70 text-[13px] font-medium hover:text-white transition-colors truncate"
             >
               {week.label ?? `Week ${week.weekNumber}`}
             </button>
             {trainingDayCount > 0 && (
-              <span className="text-white/15 text-[9px] shrink-0">
-                {trainingDayCount}d
+              <span className="text-white/20 text-[9px] shrink-0 tabular-nums">
+                {trainingDayCount}/7 days
               </span>
             )}
           </>
@@ -455,28 +484,30 @@ function WeekRow({
 
         {/* Week actions */}
         {!editLabel && (
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-0.5 shrink-0">
             <button
               onClick={handleCopy}
               disabled={copying}
+              aria-label={`Duplicate ${week.label ?? `Week ${week.weekNumber}`}`}
               title="Duplicate this week"
-              className="text-[10px] text-white/20 hover:text-[#C9A24D]/70 transition-colors px-1.5 py-0.5 disabled:opacity-50"
+              className="w-6 h-6 flex items-center justify-center text-white/25 hover:text-[#C9A24D]/80 hover:bg-white/[0.04] transition-colors disabled:opacity-50"
             >
-              {copying ? "…" : "⧉"}
+              {copying ? <span className="text-[10px]">…</span> : <Copy size={12} />}
             </button>
             <button
               onClick={handleDelete}
+              aria-label={`Delete ${week.label ?? `Week ${week.weekNumber}`}`}
               title="Delete this week"
-              className="text-[10px] text-white/15 hover:text-red-400/70 transition-colors px-1.5 py-0.5"
+              className="w-6 h-6 flex items-center justify-center text-white/20 hover:text-red-400/80 hover:bg-red-500/[0.06] transition-colors"
             >
-              ×
+              <Trash2 size={12} />
             </button>
           </div>
         )}
       </div>
 
       {/* Day grid */}
-      <div className="grid grid-cols-7 gap-px p-1 bg-[#0a0b0c]">
+      <div className="grid grid-cols-7 gap-1.5 p-2 bg-[#0a0b0c]">
         {[0, 1, 2, 3, 4, 5, 6].map((dow) => (
           <DayCell
             key={dow}
@@ -489,6 +520,32 @@ function WeekRow({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROGRAM METRICS ROW — derived from already-loaded data, no new fetching
+// ─────────────────────────────────────────────────────────────
+
+function MetricCard({
+  icon, label, value, sub,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3.5 transition-colors hover:border-white/[0.1]">
+      <div className="flex items-center gap-2 mb-2.5">
+        <div className="w-6 h-6 flex items-center justify-center bg-[#C9A24D]/[0.08] text-[#C9A24D]/70 border border-[#C9A24D]/15">
+          {icon}
+        </div>
+        <span className="text-[9px] font-bold tracking-[0.3em] uppercase text-white/30">{label}</span>
+      </div>
+      <span className="text-xl font-bold text-white tabular-nums leading-none">{value}</span>
+      {sub && <p className="text-white/22 text-[10px] mt-1.5">{sub}</p>}
     </div>
   );
 }
@@ -550,7 +607,7 @@ function MetadataPanel({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="animate-[ws-fade-up_0.2s_ease] space-y-5 max-w-2xl">
       <div>
         <label className="block text-[9px] text-white/22 uppercase tracking-[0.45em] mb-1.5">Description</label>
         <textarea
@@ -558,7 +615,7 @@ function MetadataPanel({
           onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
           rows={2}
           placeholder="Describe this program's goals, methodology, and intended athlete…"
-          className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2 focus:outline-none focus:border-[#C9A24D]/35 resize-none placeholder-white/15"
+          className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2.5 focus:outline-none focus:border-[#C9A24D]/35 transition-colors resize-none placeholder-white/15"
         />
       </div>
 
@@ -568,7 +625,7 @@ function MetadataPanel({
           <select
             value={form.category}
             onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2 focus:outline-none focus:border-[#C9A24D]/35"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2.5 focus:outline-none focus:border-[#C9A24D]/35 transition-colors"
           >
             {CATEGORIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
@@ -578,7 +635,7 @@ function MetadataPanel({
           <select
             value={form.experienceLevel}
             onChange={(e) => setForm((f) => ({ ...f, experienceLevel: e.target.value }))}
-            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2 focus:outline-none focus:border-[#C9A24D]/35"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2.5 focus:outline-none focus:border-[#C9A24D]/35 transition-colors"
           >
             {EXPERIENCE_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
@@ -591,7 +648,7 @@ function MetadataPanel({
             value={form.defaultDurationWeeks}
             onChange={(e) => setForm((f) => ({ ...f, defaultDurationWeeks: e.target.value }))}
             placeholder="—"
-            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2 focus:outline-none focus:border-[#C9A24D]/35 placeholder-white/15"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2.5 focus:outline-none focus:border-[#C9A24D]/35 transition-colors placeholder-white/15"
           />
         </div>
         <div>
@@ -603,7 +660,7 @@ function MetadataPanel({
             value={form.recommendedDaysPerWeek}
             onChange={(e) => setForm((f) => ({ ...f, recommendedDaysPerWeek: e.target.value }))}
             placeholder="—"
-            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2 focus:outline-none focus:border-[#C9A24D]/35 placeholder-white/15"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/65 text-xs px-2.5 py-2.5 focus:outline-none focus:border-[#C9A24D]/35 transition-colors placeholder-white/15"
           />
         </div>
       </div>
@@ -612,12 +669,14 @@ function MetadataPanel({
         <button
           onClick={handleSave}
           disabled={saving || !dirty}
-          className="text-[10px] tracking-[0.3em] uppercase font-bold bg-white/[0.04] border border-white/[0.08] text-white/50 px-4 py-2 hover:bg-white/[0.07] hover:text-white/70 transition-colors disabled:opacity-30 disabled:cursor-default"
+          className="flex items-center gap-1.5 text-[10px] tracking-[0.3em] uppercase font-bold bg-white/[0.04] border border-white/[0.08] text-white/50 px-4 py-2 hover:bg-white/[0.07] hover:text-white/70 transition-colors disabled:opacity-30 disabled:cursor-default"
         >
           {saving ? "Saving…" : "Save changes"}
         </button>
         {saved && (
-          <span className="text-[10px] text-emerald-400/60">Saved</span>
+          <span className="flex items-center gap-1 text-[10px] text-emerald-400/70">
+            <Check size={11} /> Saved
+          </span>
         )}
       </div>
     </div>
@@ -672,8 +731,9 @@ function PublishPanel({
         <button
           onClick={handlePublish}
           disabled={publishing}
-          className="shrink-0 text-[10px] tracking-[0.3em] uppercase font-bold bg-[#C9A24D] text-black px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
+          className="shrink-0 flex items-center gap-1.5 text-[10px] tracking-[0.3em] uppercase font-bold bg-[#C9A24D] text-black px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
         >
+          <Check size={12} strokeWidth={3} />
           {publishing ? "Validating…" : "Validate & Publish"}
         </button>
       </div>
@@ -743,7 +803,7 @@ function AssignPanel({ templateId }: { templateId: string }) {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="animate-[ws-fade-up_0.2s_ease] space-y-5 max-w-2xl">
       <p className="text-white/25 text-xs leading-relaxed">
         Assign this program to a client. A deep copy of the schedule is created
         for the client at assignment time — future template edits won&apos;t affect
@@ -759,7 +819,7 @@ function AssignPanel({ templateId }: { templateId: string }) {
             onFocus={loadClients}
             placeholder="Search or paste client ID…"
             list="assign-client-list"
-            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2 focus:outline-none focus:border-[#C9A24D]/35 placeholder-white/15"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2.5 focus:outline-none focus:border-[#C9A24D]/35 transition-colors placeholder-white/15"
           />
           <datalist id="assign-client-list">
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -772,7 +832,7 @@ function AssignPanel({ templateId }: { templateId: string }) {
             type="date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
-            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2 focus:outline-none focus:border-[#C9A24D]/35"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2.5 focus:outline-none focus:border-[#C9A24D]/35 transition-colors"
           />
         </div>
         <div className="sm:col-span-2">
@@ -781,7 +841,7 @@ function AssignPanel({ templateId }: { templateId: string }) {
             value={coachNotes}
             onChange={(e) => setCoachNotes(e.target.value)}
             placeholder="Internal notes for this assignment (optional)…"
-            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2 focus:outline-none focus:border-[#C9A24D]/35 placeholder-white/15"
+            className="w-full bg-[#080909] border border-white/[0.06] text-white/70 text-xs px-3 py-2.5 focus:outline-none focus:border-[#C9A24D]/35 transition-colors placeholder-white/15"
           />
         </div>
       </div>
@@ -792,7 +852,8 @@ function AssignPanel({ templateId }: { templateId: string }) {
       </label>
 
       {result && (
-        <p className={`text-xs ${result.ok ? "text-emerald-400/70" : "text-red-400/70"}`}>
+        <p className={`text-xs flex items-center gap-1.5 ${result.ok ? "text-emerald-400/70" : "text-red-400/70"}`}>
+          {result.ok && <Check size={12} />}
           {result.msg}
         </p>
       )}
@@ -800,7 +861,7 @@ function AssignPanel({ templateId }: { templateId: string }) {
       <button
         onClick={handleAssign}
         disabled={saving}
-        className="text-[10px] tracking-[0.3em] uppercase font-bold bg-[#C9A24D] text-black px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
+        className="flex items-center gap-1.5 text-[10px] tracking-[0.3em] uppercase font-bold bg-[#C9A24D] text-black px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
       >
         {saving ? "Assigning…" : "Assign Program →"}
       </button>
@@ -833,6 +894,7 @@ export default function ProgramBuilder({
   const [nameInput,    setNameInput]    = useState(initialData.template.name);
   const [savingName,   setSavingName]   = useState(false);
   const [archiving,    setArchiving]    = useState(false);
+  const [viewedWeek,   setViewedWeek]   = useState(0);
 
   const badge = statusBadge(template.status);
 
@@ -866,6 +928,7 @@ export default function ProgramBuilder({
         })),
       },
     ]);
+    setViewedWeek(weeks.length);
   }
 
   function handleUpdateLabel(weekId: string, label: string) {
@@ -875,6 +938,7 @@ export default function ProgramBuilder({
   }
 
   async function handleAddWeek() {
+    const newIndex = weeks.length;
     setAddingWeek(true);
     try {
       const res  = await fetch(`/api/internal/programs/${templateId}/weeks`, {
@@ -885,6 +949,7 @@ export default function ProgramBuilder({
       const data = await res.json() as { ok: boolean; week?: WeekData["week"] };
       if (data.ok && data.week) {
         setWeeks((prev) => [...prev, { week: data.week!, days: [] }]);
+        setViewedWeek(newIndex);
       }
     } finally {
       setAddingWeek(false);
@@ -939,6 +1004,25 @@ export default function ProgramBuilder({
     0,
   );
   const sortedWeeks = [...weeks].sort((a, b) => a.week.weekNumber - b.week.weekNumber);
+  const safeWeekIndex = sortedWeeks.length === 0 ? 0 : Math.min(viewedWeek, sortedWeeks.length - 1);
+  const activeWeek = sortedWeeks[safeWeekIndex];
+
+  // Average scheduled minutes/week across the whole program — derived
+  // purely from already-loaded weeks + blueprints, no new fetching.
+  const totalAssignedMinutes = weeks.reduce((sum, w) => {
+    return sum + w.days.reduce((daySum, d) => {
+      if (!d.day.workoutTemplateId) return daySum;
+      const bp = blueprints.find((b) => b.id === d.day.workoutTemplateId);
+      return daySum + (bp?.estimatedDurationMinutes ?? 0);
+    }, 0);
+  }, 0);
+  const avgWeeklyMinutes = weeks.length > 0 ? Math.round(totalAssignedMinutes / weeks.length) : 0;
+  const timeLabel =
+    avgWeeklyMinutes <= 0
+      ? "—"
+      : avgWeeklyMinutes >= 60
+        ? `~${(avgWeeklyMinutes / 60).toFixed(1)}h`
+        : `~${avgWeeklyMinutes}m`;
 
   return (
     <div className="min-h-screen bg-[#070809] text-white">
@@ -986,7 +1070,8 @@ export default function ProgramBuilder({
                 </button>
               )}
 
-              <span className={`px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase shrink-0 ${badge.cls}`}>
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold tracking-[0.3em] uppercase shrink-0 ${badge.cls}`}>
+                <span className={`w-1 h-1 rounded-full ${statusDotColor(template.status)}`} />
                 {badge.label}
               </span>
 
@@ -1013,11 +1098,19 @@ export default function ProgramBuilder({
             </div>
           </div>
 
+          {/* Category / experience subline */}
+          <p className="text-white/22 text-[10.5px] pb-2.5 -mt-0.5">
+            {fmtLabel(template.category)} · {fmtLabel(template.experienceLevel)}
+          </p>
+
           {/* Day-of-week legend (below header, above tabs) */}
-          {tab === "schedule" && (
-            <div className="grid grid-cols-7 gap-px pb-1 -mx-0">
-              {DAY_FULL.map((d) => (
-                <p key={d} className="text-white/12 text-[8px] text-center uppercase tracking-[0.2em]">{d.slice(0, 3)}</p>
+          {tab === "schedule" && sortedWeeks.length > 0 && (
+            <div className="grid grid-cols-7 gap-1.5 pb-1.5 -mx-0">
+              {DAY_FULL.map((d, i) => (
+                <p key={d} className="text-white/12 text-[8px] text-center uppercase tracking-[0.2em]">
+                  <span className="hidden sm:inline">{d.slice(0, 3)}</span>
+                  <span className="sm:hidden">{DAY_SHORT[i]}</span>
+                </p>
               ))}
             </div>
           )}
@@ -1046,30 +1139,105 @@ export default function ProgramBuilder({
         {/* ── Schedule tab ──────────────────────────────────── */}
         {tab === "schedule" && (
           <>
-            {/* Week list */}
-            <div className="space-y-0">
-              {sortedWeeks.map((w) => (
-                <WeekRow
-                  key={w.week.id}
-                  weekData={w}
-                  templateId={templateId}
-                  blueprints={blueprints}
-                  onUpdateDay={handleUpdateDay}
-                  onDelete={handleDeleteWeek}
-                  onCopyWeek={handleCopyWeek}
-                  onUpdateLabel={handleUpdateLabel}
-                />
-              ))}
+            {/* Program metrics */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+              <MetricCard
+                icon={<CalendarDays size={13} />}
+                label="Duration"
+                value={`${template.defaultDurationWeeks ?? weeks.length}w`}
+              />
+              <MetricCard
+                icon={<Repeat size={13} />}
+                label="Days / Week"
+                value={template.recommendedDaysPerWeek ? String(template.recommendedDaysPerWeek) : "—"}
+              />
+              <MetricCard
+                icon={<Dumbbell size={13} />}
+                label="Workouts"
+                value={String(trainingDays)}
+              />
+              <MetricCard
+                icon={<Clock size={13} />}
+                label="Est. Time / Week"
+                value={timeLabel}
+              />
             </div>
 
-            {/* Add week */}
-            <button
-              onClick={handleAddWeek}
-              disabled={addingWeek}
-              className="w-full border border-dashed border-white/[0.05] py-4 text-white/20 text-xs hover:text-white/40 hover:border-white/[0.12] transition-colors disabled:opacity-40 mt-1"
-            >
-              {addingWeek ? "Adding…" : "+ Add Week"}
-            </button>
+            {sortedWeeks.length === 0 ? (
+              <div className="border border-dashed border-white/[0.08] px-6 py-12 text-center">
+                <p className="text-white/30 text-sm mb-4">This program doesn&apos;t have any weeks yet.</p>
+                <button
+                  onClick={handleAddWeek}
+                  disabled={addingWeek}
+                  className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.3em] font-bold bg-[#C9A24D] text-black px-4 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
+                >
+                  <Plus size={12} strokeWidth={3} />
+                  {addingWeek ? "Adding…" : "Add Week"}
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Week pager */}
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-2.5">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setViewedWeek((i) => Math.max(0, i - 1))}
+                      disabled={safeWeekIndex === 0}
+                      aria-label="Previous week"
+                      className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
+                    >
+                      <ChevronLeft size={13} />
+                    </button>
+                    <select
+                      value={safeWeekIndex}
+                      onChange={(e) => setViewedWeek(Number(e.target.value))}
+                      aria-label="Jump to week"
+                      className="bg-[#0a0b0b] border border-white/[0.08] text-white/70 text-xs px-2.5 py-1.5 focus:outline-none focus:border-[#C9A24D]/40 transition-colors max-w-[170px]"
+                    >
+                      {sortedWeeks.map((w, i) => (
+                        <option key={w.week.id} value={i}>
+                          {w.week.label ?? `Week ${w.week.weekNumber}`}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setViewedWeek((i) => Math.min(sortedWeeks.length - 1, i + 1))}
+                      disabled={safeWeekIndex >= sortedWeeks.length - 1}
+                      aria-label="Next week"
+                      className="w-7 h-7 flex items-center justify-center border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 disabled:opacity-25 disabled:hover:text-white/40 disabled:hover:border-white/[0.08] transition-colors"
+                    >
+                      <ChevronRight size={13} />
+                    </button>
+                    <span className="text-white/18 text-[10px] uppercase tracking-[0.25em] ml-1 hidden sm:inline">
+                      Week {safeWeekIndex + 1} of {sortedWeeks.length}
+                    </span>
+                  </div>
+                  <button
+                    onClick={handleAddWeek}
+                    disabled={addingWeek}
+                    className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.25em] font-semibold text-white/30 hover:text-[#C9A24D] border border-white/[0.08] hover:border-[#C9A24D]/30 px-3 py-1.5 transition-colors disabled:opacity-50"
+                  >
+                    <Plus size={12} />
+                    {addingWeek ? "Adding…" : "Add Week"}
+                  </button>
+                </div>
+
+                {/* Active week */}
+                {activeWeek && (
+                  <div key={activeWeek.week.id} className="animate-[ws-fade-up_0.2s_ease]">
+                    <WeekRow
+                      weekData={activeWeek}
+                      templateId={templateId}
+                      blueprints={blueprints}
+                      onUpdateDay={handleUpdateDay}
+                      onDelete={handleDeleteWeek}
+                      onCopyWeek={handleCopyWeek}
+                      onUpdateLabel={handleUpdateLabel}
+                    />
+                  </div>
+                )}
+              </>
+            )}
 
             {/* Blueprints legend */}
             {blueprints.length > 0 && (

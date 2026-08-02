@@ -11,6 +11,7 @@
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { ChevronLeft, ArrowUpRight } from "lucide-react";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import {
   getCoachCheckInDetail,
@@ -18,6 +19,8 @@ import {
 } from "@/lib/db/coach-check-in-service";
 import CheckInReviewPanel from "@/components/hq/check-ins/CheckInReviewPanel";
 import type { CheckInDetail } from "@/lib/db/check-in-service";
+import { Card, Badge } from "@/components/ui";
+import type { BadgeVariant } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +43,13 @@ const STATUS_LABEL: Record<string, string> = {
   reviewed: "Reviewed",
 };
 
+const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
+  draft: "neutral",
+  submitted: "info",
+  in_review: "warning",
+  reviewed: "success",
+};
+
 const GOAL_TYPE_LABEL: Record<string, string> = {
   fat_loss: "Fat Loss",
   muscle_gain: "Muscle Gain",
@@ -47,13 +57,6 @@ const GOAL_TYPE_LABEL: Record<string, string> = {
   general_health: "General Health",
   maintenance: "Maintenance",
   custom: "Custom",
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  draft: "text-gray-400 border-gray-600/40",
-  submitted: "text-blue-400 border-blue-500/30",
-  in_review: "text-amber-400 border-amber-500/30",
-  reviewed: "text-emerald-400 border-emerald-500/30",
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -75,18 +78,18 @@ function RatingBar({
 
   return (
     <div className="flex items-center gap-3 py-1.5 border-b border-white/[0.04] last:border-0">
-      <p className="text-[9px] text-gray-500 uppercase tracking-[0.2em] w-24 shrink-0">
+      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-24 shrink-0">
         {label}
       </p>
       {value !== null ? (
         <>
           <div className="flex-1 h-1 bg-white/[0.06] relative">
             <div
-              className="absolute left-0 top-0 h-full bg-[#C9A24D]/50"
+              className="absolute left-0 top-0 h-full bg-gold/50"
               style={{ width: `${fillPct}%` }}
             />
           </div>
-          <span className="text-[#C9A24D] text-xs font-bold w-8 text-right shrink-0">
+          <span className="text-gold text-xs font-bold w-8 text-right shrink-0">
             {value}/10
           </span>
           {prev !== null && (
@@ -96,7 +99,7 @@ function RatingBar({
                   ? "text-emerald-400"
                   : delta! < 0
                   ? "text-red-400"
-                  : "text-gray-600"
+                  : "text-white/25"
               }`}
             >
               {delta! > 0 ? "+" : ""}
@@ -105,7 +108,7 @@ function RatingBar({
           )}
         </>
       ) : (
-        <span className="text-gray-600 text-xs">—</span>
+        <span className="text-white/25 text-xs">—</span>
       )}
     </div>
   );
@@ -124,7 +127,7 @@ function MetricPair({
 }) {
   return (
     <div className="flex items-center gap-3 py-1.5 border-b border-white/[0.04] last:border-0">
-      <p className="text-[9px] text-gray-500 uppercase tracking-[0.2em] w-28 shrink-0">
+      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-28 shrink-0">
         {label}
       </p>
       {current !== null ? (
@@ -134,14 +137,14 @@ function MetricPair({
             {suffix}
           </span>
           {previous !== null && previous !== undefined && (
-            <span className="text-gray-600 text-[10px]">
+            <span className="text-white/25 text-[10px]">
               prev {previous}
               {suffix}
             </span>
           )}
         </div>
       ) : (
-        <span className="text-gray-600 text-xs">—</span>
+        <span className="text-white/25 text-xs">—</span>
       )}
     </div>
   );
@@ -160,7 +163,7 @@ function ComplianceBar({
   return (
     <div className="py-1.5 border-b border-white/[0.04] last:border-0">
       <div className="flex items-center justify-between mb-1">
-        <p className="text-[9px] text-gray-500 uppercase tracking-[0.2em]">{label}</p>
+        <p className="text-[9px] text-white/30 uppercase tracking-[0.2em]">{label}</p>
         <div className="flex items-center gap-3">
           {value !== null ? (
             <>
@@ -182,7 +185,7 @@ function ComplianceBar({
                       ? "text-emerald-400"
                       : delta < 0
                       ? "text-red-400"
-                      : "text-gray-600"
+                      : "text-white/25"
                   }`}
                 >
                   {delta > 0 ? "+" : ""}
@@ -191,7 +194,7 @@ function ComplianceBar({
               )}
             </>
           ) : (
-            <span className="text-gray-600 text-xs">—</span>
+            <span className="text-white/25 text-xs">—</span>
           )}
         </div>
       </div>
@@ -217,8 +220,8 @@ function TextSection({ label, value }: { label: string; value: string | null }) 
   if (!value) return null;
   return (
     <div className="py-3 border-b border-white/[0.04] last:border-0">
-      <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-1.5">{label}</p>
-      <p className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">{value}</p>
+      <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mb-1.5">{label}</p>
+      <p className="text-white/80 text-sm leading-relaxed whitespace-pre-wrap">{value}</p>
     </div>
   );
 }
@@ -239,13 +242,13 @@ function CheckInDataPanel({
   return (
     <div className="space-y-5">
       {label && (
-        <p className="text-[9px] text-gray-500 uppercase tracking-[0.4em]">{label}</p>
+        <p className="text-[9px] text-white/30 uppercase tracking-[0.4em]">{label}</p>
       )}
 
       {/* Body */}
       {(data.bodyWeightLbs !== null || data.waistInches !== null) && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3">
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">Body</p>
+        <Card tone="dark" padding="sm">
+          <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mb-2">Body</p>
           <MetricPair
             label="Weight"
             current={data.bodyWeightLbs !== null ? `${data.bodyWeightLbs}` : null}
@@ -258,7 +261,7 @@ function CheckInDataPanel({
             previous={prev?.waistInches ?? null}
             suffix='"'
           />
-        </div>
+        </Card>
       )}
 
       {/* Recovery */}
@@ -267,8 +270,8 @@ function CheckInDataPanel({
         data.averageHunger !== null ||
         data.digestionRating !== null ||
         data.averageSleepHours !== null) && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3">
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">Recovery</p>
+        <Card tone="dark" padding="sm">
+          <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mb-2">Recovery</p>
           <MetricPair
             label="Sleep"
             current={data.averageSleepHours !== null ? `${data.averageSleepHours}` : null}
@@ -279,7 +282,7 @@ function CheckInDataPanel({
           <RatingBar value={data.averageEnergy} prev={prev?.averageEnergy ?? null} label="Energy" />
           <RatingBar value={data.averageHunger} prev={prev?.averageHunger ?? null} label="Hunger" />
           <RatingBar value={data.digestionRating} prev={prev?.digestionRating ?? null} label="Digestion" />
-        </div>
+        </Card>
       )}
 
       {/* Habits */}
@@ -287,8 +290,8 @@ function CheckInDataPanel({
         data.nutritionCompliancePct !== null ||
         data.averageWaterOunces !== null ||
         data.averageSteps !== null) && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3">
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">Habits</p>
+        <Card tone="dark" padding="sm">
+          <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mb-2">Habits</p>
           <ComplianceBar
             label="Workout compliance"
             value={data.workoutCompliancePct}
@@ -310,18 +313,18 @@ function CheckInDataPanel({
             current={data.averageSteps !== null ? data.averageSteps.toLocaleString() : null}
             previous={prev?.averageSteps !== null && prev?.averageSteps !== undefined ? prev.averageSteps.toLocaleString() : null}
           />
-        </div>
+        </Card>
       )}
 
       {/* Reflection */}
       {(data.wins || data.challenges || data.questions || data.clientNotes) && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3">
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">Reflection</p>
+        <Card tone="dark" padding="sm">
+          <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mb-2">Reflection</p>
           <TextSection label="Wins" value={data.wins} />
           <TextSection label="Challenges" value={data.challenges} />
           <TextSection label="Questions" value={data.questions} />
           <TextSection label="Notes" value={data.clientNotes} />
-        </div>
+        </Card>
       )}
     </div>
   );
@@ -346,7 +349,7 @@ export default async function CheckInReviewPage({
   const weekLabel = fmtDate(checkIn.weekStartDate);
 
   return (
-    <div className="space-y-6 max-w-[900px]">
+    <div className="space-y-6 max-w-5xl">
       <HQBreadcrumbs crumbs={[
         { label: "Mission Control", href: "/hq" },
         { label: "Check-Ins", href: "/hq/check-ins" },
@@ -357,46 +360,46 @@ export default async function CheckInReviewPage({
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span
-              className={`text-[9px] border px-1.5 py-0.5 uppercase tracking-[0.2em] ${STATUS_COLOR[checkIn.status]}`}
-            >
+            <Badge tone="dark" variant={STATUS_BADGE_VARIANT[checkIn.status]} size="sm">
               {STATUS_LABEL[checkIn.status]}
-            </span>
+            </Badge>
           </div>
           <h1 className="text-white text-xl font-bold tracking-wide">
             {checkIn.clientName}
           </h1>
-          <p className="text-gray-400 text-sm mt-0.5">Week of {weekLabel}</p>
+          <p className="text-white/50 text-sm mt-0.5">Week of {weekLabel}</p>
           <div className="flex items-center gap-3 mt-1.5 flex-wrap">
             {checkIn.submittedAt && (
-              <span className="text-[10px] text-gray-500">
+              <span className="text-[10px] text-white/30">
                 Submitted {fmtDate(checkIn.submittedAt, true)}
               </span>
             )}
             {checkIn.lastEditedAt && (
               <>
-                <span className="text-gray-700 text-[10px]">·</span>
+                <span className="text-white/15 text-[10px]">·</span>
                 <span className="text-[10px] text-amber-400/80">
                   Edited after submission
                 </span>
-                <span className="text-[10px] text-gray-600">
+                <span className="text-[10px] text-white/25">
                   ({fmtDate(checkIn.lastEditedAt, true)})
                 </span>
               </>
             )}
             <Link
               href={`/hq/clients/${checkIn.clientId}`}
-              className="text-[10px] text-[#C9A24D]/60 hover:text-[#C9A24D] transition-colors uppercase tracking-[0.15em]"
+              className="inline-flex items-center gap-1 text-[10px] text-gold/60 uppercase tracking-[0.15em] transition-colors hover:text-gold"
             >
-              View Client Workspace →
+              View Client Workspace
+              <ArrowUpRight size={11} />
             </Link>
           </div>
         </div>
         <Link
           href="/hq/check-ins"
-          className="text-[10px] text-gray-500 uppercase tracking-[0.2em] hover:text-white/70 border border-white/[0.07] px-3 py-1.5 transition-colors shrink-0"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] text-white/50 transition-colors hover:border-white/25 hover:text-white/80"
         >
-          ← Queue
+          <ChevronLeft size={12} />
+          Queue
         </Link>
       </div>
 
@@ -412,17 +415,17 @@ export default async function CheckInReviewPage({
 
           {/* Previous check-in reference */}
           {checkIn.previousCheckIn && (
-            <div className="bg-[#0a0b0c] border border-white/[0.04] px-4 py-3">
-              <p className="text-[9px] text-gray-600 uppercase tracking-[0.3em] mb-1">
+            <Card tone="dark" padding="sm" className="opacity-80">
+              <p className="text-[9px] text-white/25 uppercase tracking-[0.3em] mb-1">
                 Previous check-in
               </p>
-              <p className="text-gray-500 text-xs">
+              <p className="text-white/40 text-xs">
                 Week of {fmtDate(checkIn.previousCheckIn.weekStartDate, true)}
               </p>
-              <p className="text-gray-600 text-[9px] mt-0.5">
+              <p className="text-white/25 text-[9px] mt-0.5">
                 Deltas (±) shown above in comparison columns
               </p>
-            </div>
+            </Card>
           )}
         </div>
 
@@ -432,21 +435,21 @@ export default async function CheckInReviewPage({
               immediate context on what the client is working toward
               without navigating to the client workspace. */}
           {goalContext && (
-            <div className="bg-[#0a0b0c] border border-white/[0.06] px-4 py-3 space-y-2">
-              <p className="text-[9px] text-gray-500 uppercase tracking-[0.4em]">
+            <Card tone="dark" padding="sm" className="space-y-2">
+              <p className="text-[9px] text-white/30 uppercase tracking-[0.4em]">
                 Goal Context
               </p>
               <p className="text-white text-sm font-medium">
                 {GOAL_TYPE_LABEL[goalContext.goalType] ?? goalContext.goalType}
               </p>
-              <p className="text-gray-500 text-xs leading-relaxed">
+              <p className="text-white/40 text-xs leading-relaxed">
                 {goalContext.description}
               </p>
               {(goalContext.targetValue || checkIn.bodyWeightLbs || goalContext.targetDate) && (
                 <div className="pt-2 space-y-1 border-t border-white/[0.04]">
                   {goalContext.targetValue && goalContext.targetUnit && (
                     <div className="flex items-center gap-3">
-                      <p className="text-[9px] text-gray-500 uppercase tracking-[0.2em] w-16 shrink-0">
+                      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-16 shrink-0">
                         Target
                       </p>
                       <p className="text-white text-sm">
@@ -456,7 +459,7 @@ export default async function CheckInReviewPage({
                   )}
                   {checkIn.bodyWeightLbs && (
                     <div className="flex items-center gap-3">
-                      <p className="text-[9px] text-gray-500 uppercase tracking-[0.2em] w-16 shrink-0">
+                      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-16 shrink-0">
                         This week
                       </p>
                       <p className="text-white text-sm">
@@ -466,7 +469,7 @@ export default async function CheckInReviewPage({
                   )}
                   {goalContext.targetDate && (
                     <div className="flex items-center gap-3">
-                      <p className="text-[9px] text-gray-500 uppercase tracking-[0.2em] w-16 shrink-0">
+                      <p className="text-[9px] text-white/30 uppercase tracking-[0.2em] w-16 shrink-0">
                         By
                       </p>
                       <p className="text-white text-sm">
@@ -476,7 +479,7 @@ export default async function CheckInReviewPage({
                   )}
                 </div>
               )}
-            </div>
+            </Card>
           )}
 
           <CheckInReviewPanel

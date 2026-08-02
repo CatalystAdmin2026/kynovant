@@ -8,9 +8,12 @@
 //   - Projected completion date
 //   - Program assignment history below
 //
-// Empty state: premium illustration + gold CTA (injected via prop)
+// Empty state: EmptyState primitive + gold CTA (injected via prop)
 // ─────────────────────────────────────────────────────────────
 
+import { ClipboardList, Check } from "lucide-react";
+import { Card, Badge, EmptyState } from "@/components/ui";
+import type { BadgeVariant } from "@/components/ui";
 import type { ActiveProgramInfo } from "@/lib/db/coach-client-workspace-service";
 import type { ProgramHistoryItem } from "@/lib/db/coach-program-assignment-service";
 
@@ -42,11 +45,11 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Archived",
 };
 
-const STATUS_COLOR: Record<string, string> = {
-  active: "text-emerald-400 border-emerald-500/30",
-  inactive: "text-gray-500 border-gray-600",
-  completed: "text-blue-400 border-blue-500/30",
-  cancelled: "text-gray-600 border-gray-700",
+const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
+  active: "success",
+  inactive: "neutral",
+  completed: "info",
+  cancelled: "neutral",
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -61,55 +64,11 @@ function SectionHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-3 mb-4">
-      <h2 className="text-[10px] text-gray-400 uppercase tracking-[0.4em] font-semibold shrink-0">
+    <div className="mb-4 flex items-center gap-3">
+      <h2 className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.4em] text-white/40">
         {title}
       </h2>
-      <div className="flex-1 h-px bg-white/[0.04]" />
-      {action}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// EMPTY STATE
-// ─────────────────────────────────────────────────────────────
-
-function EmptyProgramState({ action }: { action: React.ReactNode }) {
-  return (
-    <div className="border border-dashed border-white/[0.08] px-8 py-12 text-center">
-      {/* Inline SVG illustration — program structure icon */}
-      <div className="flex justify-center mb-6">
-        <svg
-          width="48"
-          height="48"
-          viewBox="0 0 48 48"
-          fill="none"
-          aria-hidden
-          className="opacity-20"
-        >
-          <rect x="4" y="8" width="40" height="6" rx="1" fill="#C9A24D" />
-          <rect x="4" y="18" width="28" height="4" rx="1" fill="#C9A24D" opacity="0.6" />
-          <rect x="4" y="26" width="36" height="4" rx="1" fill="#C9A24D" opacity="0.4" />
-          <rect x="4" y="34" width="20" height="4" rx="1" fill="#C9A24D" opacity="0.25" />
-          <circle cx="42" cy="38" r="6" fill="#C9A24D" opacity="0.3" />
-          <path
-            d="M39.5 38 L41.5 40 L44.5 36"
-            stroke="#C9A24D"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity="0.8"
-          />
-        </svg>
-      </div>
-
-      <h3 className="text-white text-sm font-semibold mb-2">No Program Assigned</h3>
-      <p className="text-gray-500 text-xs leading-relaxed max-w-xs mx-auto mb-6">
-        Assign a blueprint to begin this client&apos;s coaching journey. The program will
-        appear here with full week-by-week tracking.
-      </p>
-
+      <div className="h-px flex-1 bg-white/[0.04]" />
       {action}
     </div>
   );
@@ -131,22 +90,22 @@ function WeekRow({
   const isLast = weekNumber === totalWeeks;
 
   return (
-    <div className="flex items-center gap-3 group">
+    <div className="group flex items-center gap-3">
       {/* Timeline spine */}
-      <div className="flex flex-col items-center shrink-0">
+      <div className="flex shrink-0 flex-col items-center">
         <div
-          className={`w-3 h-3 rounded-full border-2 transition-colors ${
+          className={`h-3 w-3 rounded-full border-2 transition-colors duration-150 ${
             status === "completed"
-              ? "bg-emerald-500/30 border-emerald-500/60"
+              ? "border-emerald-500/60 bg-emerald-500/30"
               : status === "current"
-              ? "bg-[#C9A24D] border-[#C9A24D]"
-              : "bg-transparent border-white/[0.10]"
+              ? "border-[#C9A24D] bg-[#C9A24D]"
+              : "border-white/[0.10] bg-transparent"
           }`}
           aria-hidden
         />
         {!isLast && (
           <div
-            className={`w-px mt-0.5 ${
+            className={`mt-0.5 w-px ${
               status === "completed" ? "bg-emerald-500/20" : "bg-white/[0.04]"
             }`}
             style={{ height: "20px" }}
@@ -156,9 +115,9 @@ function WeekRow({
 
       {/* Row content */}
       <div
-        className={`flex-1 flex items-center justify-between py-1.5 px-3 transition-colors ${
+        className={`flex flex-1 items-center justify-between rounded-md px-3 py-1.5 transition-colors duration-150 ${
           status === "current"
-            ? "bg-[#C9A24D]/[0.05] border border-[#C9A24D]/20"
+            ? "border border-[#C9A24D]/20 bg-[#C9A24D]/[0.05]"
             : "border border-transparent"
         }`}
       >
@@ -168,24 +127,24 @@ function WeekRow({
               status === "current"
                 ? "text-[#C9A24D]"
                 : status === "completed"
-                ? "text-gray-400"
-                : "text-gray-600"
+                ? "text-white/50"
+                : "text-white/25"
             }`}
           >
             Week {weekNumber}
           </span>
           {status === "current" && (
-            <span className="text-[8px] text-[#C9A24D]/70 uppercase tracking-[0.25em] font-semibold">
+            <span className="text-[8px] font-semibold uppercase tracking-[0.25em] text-[#C9A24D]/70">
               Current
             </span>
           )}
         </div>
 
         {status === "completed" && (
-          <span className="text-emerald-400 text-[10px]">✓</span>
+          <Check size={12} strokeWidth={3} className="text-emerald-400" />
         )}
         {status === "upcoming" && (
-          <span className="text-gray-700 text-[9px] uppercase tracking-[0.15em]">Upcoming</span>
+          <span className="text-[9px] uppercase tracking-[0.15em] text-white/25">Upcoming</span>
         )}
       </div>
     </div>
@@ -217,25 +176,25 @@ function ActiveTimeline({
       />
 
       {/* Program header */}
-      <div className="bg-[#0d0e0f] border border-white/[0.06] px-5 py-4 mb-4">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
+      <Card tone="dark" className="mb-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-white font-bold text-base leading-tight">{program.name}</p>
-            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+            <p className="text-base font-bold leading-tight text-white">{program.name}</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-3">
               {program.startDate && (
-                <span className="text-gray-500 text-[10px]">
+                <span className="text-[10px] text-white/40">
                   Started {fmtDate(program.startDate)}
                 </span>
               )}
               {completionEndDate && (
-                <span className="text-gray-500 text-[10px]">
+                <span className="text-[10px] text-white/40">
                   Ends {fmtDate(completionEndDate)}
                 </span>
               )}
               {program.daysRemaining !== null && (
                 <span
                   className={`text-[10px] font-semibold ${
-                    program.daysRemaining <= 7 ? "text-amber-400" : "text-gray-400"
+                    program.daysRemaining <= 7 ? "text-amber-400" : "text-white/40"
                   }`}
                 >
                   {program.daysRemaining}d remaining
@@ -244,9 +203,9 @@ function ActiveTimeline({
             </div>
           </div>
           {totalWeeks > 0 && (
-            <div className="text-right shrink-0">
-              <p className="text-[#C9A24D] text-2xl font-bold leading-none">{currentWeek}</p>
-              <p className="text-gray-500 text-[9px] uppercase tracking-[0.3em]">
+            <div className="shrink-0 text-right">
+              <p className="text-2xl font-bold leading-none text-[#C9A24D]">{currentWeek}</p>
+              <p className="text-[9px] uppercase tracking-[0.3em] text-white/30">
                 / {totalWeeks} wks
               </p>
             </div>
@@ -256,15 +215,15 @@ function ActiveTimeline({
         {/* Progress bar */}
         {program.programCompletionPct !== null && (
           <div className="mt-4">
-            <div className="flex items-center justify-between mb-1.5">
-              <p className="text-[9px] text-gray-600 uppercase tracking-[0.2em]">Progress</p>
-              <p className="text-[10px] text-[#C9A24D] font-bold">
+            <div className="mb-1.5 flex items-center justify-between">
+              <p className="text-[9px] uppercase tracking-[0.2em] text-white/30">Progress</p>
+              <p className="text-[10px] font-bold text-[#C9A24D]">
                 {program.programCompletionPct}%
               </p>
             </div>
-            <div className="h-px bg-white/[0.06] relative overflow-hidden">
+            <div className="relative h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
               <div
-                className="absolute inset-y-0 left-0 bg-[#C9A24D]/60 transition-all"
+                className="absolute inset-y-0 left-0 rounded-full bg-[#C9A24D]/70 transition-all duration-500"
                 style={{ width: `${Math.min(100, program.programCompletionPct)}%` }}
               />
             </div>
@@ -273,29 +232,29 @@ function ActiveTimeline({
 
         {/* Stats row */}
         {totalWeeks > 0 && (
-          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-white/[0.04]">
+          <div className="mt-3 flex items-center gap-4 border-t border-white/[0.04] pt-3">
             <div>
-              <p className="text-[9px] text-gray-600 uppercase tracking-[0.15em]">Completed</p>
-              <p className="text-emerald-400 text-sm font-bold">{completedWeeks}</p>
+              <p className="text-[9px] uppercase tracking-[0.15em] text-white/30">Completed</p>
+              <p className="text-sm font-bold text-emerald-400">{completedWeeks}</p>
             </div>
             <div>
-              <p className="text-[9px] text-gray-600 uppercase tracking-[0.15em]">Remaining</p>
-              <p className="text-gray-300 text-sm font-bold">{upcomingWeeks}</p>
+              <p className="text-[9px] uppercase tracking-[0.15em] text-white/30">Remaining</p>
+              <p className="text-sm font-bold text-white/70">{upcomingWeeks}</p>
             </div>
             {program.recommendedDaysPerWeek && (
               <div>
-                <p className="text-[9px] text-gray-600 uppercase tracking-[0.15em]">Days/Wk</p>
-                <p className="text-gray-300 text-sm font-bold">{program.recommendedDaysPerWeek}</p>
+                <p className="text-[9px] uppercase tracking-[0.15em] text-white/30">Days/Wk</p>
+                <p className="text-sm font-bold text-white/70">{program.recommendedDaysPerWeek}</p>
               </div>
             )}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Week-by-week timeline */}
       {totalWeeks > 0 && (
-        <div className="bg-[#0a0b0c] border border-white/[0.05] px-4 py-4">
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-4">
+        <Card tone="dark">
+          <p className="mb-4 text-[9px] uppercase tracking-[0.3em] text-white/30">
             Program Timeline
           </p>
           <div className="space-y-0">
@@ -318,12 +277,12 @@ function ActiveTimeline({
           </div>
 
           {completionEndDate && (
-            <p className="text-[9px] text-gray-600 mt-4 pt-3 border-t border-white/[0.04]">
+            <p className="mt-4 border-t border-white/[0.04] pt-3 text-[9px] text-white/25">
               Projected completion:{" "}
-              <span className="text-gray-400">{fmtDate(completionEndDate)}</span>
+              <span className="text-white/50">{fmtDate(completionEndDate)}</span>
             </p>
           )}
-        </div>
+        </Card>
       )}
     </section>
   );
@@ -343,39 +302,35 @@ function ProgramHistory({ items }: { items: ProgramHistoryItem[] }) {
         {items.map((item) => (
           <div
             key={item.id}
-            className="bg-[#0a0b0c] border border-white/[0.05] px-4 py-3"
+            className="rounded-lg border border-white/[0.05] bg-[#0a0b0c] px-4 py-3"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-white text-xs font-semibold">{item.programName}</p>
-                  <span
-                    className={`text-[8px] uppercase tracking-[0.2em] font-semibold border px-1.5 py-0.5 ${
-                      STATUS_COLOR[item.status] ?? "text-gray-500 border-gray-700"
-                    }`}
-                  >
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs font-semibold text-white">{item.programName}</p>
+                  <Badge tone="dark" variant={STATUS_BADGE_VARIANT[item.status] ?? "neutral"} size="sm">
                     {STATUS_LABEL[item.status] ?? item.status}
-                  </span>
+                  </Badge>
                 </div>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <span className="text-gray-500 text-[10px]">
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] text-white/40">
                     {fmtDateShort(item.startDate)}
                     {item.endDate ? ` → ${fmtDateShort(item.endDate)}` : " → present"}
                   </span>
                   {item.totalWeeks && (
                     <>
-                      <span className="text-gray-700">·</span>
-                      <span className="text-gray-600 text-[10px]">{item.totalWeeks}w</span>
+                      <span className="text-white/15">·</span>
+                      <span className="text-[10px] text-white/30">{item.totalWeeks}w</span>
                     </>
                   )}
                 </div>
                 {item.coachNotes && (
-                  <p className="text-gray-600 text-[10px] mt-1 italic line-clamp-1">
+                  <p className="mt-1 line-clamp-1 text-[10px] italic text-white/30">
                     {item.coachNotes}
                   </p>
                 )}
               </div>
-              <p className="text-gray-600 text-[9px] shrink-0">
+              <p className="shrink-0 text-[9px] text-white/25">
                 Assigned {fmtDateShort(item.assignedAt.slice(0, 10))}
               </p>
             </div>
@@ -410,7 +365,15 @@ export default function ProgramTimeline({
     return (
       <section>
         <SectionHeader title="Active Program" action={null} />
-        <EmptyProgramState action={emptyStateAction} />
+        <div className="rounded-xl border border-dashed border-white/[0.08]">
+          <EmptyState
+            tone="dark"
+            icon={<ClipboardList className="size-5" />}
+            title="No Program Assigned"
+            description="Assign a blueprint to begin this client's coaching journey. The program will appear here with full week-by-week tracking."
+            action={emptyStateAction}
+          />
+        </div>
         <ProgramHistory items={historyItems} />
       </section>
     );

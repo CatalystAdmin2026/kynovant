@@ -4,12 +4,22 @@
 // Keeps the trigger decoupled from the modal so either can live
 // anywhere in the component tree.
 
+import { Button } from "@/components/ui";
+
 const OPEN_EVENT = "hq:assign-program:open";
 
 interface Props {
   hasActiveProgram: boolean;
   variant?: "header" | "primary" | "section";
 }
+
+// Gold pill/outline treatments aren't covered by the Button primitive's
+// variant set, so these two smaller affordances are hand-rolled — but
+// share Button's own interaction tokens (focus ring, radius, easing)
+// so they still read as part of the same system.
+const GOLD_INTERACTIVE =
+  "ds-focus-ring inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold " +
+  "transition-all duration-150 ease-out whitespace-nowrap select-none active:scale-[0.98]";
 
 export default function AssignProgramButton({
   hasActiveProgram,
@@ -23,7 +33,7 @@ export default function AssignProgramButton({
     return (
       <button
         onClick={open}
-        className="text-[10px] text-[#C9A24D] uppercase tracking-[0.2em] font-semibold hover:text-[#C9A24D]/80 border border-[#C9A24D]/40 hover:border-[#C9A24D]/60 px-3 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#C9A24D]/40"
+        className={`${GOLD_INTERACTIVE} h-9 border border-[#C9A24D]/40 px-4 text-xs text-[#C9A24D] hover:border-[#C9A24D]/60 hover:text-[#C9A24D]/80`}
       >
         {hasActiveProgram ? "Replace Program" : "Assign Program"}
       </button>
@@ -34,7 +44,7 @@ export default function AssignProgramButton({
     return (
       <button
         onClick={open}
-        className="text-[10px] text-[#C9A24D]/70 uppercase tracking-[0.2em] hover:text-[#C9A24D] transition-colors border border-[#C9A24D]/20 hover:border-[#C9A24D]/40 px-2.5 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#C9A24D]/40"
+        className={`${GOLD_INTERACTIVE} h-7 border border-[#C9A24D]/20 px-2.5 text-[11px] text-[#C9A24D]/70 hover:border-[#C9A24D]/40 hover:text-[#C9A24D]`}
       >
         {hasActiveProgram ? "Replace →" : "Assign →"}
       </button>
@@ -43,11 +53,8 @@ export default function AssignProgramButton({
 
   // Primary — used in empty state
   return (
-    <button
-      onClick={open}
-      className="bg-[#C9A24D] text-black text-[10px] uppercase tracking-[0.3em] font-bold px-6 py-3 hover:bg-[#C9A24D]/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C9A24D]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[#080909]"
-    >
+    <Button onClick={open} variant="primary" tone="dark" size="lg">
       Assign Program
-    </button>
+    </Button>
   );
 }

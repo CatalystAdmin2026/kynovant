@@ -8,15 +8,20 @@
 // ─────────────────────────────────────────────────────────────
 
 import Link from "next/link";
+import { Inbox, Clock3, CheckCircle2, ChevronRight } from "lucide-react";
 import HQPageHeader from "@/components/hq/HQPageHeader";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import { listCoachCheckIns } from "@/lib/db/coach-check-in-service";
+import { Card, Badge, EmptyState } from "@/components/ui";
+import type { BadgeVariant } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────
+
+type QueueItem = Awaited<ReturnType<typeof listCoachCheckIns>>[number];
 
 function fmtWeek(dateStr: string): string {
   return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", {
@@ -41,12 +46,101 @@ const STATUS_LABEL: Record<string, string> = {
   reviewed: "Reviewed",
 };
 
-const STATUS_COLOR: Record<string, string> = {
-  draft: "text-gray-500 border-gray-600/30",
-  submitted: "text-blue-400 border-blue-500/30",
-  in_review: "text-amber-400 border-amber-500/30",
-  reviewed: "text-emerald-400 border-emerald-500/30",
+const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
+  draft: "neutral",
+  submitted: "info",
+  in_review: "warning",
+  reviewed: "success",
 };
+
+// ─────────────────────────────────────────────────────────────
+// PRESENTATIONAL SUBCOMPONENTS
+// ─────────────────────────────────────────────────────────────
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  sub,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  sub: string;
+}) {
+  return (
+    <Card tone="dark" padding="sm">
+      <div className="mb-3 flex items-center gap-2">
+        <div
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-gold/20 bg-gold/10 text-gold/80"
+          aria-hidden
+        >
+          {icon}
+        </div>
+        <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-white/30">{label}</span>
+      </div>
+      <p className="text-2xl font-bold leading-none tabular-nums text-white">{value}</p>
+      <p className="mt-2 text-[10px] text-white/25">{sub}</p>
+    </Card>
+  );
+}
+
+function QueueRow({ item, variant }: { item: QueueItem; variant: "actionable" | "reviewed" }) {
+  return (
+    <Link
+      href={`/hq/check-ins/${item.id}`}
+      className="block rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gold/40"
+    >
+      <Card tone="dark" interactive padding="sm" className="flex items-center gap-4">
+        {variant === "actionable" && (
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+              item.status === "in_review" ? "bg-amber-400" : "bg-blue-400"
+            }`}
+            aria-hidden
+          />
+        )}
+
+        <div className="min-w-0 flex-1">
+          <p
+            className={`truncate text-sm font-semibold ${
+              variant === "actionable" ? "text-white" : "text-white/70"
+            }`}
+          >
+            {item.clientName}
+          </p>
+          <p className="text-[11px] text-white/35">Week of {fmtWeek(item.weekStartDate)}</p>
+        </div>
+
+        <Badge tone="dark" variant={STATUS_BADGE_VARIANT[item.status]} size="sm" className="hidden shrink-0 sm:inline-flex">
+          {STATUS_LABEL[item.status]}
+        </Badge>
+
+        {variant === "actionable" && item.waitingDays !== null && (
+          <div className="hidden shrink-0 text-right md:block">
+            <p
+              className={`text-sm font-bold tabular-nums ${
+                item.waitingDays >= 3 ? "text-amber-400" : "text-white/50"
+              }`}
+            >
+              {item.waitingDays}d
+            </p>
+            <p className="text-[9px] uppercase tracking-[0.15em] text-white/25">waiting</p>
+          </div>
+        )}
+
+        {variant === "actionable" && (
+          <div className="hidden shrink-0 text-right lg:block">
+            <p className="text-xs text-white/50">{fmtDate(item.submittedAt)}</p>
+            <p className="text-[9px] uppercase tracking-[0.15em] text-white/25">submitted</p>
+          </div>
+        )}
+
+        <ChevronRight size={14} className="shrink-0 text-white/20" aria-hidden />
+      </Card>
+    </Link>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 // PAGE
@@ -61,9 +155,10 @@ export default async function CheckInQueuePage() {
     (c) => c.status === "submitted" || c.status === "in_review",
   );
   const reviewed = allCheckIns.filter((c) => c.status === "reviewed");
+  const inReviewCount = allCheckIns.filter((c) => c.status === "in_review").length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <HQBreadcrumbs crumbs={[
         { label: "Mission Control", href: "/hq" },
         { label: "Check-Ins" },
@@ -78,81 +173,42 @@ export default async function CheckInQueuePage() {
         }
       />
 
+      {/* ── Summary metric row ────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+        <MetricCard
+          icon={<Inbox size={13} />}
+          label="Needs Review"
+          value={actionable.length}
+          sub="Submitted + in review"
+        />
+        <MetricCard
+          icon={<Clock3 size={13} />}
+          label="In Review"
+          value={inReviewCount}
+          sub="Currently being reviewed"
+        />
+        <MetricCard
+          icon={<CheckCircle2 size={13} />}
+          label="Reviewed"
+          value={reviewed.length}
+          sub="Completed check-ins"
+        />
+      </div>
+
       {/* Queue */}
       {actionable.length === 0 ? (
-        <div className="border border-dashed border-white/[0.06] px-5 py-10 text-center">
-          <div className="w-6 h-6 rounded-full bg-emerald-500/15 flex items-center justify-center mx-auto mb-3">
-            <span className="text-emerald-400 text-[10px]">✓</span>
-          </div>
-          <p className="text-gray-400 text-sm font-medium">All caught up</p>
-          <p className="text-gray-600 text-xs mt-1">No check-ins waiting for review.</p>
-        </div>
+        <EmptyState
+          tone="dark"
+          icon={<CheckCircle2 className="size-5" />}
+          title="All caught up"
+          description="No check-ins waiting for review."
+        />
       ) : (
         <section>
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.4em] mb-3">
-            Needs Review
-          </p>
-          <div className="space-y-1.5">
+          <p className="mb-3 text-[9px] uppercase tracking-[0.4em] text-white/30">Needs Review</p>
+          <div className="space-y-2">
             {actionable.map((item) => (
-              <Link
-                key={item.id}
-                href={`/hq/check-ins/${item.id}`}
-                className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3.5 flex items-center gap-4 hover:border-white/[0.12] hover:bg-[#101213] transition-colors block focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#C9A24D]/40"
-              >
-                {/* Status dot */}
-                <div
-                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                    item.status === "in_review"
-                      ? "bg-amber-400"
-                      : "bg-blue-400"
-                  }`}
-                />
-
-                {/* Client + week */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-white text-sm font-semibold">
-                    {item.clientName}
-                  </p>
-                  <p className="text-gray-500 text-[10px]">
-                    Week of {fmtWeek(item.weekStartDate)}
-                  </p>
-                </div>
-
-                {/* Status */}
-                <span
-                  className={`text-[9px] border px-1.5 py-0.5 uppercase tracking-[0.2em] shrink-0 hidden sm:inline ${STATUS_COLOR[item.status]}`}
-                >
-                  {STATUS_LABEL[item.status]}
-                </span>
-
-                {/* Waiting time */}
-                {item.waitingDays !== null && (
-                  <div className="text-right shrink-0 hidden md:block">
-                    <p
-                      className={`text-sm font-bold tabular-nums ${
-                        item.waitingDays >= 3 ? "text-amber-400" : "text-gray-400"
-                      }`}
-                    >
-                      {item.waitingDays}d
-                    </p>
-                    <p className="text-[9px] text-gray-600 uppercase tracking-[0.15em]">
-                      waiting
-                    </p>
-                  </div>
-                )}
-
-                {/* Submitted date */}
-                <div className="text-right shrink-0 hidden lg:block">
-                  <p className="text-xs text-gray-400">
-                    {fmtDate(item.submittedAt)}
-                  </p>
-                  <p className="text-[9px] text-gray-600 uppercase tracking-[0.15em]">
-                    submitted
-                  </p>
-                </div>
-
-                <span className="text-gray-600 text-xs shrink-0">→</span>
-              </Link>
+              <QueueRow key={item.id} item={item} variant="actionable" />
             ))}
           </div>
         </section>
@@ -161,27 +217,10 @@ export default async function CheckInQueuePage() {
       {/* Reviewed (recent history) */}
       {reviewed.length > 0 && (
         <section>
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.4em] mb-3">
-            Recently Reviewed
-          </p>
-          <div className="space-y-1.5">
+          <p className="mb-3 text-[9px] uppercase tracking-[0.4em] text-white/30">Recently Reviewed</p>
+          <div className="space-y-2">
             {reviewed.slice(0, 20).map((item) => (
-              <Link
-                key={item.id}
-                href={`/hq/check-ins/${item.id}`}
-                className="bg-[#0a0b0c] border border-white/[0.04] px-4 py-3 flex items-center gap-4 hover:border-white/[0.08] transition-colors block"
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-gray-300 text-sm">{item.clientName}</p>
-                  <p className="text-gray-600 text-[10px]">
-                    Week of {fmtWeek(item.weekStartDate)}
-                  </p>
-                </div>
-                <span className="text-[9px] text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 uppercase tracking-[0.2em] shrink-0">
-                  Reviewed
-                </span>
-                <span className="text-gray-700 text-xs shrink-0">→</span>
-              </Link>
+              <QueueRow key={item.id} item={item} variant="reviewed" />
             ))}
           </div>
         </section>

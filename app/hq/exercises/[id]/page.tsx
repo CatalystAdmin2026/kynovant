@@ -2,7 +2,23 @@
 
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
-import { Star, ChevronDown, ChevronUp } from "lucide-react";
+import { Star, ChevronDown, ChevronUp, ChevronLeft, X, Plus, Dumbbell } from "lucide-react";
+import {
+  Badge,
+  Card,
+  CardDescription,
+  Button,
+  Input,
+  Select,
+  Textarea,
+  Label,
+  Skeleton,
+  SkeletonCard,
+  EmptyState,
+  StatusChip,
+  cx,
+} from "@/components/ui";
+import type { BadgeVariant, StatusChipStatus } from "@/components/ui";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -99,29 +115,40 @@ function fmtLabel(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function statusCls(s: string) {
-  if (s === "active") return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-  if (s === "archived") return "bg-gray-500/10 text-gray-500 border border-gray-500/20";
-  return "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+function statusVariant(s: string): BadgeVariant {
+  if (s === "active") return "success";
+  if (s === "archived") return "neutral";
+  return "warning";
+}
+
+function scopeVariant(s: string): BadgeVariant {
+  return s === "coach" ? "gold" : "neutral";
+}
+
+// contraindication_severity enum: "avoid" | "modify" | "monitor"
+function severityStatus(s: string): StatusChipStatus {
+  if (s === "avoid") return "critical";
+  if (s === "modify") return "high";
+  return "caution"; // monitor
 }
 
 function ScoreBar({ value, max = 10, label }: { value: number | null; max?: number; label: string }) {
   if (value === null) return (
     <div>
-      <p className="text-[9px] text-white/25 uppercase tracking-[0.35em] mb-1">{label}</p>
-      <p className="text-gray-700 text-xs">—</p>
+      <p className="text-[10px] text-white/25 uppercase tracking-[0.3em] mb-1">{label}</p>
+      <p className="text-white/20 text-xs">—</p>
     </div>
   );
   const pct = (value / max) * 100;
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <p className="text-[9px] text-white/25 uppercase tracking-[0.35em]">{label}</p>
-        <p className="text-[10px] text-white/50">{value}/{max}</p>
+        <p className="text-[10px] text-white/25 uppercase tracking-[0.3em]">{label}</p>
+        <p className="text-[11px] text-white/50 tabular-nums">{value}/{max}</p>
       </div>
-      <div className="h-1 bg-white/[0.06] rounded-full overflow-hidden">
+      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
         <div
-          className="h-full bg-[#C9A24D]/50 rounded-full transition-all"
+          className="h-full bg-[#C9A24D]/60 rounded-full transition-all duration-500"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -132,7 +159,7 @@ function ScoreBar({ value, max = 10, label }: { value: number | null; max?: numb
 function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-[9px] text-gray-600 uppercase tracking-[0.4em] mb-1.5">{label}</label>
+      <Label tone="dark">{label}</Label>
       {children}
     </div>
   );
@@ -152,13 +179,13 @@ function Field({
   type?: string;
 }) {
   return (
-    <input
+    <Input
+      tone="dark"
       type={type}
       value={value}
       onChange={onChange ? (e) => onChange(e.target.value) : undefined}
       disabled={disabled}
       placeholder={placeholder}
-      className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
     />
   );
 }
@@ -177,14 +204,14 @@ function NumberField({
   max?: number;
 }) {
   return (
-    <input
+    <Input
+      tone="dark"
       type="number"
       value={value ?? ""}
       min={min}
       max={max}
       onChange={onChange ? (e) => onChange(e.target.value === "" ? null : parseInt(e.target.value, 10)) : undefined}
       disabled={disabled}
-      className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 disabled:opacity-50 disabled:cursor-not-allowed"
     />
   );
 }
@@ -203,15 +230,15 @@ function SelectField({
   includeBlank?: string;
 }) {
   return (
-    <select
+    <Select
+      tone="dark"
       value={value}
       onChange={onChange ? (e) => onChange(e.target.value) : undefined}
       disabled={disabled}
-      className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 disabled:opacity-50 disabled:cursor-not-allowed"
     >
       {includeBlank && <option value="">{includeBlank}</option>}
       {options.map((o) => <option key={o} value={o}>{fmtLabel(o)}</option>)}
-    </select>
+    </Select>
   );
 }
 
@@ -232,16 +259,29 @@ function SectionHeader({
 }) {
   return (
     <div
-      className={`flex items-center gap-3 mb-4 ${collapsible ? "cursor-pointer select-none" : ""}`}
+      className={cx("flex items-center gap-3 mb-4", collapsible && "cursor-pointer select-none")}
       onClick={collapsible ? onToggle : undefined}
+      role={collapsible ? "button" : undefined}
+      tabIndex={collapsible ? 0 : undefined}
+      aria-expanded={collapsible ? open : undefined}
+      onKeyDown={
+        collapsible
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onToggle?.();
+              }
+            }
+          : undefined
+      }
     >
-      <span className="text-[9px] text-white/30 uppercase tracking-[0.5em] font-semibold">{label}</span>
-      {count !== undefined && <span className="text-[10px] text-gray-700">{count}</span>}
-      <div className="flex-1 h-px bg-white/[0.04]" />
+      <span className="text-[10px] text-white/40 uppercase tracking-[0.35em] font-semibold">{label}</span>
+      {count !== undefined && <span className="text-[11px] text-white/25">{count}</span>}
+      <div className="flex-1 h-px bg-white/[0.06]" />
       {action && <div onClick={(e) => e.stopPropagation()}>{action}</div>}
       {collapsible && (
-        <span className="text-white/20">
-          {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        <span className="text-white/25">
+          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </span>
       )}
     </div>
@@ -322,14 +362,15 @@ function MuscleManager({ exerciseId, muscles, isSystem, onChange }: {
                   </div>
                   <span className="text-white/60 text-xs w-36 shrink-0">{fmtLabel(m.muscleGroup)}</span>
                   {m.emphasisPercent && (
-                    <span className="text-gray-700 text-[10px] w-10 shrink-0">{m.emphasisPercent}%</span>
+                    <span className="text-white/30 text-[10px] w-10 shrink-0">{m.emphasisPercent}%</span>
                   )}
                   {!isSystem && (
                     <button
                       onClick={() => handleDelete(m.id)}
-                      className="text-gray-700 hover:text-red-400 transition-colors text-[10px] shrink-0"
+                      aria-label={`Remove ${fmtLabel(m.muscleGroup)}`}
+                      className="ds-focus-ring rounded-md p-0.5 text-white/25 hover:text-red-400 transition-colors shrink-0"
                     >
-                      ✕
+                      <X size={11} />
                     </button>
                   )}
                 </div>
@@ -340,39 +381,43 @@ function MuscleManager({ exerciseId, muscles, isSystem, onChange }: {
       ))}
 
       {muscles.length === 0 && (
-        <p className="text-gray-700 text-xs">No muscles defined yet.</p>
+        <p className="text-white/25 text-xs">No muscles defined yet.</p>
       )}
 
       {!isSystem && (
         adding ? (
-          <div className="bg-[#0a0b0c] border border-white/[0.06] p-3 space-y-3">
+          <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-3 space-y-3">
             <div className="grid grid-cols-3 gap-2">
               <SelectField value={newMuscle.muscleGroup} onChange={(v) => setNewMuscle((n) => ({ ...n, muscleGroup: v }))} options={[...MUSCLE_GROUPS]} />
               <SelectField value={newMuscle.role} onChange={(v) => setNewMuscle((n) => ({ ...n, role: v }))} options={[...MUSCLE_ROLES]} />
-              <input
+              <Input
+                tone="dark"
                 type="number"
                 min={0}
                 max={100}
                 placeholder="Emphasis %"
                 value={newMuscle.emphasisPercent}
                 onChange={(e) => setNewMuscle((n) => ({ ...n, emphasisPercent: e.target.value }))}
-                className="bg-[#080909] border border-white/[0.08] text-white px-2 py-1.5 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700"
               />
             </div>
             <div className="flex gap-2">
-              <button onClick={handleAdd} disabled={saving} className="text-[10px] tracking-[0.2em] uppercase font-semibold text-black bg-[#C9A24D] px-3 py-1.5 hover:bg-[#D4B56A] disabled:opacity-50">
+              <Button variant="primary" tone="dark" size="sm" loading={saving} onClick={handleAdd}>
                 {saving ? "Adding…" : "Add"}
-              </button>
-              <button onClick={() => setAdding(false)} className="text-[10px] text-gray-600 hover:text-gray-400 px-2">Cancel</button>
+              </Button>
+              <Button variant="ghost" tone="dark" size="sm" onClick={() => setAdding(false)}>Cancel</Button>
             </div>
           </div>
         ) : (
-          <button
+          <Button
+            variant="outline"
+            tone="dark"
+            size="sm"
+            leftIcon={<Plus size={12} />}
             onClick={() => setAdding(true)}
-            className="text-[11px] text-gray-600 border border-dashed border-white/[0.06] px-4 py-2 hover:text-gray-400 hover:border-white/[0.12] transition-colors"
+            className="border-dashed"
           >
-            + Add Muscle
-          </button>
+            Add Muscle
+          </Button>
         )
       )}
     </div>
@@ -433,13 +478,19 @@ function CueManager({ exerciseId, cues, isSystem, onChange }: {
           <div className="space-y-1.5">
             {byType[type].sort((a, b) => a.orderIndex - b.orderIndex).map((cue, idx) => (
               <div key={cue.id} className="flex items-start gap-3">
-                <span className="text-gray-700 text-[10px] w-4 shrink-0 mt-0.5">{idx + 1}.</span>
+                <span className="text-white/25 text-[10px] w-4 shrink-0 mt-0.5">{idx + 1}.</span>
                 <span className={`text-xs flex-1 leading-relaxed ${cue.isPublic ? "text-white/60" : "text-white/35 italic"}`}>
                   {cue.content}
                   {!cue.isPublic && <span className="ml-2 text-[9px] text-white/20">(coach only)</span>}
                 </span>
                 {!isSystem && (
-                  <button onClick={() => handleDelete(cue.id)} className="text-gray-700 hover:text-red-400 transition-colors text-[10px] shrink-0 mt-0.5">✕</button>
+                  <button
+                    onClick={() => handleDelete(cue.id)}
+                    aria-label="Delete cue"
+                    className="ds-focus-ring rounded-md p-0.5 text-white/25 hover:text-red-400 transition-colors shrink-0 mt-0.5"
+                  >
+                    <X size={11} />
+                  </button>
                 )}
               </div>
             ))}
@@ -447,36 +498,43 @@ function CueManager({ exerciseId, cues, isSystem, onChange }: {
         </div>
       ))}
 
-      {cues.length === 0 && <p className="text-gray-700 text-xs">No cues defined yet.</p>}
+      {cues.length === 0 && <p className="text-white/25 text-xs">No cues defined yet.</p>}
 
       {!isSystem && (
         adding ? (
-          <div className="bg-[#0a0b0c] border border-white/[0.06] p-3 space-y-3">
+          <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-3 space-y-3">
             <div className="grid grid-cols-2 gap-2">
               <SelectField value={newCue.cueType} onChange={(v) => setNewCue((n) => ({ ...n, cueType: v }))} options={[...CUE_TYPES]} />
               <div className="flex items-center gap-2">
-                <input type="checkbox" id="cue-public" checked={newCue.isPublic} onChange={(e) => setNewCue((n) => ({ ...n, isPublic: e.target.checked }))} className="accent-[#C9A24D]" />
-                <label htmlFor="cue-public" className="text-[10px] text-gray-500 uppercase tracking-[0.3em]">Client visible</label>
+                <input type="checkbox" id="cue-public" checked={newCue.isPublic} onChange={(e) => setNewCue((n) => ({ ...n, isPublic: e.target.checked }))} className="ds-focus-ring accent-[#C9A24D]" />
+                <label htmlFor="cue-public" className="text-[10px] text-white/40 uppercase tracking-[0.3em]">Client visible</label>
               </div>
             </div>
-            <textarea
+            <Textarea
+              tone="dark"
               value={newCue.content}
               onChange={(e) => setNewCue((n) => ({ ...n, content: e.target.value }))}
               placeholder="Enter cue text…"
               rows={2}
-              className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700 resize-none"
             />
             <div className="flex gap-2">
-              <button onClick={handleAdd} disabled={saving || !newCue.content.trim()} className="text-[10px] tracking-[0.2em] uppercase font-semibold text-black bg-[#C9A24D] px-3 py-1.5 hover:bg-[#D4B56A] disabled:opacity-50">
+              <Button variant="primary" tone="dark" size="sm" loading={saving} disabled={!newCue.content.trim()} onClick={handleAdd}>
                 {saving ? "Adding…" : "Add Cue"}
-              </button>
-              <button onClick={() => setAdding(false)} className="text-[10px] text-gray-600 hover:text-gray-400 px-2">Cancel</button>
+              </Button>
+              <Button variant="ghost" tone="dark" size="sm" onClick={() => setAdding(false)}>Cancel</Button>
             </div>
           </div>
         ) : (
-          <button onClick={() => setAdding(true)} className="text-[11px] text-gray-600 border border-dashed border-white/[0.06] px-4 py-2 hover:text-gray-400 hover:border-white/[0.12] transition-colors">
-            + Add Cue
-          </button>
+          <Button
+            variant="outline"
+            tone="dark"
+            size="sm"
+            leftIcon={<Plus size={12} />}
+            onClick={() => setAdding(true)}
+            className="border-dashed"
+          >
+            Add Cue
+          </Button>
         )
       )}
     </div>
@@ -717,33 +775,49 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
 
   function SaveButton({ saving, saved, onClick, disabled }: { saving: boolean; saved: boolean; onClick: () => void; disabled?: boolean }) {
     return (
-      <button
+      <Button
+        variant="outline"
+        tone="dark"
+        size="sm"
         onClick={onClick}
-        disabled={saving || disabled}
-        className={`text-[10px] tracking-[0.25em] uppercase font-semibold px-4 py-1.5 border transition-colors disabled:opacity-50 ${
-          saved
-            ? "border-emerald-500/30 text-emerald-400"
-            : "border-white/[0.12] text-gray-400 hover:text-white hover:border-white/25"
-        }`}
+        loading={saving}
+        disabled={disabled}
+        className={saved ? "!border-emerald-500/30 !text-emerald-400" : ""}
       >
         {saving ? "Saving…" : saved ? "Saved ✓" : "Save"}
-      </button>
+      </Button>
     );
   }
 
   // ─────────────────────────────────────────────────────────────
 
   if (loading) return (
-    <div className="flex items-center justify-center py-32">
-      <div className="text-gray-600 text-xs tracking-widest uppercase animate-pulse">Loading…</div>
+    <div className="space-y-8 max-w-3xl">
+      <Skeleton tone="dark" width="w-40" height="h-3" />
+      <div className="space-y-3">
+        <Skeleton tone="dark" width="w-72" height="h-8" />
+        <Skeleton tone="dark" width="w-48" height="h-3" />
+      </div>
+      <SkeletonCard tone="dark" />
+      <SkeletonCard tone="dark" />
     </div>
   );
 
   if (error || !exercise) return (
-    <div className="flex flex-col items-center justify-center py-32 gap-4">
-      <div className="text-red-400 text-sm">{error ?? "Not found"}</div>
-      <Link href="/hq/exercises" className="text-gray-500 text-xs hover:text-white transition-colors">← Exercise Library</Link>
-    </div>
+    <EmptyState
+      tone="dark"
+      icon={<Dumbbell className="size-5" />}
+      title={error ?? "Exercise not found"}
+      description="This exercise may have been removed, or you may not have access to it."
+      action={
+        <Link
+          href="/hq/exercises"
+          className="ds-focus-ring inline-flex items-center gap-1.5 rounded-lg text-[11px] uppercase tracking-[0.25em] font-semibold text-white/50 hover:text-white transition-colors"
+        >
+          <ChevronLeft size={13} /> Exercise Library
+        </Link>
+      }
+    />
   );
 
   const isSystem = exercise.scope === "system";
@@ -751,8 +825,11 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
   return (
     <div className="space-y-8 max-w-3xl">
       {/* Back */}
-      <Link href="/hq/exercises" className="text-[10px] text-gray-600 uppercase tracking-[0.3em] hover:text-gray-400 transition-colors">
-        ← Exercise Library
+      <Link
+        href="/hq/exercises"
+        className="ds-focus-ring inline-flex items-center gap-1 rounded-md text-[10px] text-white/40 uppercase tracking-[0.3em] hover:text-white/70 transition-colors"
+      >
+        <ChevronLeft size={12} /> Exercise Library
       </Link>
 
       {/* Header */}
@@ -761,14 +838,10 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3 flex-wrap mb-1">
               <h1 className="text-white font-bold text-2xl tracking-tight">{exercise.name}</h1>
-              <span className={`px-2 py-0.5 text-[10px] font-semibold tracking-wide ${statusCls(exercise.status)}`}>
-                {exercise.status}
-              </span>
-              <span className="text-[9px] text-white/25 uppercase tracking-[0.3em] border border-white/10 px-1.5 py-0.5">
-                {exercise.scope}
-              </span>
+              <Badge tone="dark" variant={statusVariant(exercise.status)} size="sm">{exercise.status}</Badge>
+              <Badge tone="dark" variant={scopeVariant(exercise.scope)} size="sm">{exercise.scope}</Badge>
             </div>
-            <p className="text-gray-700 text-[11px] font-mono">{exercise.slug}</p>
+            <p className="text-white/25 text-[11px] font-mono">{exercise.slug}</p>
           </div>
 
           {/* Star + status actions */}
@@ -777,20 +850,21 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
               onClick={handleStar}
               disabled={starring}
               aria-label={exercise.isFavorited ? "Remove from favorites" : "Add to favorites"}
-              className={`transition-colors ${exercise.isFavorited ? "text-[#C9A24D]" : "text-white/20 hover:text-white/50"}`}
+              className={`ds-focus-ring rounded-md p-1 transition-colors ${exercise.isFavorited ? "text-[#C9A24D]" : "text-white/20 hover:text-white/50"}`}
             >
               <Star size={15} fill={exercise.isFavorited ? "currentColor" : "none"} />
             </button>
 
             {exercise.status === "draft" && (
               <>
-                <button
-                  onClick={() => handleStatusAction("publish")}
-                  className="text-[10px] tracking-[0.2em] uppercase font-semibold text-black bg-[#C9A24D] px-3 py-1.5 hover:bg-[#D4B56A] transition-colors"
-                >
+                <Button variant="primary" tone="dark" size="sm" onClick={() => handleStatusAction("publish")}>
                   Publish
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="outline"
+                  tone="dark"
+                  size="sm"
+                  className="hover:!text-red-400 hover:!border-red-500/30"
                   onClick={() => {
                     if (confirm(`Delete exercise "${exercise.name}"?`)) {
                       fetch(`/api/internal/exercises/${id}`, { method: "DELETE" }).then(() => {
@@ -798,108 +872,101 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
                       });
                     }
                   }}
-                  className="text-[10px] tracking-[0.2em] uppercase font-semibold text-gray-600 border border-white/[0.08] px-3 py-1.5 hover:text-red-400 hover:border-red-500/30 transition-colors"
                 >
                   Delete
-                </button>
+                </Button>
               </>
             )}
             {exercise.status === "active" && !isSystem && (
-              <button
-                onClick={() => handleStatusAction("archive")}
-                className="text-[10px] tracking-[0.2em] uppercase font-semibold text-gray-600 border border-white/[0.08] px-3 py-1.5 hover:text-gray-300 hover:border-white/20 transition-colors"
-              >
+              <Button variant="outline" tone="dark" size="sm" onClick={() => handleStatusAction("archive")}>
                 Archive
-              </button>
+              </Button>
             )}
             {exercise.status === "archived" && (
-              <button
-                onClick={() => handleStatusAction("restore")}
-                className="text-[10px] tracking-[0.2em] uppercase font-semibold text-gray-600 border border-white/[0.08] px-3 py-1.5 hover:text-gray-300 hover:border-white/20 transition-colors"
-              >
+              <Button variant="outline" tone="dark" size="sm" onClick={() => handleStatusAction("restore")}>
                 Restore to Draft
-              </button>
+              </Button>
             )}
           </div>
         </div>
 
         {/* Classification chips */}
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1.5">
           {[exercise.classification, exercise.movementPattern, exercise.difficulty, exercise.resistanceType].filter(Boolean).map((tag) => (
-            <span key={tag} className="text-[10px] text-white/35 bg-white/[0.04] border border-white/[0.07] px-2 py-0.5">
-              {fmtLabel(tag!)}
-            </span>
+            <Badge tone="dark" key={tag} variant="neutral" size="sm">{fmtLabel(tag!)}</Badge>
           ))}
-          {exercise.unilateral && <span className="text-[10px] text-white/35 bg-white/[0.04] border border-white/[0.07] px-2 py-0.5">Unilateral</span>}
+          {exercise.unilateral && <Badge tone="dark" variant="neutral" size="sm">Unilateral</Badge>}
         </div>
 
         {isSystem && (
-          <div className="bg-white/[0.02] border border-white/[0.05] px-4 py-2.5">
-            <p className="text-[11px] text-white/30 leading-relaxed">
+          <Card tone="dark" padding="sm">
+            <CardDescription tone="dark">
               This is a Kynovant system exercise. All fields are read-only. Use the overrides below to set your preferred default prescription and private coaching notes.
-            </p>
-          </div>
+            </CardDescription>
+          </Card>
         )}
       </div>
 
       {/* ── IDENTITY ────────────────────────────────────────── */}
       {!isSystem && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] p-5 space-y-4">
+        <Card tone="dark" padding="md">
           <SectionHeader
             label="Identity"
             action={<SaveButton saving={identitySaving} saved={identitySaved} onClick={handleIdentitySave} />}
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FieldGroup label="Name">
-              <Field value={identityForm.name} onChange={(v) => setIdentityForm((f) => ({ ...f, name: v }))} />
-            </FieldGroup>
-            <FieldGroup label="Slug">
-              <Field value={identityForm.slug} onChange={(v) => setIdentityForm((f) => ({ ...f, slug: v }))} />
-            </FieldGroup>
-            <FieldGroup label="Movement Pattern">
-              <SelectField
-                value={identityForm.movementPattern}
-                onChange={(v) => setIdentityForm((f) => ({ ...f, movementPattern: v }))}
-                options={["hip_hinge","squat_bilateral","squat_unilateral","lunge","push_vertical","push_horizontal","pull_vertical","pull_horizontal","carry","rotation","anti_rotation","gait","jump","iso_hold","elbow_flexion","elbow_extension","shoulder_abduction","knee_flexion","knee_extension","hip_extension","hip_flexion","scapular_retraction","external_rotation","internal_rotation"]}
-              />
-            </FieldGroup>
-            <FieldGroup label="Classification">
-              <SelectField
-                value={identityForm.classification}
-                onChange={(v) => setIdentityForm((f) => ({ ...f, classification: v }))}
-                options={["compound","isolation","cardio","mobility","power","skill"]}
-              />
-            </FieldGroup>
-            <FieldGroup label="Difficulty">
-              <SelectField
-                value={identityForm.difficulty}
-                onChange={(v) => setIdentityForm((f) => ({ ...f, difficulty: v }))}
-                options={["beginner","intermediate","advanced","specialist"]}
-              />
-            </FieldGroup>
-            <FieldGroup label="Resistance Type">
-              <SelectField
-                value={identityForm.resistanceType}
-                onChange={(v) => setIdentityForm((f) => ({ ...f, resistanceType: v }))}
-                options={["barbell","dumbbell","kettlebell","cable","machine","band","bodyweight","smith_machine","trap_bar","suspension","plate_loaded","medicine_ball","sandbag","chains","landmine"]}
-                includeBlank="None"
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FieldGroup label="Name">
+                <Field value={identityForm.name} onChange={(v) => setIdentityForm((f) => ({ ...f, name: v }))} />
+              </FieldGroup>
+              <FieldGroup label="Slug">
+                <Field value={identityForm.slug} onChange={(v) => setIdentityForm((f) => ({ ...f, slug: v }))} />
+              </FieldGroup>
+              <FieldGroup label="Movement Pattern">
+                <SelectField
+                  value={identityForm.movementPattern}
+                  onChange={(v) => setIdentityForm((f) => ({ ...f, movementPattern: v }))}
+                  options={["hip_hinge","squat_bilateral","squat_unilateral","lunge","push_vertical","push_horizontal","pull_vertical","pull_horizontal","carry","rotation","anti_rotation","gait","jump","iso_hold","elbow_flexion","elbow_extension","shoulder_abduction","knee_flexion","knee_extension","hip_extension","hip_flexion","scapular_retraction","external_rotation","internal_rotation"]}
+                />
+              </FieldGroup>
+              <FieldGroup label="Classification">
+                <SelectField
+                  value={identityForm.classification}
+                  onChange={(v) => setIdentityForm((f) => ({ ...f, classification: v }))}
+                  options={["compound","isolation","cardio","mobility","power","skill"]}
+                />
+              </FieldGroup>
+              <FieldGroup label="Difficulty">
+                <SelectField
+                  value={identityForm.difficulty}
+                  onChange={(v) => setIdentityForm((f) => ({ ...f, difficulty: v }))}
+                  options={["beginner","intermediate","advanced","specialist"]}
+                />
+              </FieldGroup>
+              <FieldGroup label="Resistance Type">
+                <SelectField
+                  value={identityForm.resistanceType}
+                  onChange={(v) => setIdentityForm((f) => ({ ...f, resistanceType: v }))}
+                  options={["barbell","dumbbell","kettlebell","cable","machine","band","bodyweight","smith_machine","trap_bar","suspension","plate_loaded","medicine_ball","sandbag","chains","landmine"]}
+                  includeBlank="None"
+                />
+              </FieldGroup>
+            </div>
+            <FieldGroup label="Default Notes">
+              <Textarea
+                tone="dark"
+                value={identityForm.defaultNotes}
+                onChange={(e) => setIdentityForm((f) => ({ ...f, defaultNotes: e.target.value }))}
+                rows={2}
+                placeholder="General coaching note shown alongside this exercise…"
               />
             </FieldGroup>
           </div>
-          <FieldGroup label="Default Notes">
-            <textarea
-              value={identityForm.defaultNotes}
-              onChange={(e) => setIdentityForm((f) => ({ ...f, defaultNotes: e.target.value }))}
-              rows={2}
-              placeholder="General coaching note shown alongside this exercise…"
-              className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700 resize-none"
-            />
-          </FieldGroup>
-        </div>
+        </Card>
       )}
 
       {/* ── BIOMECHANICS ─────────────────────────────────────── */}
-      <div className="bg-[#0d0e0f] border border-white/[0.06] p-5">
+      <Card tone="dark" padding="md">
         <SectionHeader
           label="Biomechanics"
           collapsible
@@ -985,10 +1052,10 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
             )}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* ── MUSCLES ──────────────────────────────────────────── */}
-      <div className="bg-[#0d0e0f] border border-white/[0.06] p-5">
+      <Card tone="dark" padding="md">
         <SectionHeader label="Muscles" count={exercise.muscles.length} />
         <MuscleManager
           exerciseId={id}
@@ -996,10 +1063,10 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
           isSystem={isSystem}
           onChange={(muscles) => setExercise((ex) => ex ? { ...ex, muscles } : ex)}
         />
-      </div>
+      </Card>
 
       {/* ── COACHING CUES ────────────────────────────────────── */}
-      <div className="bg-[#0d0e0f] border border-white/[0.06] p-5">
+      <Card tone="dark" padding="md">
         <SectionHeader label="Coaching Cues" count={exercise.cues.length} />
         <CueManager
           exerciseId={id}
@@ -1007,52 +1074,48 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
           isSystem={isSystem}
           onChange={(cues) => setExercise((ex) => ex ? { ...ex, cues } : ex)}
         />
-      </div>
+      </Card>
 
       {/* ── RELATIONS ────────────────────────────────────────── */}
       {exercise.relations.length > 0 && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] p-5">
+        <Card tone="dark" padding="md">
           <SectionHeader label="Relations" count={exercise.relations.length} />
           <div className="space-y-2">
             {exercise.relations.map((rel) => (
               <div key={rel.id} className="flex items-center gap-3 py-1.5 border-b border-white/[0.04] last:border-0">
-                <span className="text-[9px] text-white/25 uppercase tracking-[0.3em] w-24 shrink-0">{fmtLabel(rel.relationType)}</span>
+                <Badge tone="dark" variant="neutral" size="sm" className="w-24 justify-center shrink-0">{fmtLabel(rel.relationType)}</Badge>
                 <span className="text-white/50 text-xs flex-1">{rel.targetExerciseId}</span>
                 {rel.suitabilityScore !== null && (
-                  <span className="text-gray-600 text-[10px]">{rel.suitabilityScore}/100</span>
+                  <span className="text-white/30 text-[10px]">{rel.suitabilityScore}/100</span>
                 )}
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* ── CONTRAINDICATIONS ─── read-only ──────────────────── */}
       {exercise.contraindications.length > 0 && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] p-5">
+        <Card tone="dark" padding="md">
           <SectionHeader label="Contraindications" count={exercise.contraindications.length} />
           <div className="space-y-2">
             {exercise.contraindications.map((ci) => (
               <div key={ci.id} className="flex items-start gap-3 py-1.5 border-b border-white/[0.04] last:border-0">
-                <span className={`text-[9px] uppercase tracking-[0.25em] px-1.5 py-0.5 shrink-0 ${
-                  ci.severity === "avoid" ? "text-red-400 bg-red-500/10" :
-                  ci.severity === "modify" ? "text-amber-400 bg-amber-500/10" :
-                  "text-yellow-400 bg-yellow-500/10"
-                }`}>{ci.severity}</span>
+                <StatusChip tone="dark" status={severityStatus(ci.severity)} label={fmtLabel(ci.severity)} size="sm" className="shrink-0 mt-0.5" />
                 <div className="min-w-0">
                   <p className="text-white/60 text-xs">{ci.conditionOrInjury}</p>
-                  {ci.bodyRegion && <p className="text-gray-600 text-[10px]">{ci.bodyRegion}</p>}
-                  {ci.modificationNote && <p className="text-gray-600 text-[10px] mt-0.5 italic">{ci.modificationNote}</p>}
+                  {ci.bodyRegion && <p className="text-white/30 text-[10px]">{ci.bodyRegion}</p>}
+                  {ci.modificationNote && <p className="text-white/30 text-[10px] mt-0.5 italic">{ci.modificationNote}</p>}
                 </div>
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* ── DEFAULT PRESCRIPTION (coach exercises) ───────────── */}
       {!isSystem && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] p-5">
+        <Card tone="dark" padding="md">
           <SectionHeader
             label="Default Prescription"
             action={<SaveButton saving={prescriptionSaving} saved={prescriptionSaved} onClick={handlePrescriptionSave} />}
@@ -1071,12 +1134,12 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
               </FieldGroup>
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* ── COACH OVERRIDES (system exercises) ───────────────── */}
       {isSystem && (
-        <div className="bg-[#0d0e0f] border border-white/[0.06] p-5">
+        <Card tone="dark" padding="md">
           <SectionHeader
             label="Your Coaching Preferences"
             action={<SaveButton saving={overrideSaving} saved={overrideSaved} onClick={handleOverrideSave} />}
@@ -1100,16 +1163,16 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
               </div>
             </div>
             <FieldGroup label="Private Notes (coach only)">
-              <textarea
+              <Textarea
+                tone="dark"
                 value={overrideForm.privateNotes}
                 onChange={(e) => setOverrideForm((f) => ({ ...f, privateNotes: e.target.value }))}
                 rows={3}
                 placeholder="e.g. Works best with clients who have adequate hip mobility. Cue hard brace throughout."
-                className="w-full bg-[#080909] border border-white/[0.08] text-white px-3 py-2 text-xs focus:outline-none focus:border-[#C9A24D]/40 placeholder-gray-700 resize-none"
               />
             </FieldGroup>
           </div>
-        </div>
+        </Card>
       )}
     </div>
   );

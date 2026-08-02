@@ -19,6 +19,7 @@ import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import AssignProgramButton from "@/components/hq/workspace/AssignProgramButton";
 import AssignProgramModal from "@/components/hq/workspace/AssignProgramModal";
 import ProgramTimeline from "@/components/hq/workspace/ProgramTimeline";
+import { Card, EmptyState, cx } from "@/components/ui";
 import type {
   CoachClientWorkspace,
   ExercisePerformance,
@@ -119,17 +120,16 @@ function SectionHeader({ title, action }: { title: string; action?: React.ReactN
   );
 }
 
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="border border-dashed border-white/[0.06] px-4 py-5 text-center">
-      <p className="text-gray-600 text-xs">{message}</p>
-    </div>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────
 // SECTION: CLIENT HEADER
 // ─────────────────────────────────────────────────────────────
+
+const STATUS_PILL: Record<string, string> = {
+  active: "border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-400",
+  invited: "border-blue-500/25 bg-blue-500/[0.06] text-blue-400",
+  suspended: "border-red-500/25 bg-red-500/[0.06] text-red-400",
+  archived: "border-white/10 bg-white/[0.04] text-white/40",
+};
 
 function ClientHeader({
   w,
@@ -139,27 +139,30 @@ function ClientHeader({
   assignAction: React.ReactNode;
 }) {
   const displayName = w.preferredName ?? w.fullName;
-  const statusMap: Record<string, string> = {
-    active: "text-emerald-400 border-emerald-500/30",
-    invited: "text-blue-400 border-blue-500/30",
-    suspended: "text-red-400 border-red-500/30",
-    archived: "text-gray-500 border-gray-600",
-  };
-  const statusClass = statusMap[w.userStatus] ?? "text-gray-400 border-white/10";
+  const statusClass = STATUS_PILL[w.userStatus] ?? "border-white/10 bg-white/[0.04] text-gray-400";
 
   return (
     <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-6 border-b border-white/[0.06]">
       {/* Identity */}
       <div className="min-w-0">
-        <div className="flex items-center gap-3 flex-wrap mb-1">
+        <div className="flex items-center gap-3 flex-wrap mb-1.5">
           <h1 className="text-2xl font-bold tracking-wide text-white">{displayName}</h1>
           <span
-            className={`text-[9px] uppercase tracking-[0.3em] font-semibold border px-2 py-0.5 ${statusClass}`}
+            className={cx(
+              "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[9px] uppercase tracking-[0.3em] font-semibold",
+              statusClass,
+            )}
           >
             {w.userStatus}
           </span>
           {w.attentionLevel !== "healthy" && (
-            <span className={`text-[9px] uppercase tracking-[0.25em] font-semibold ${attentionColor(w.attentionLevel)}`}>
+            <span
+              className={cx(
+                "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[9px] uppercase tracking-[0.25em] font-semibold",
+                attentionBorder(w.attentionLevel),
+                attentionColor(w.attentionLevel),
+              )}
+            >
               {w.attentionLevel}
             </span>
           )}
@@ -187,7 +190,7 @@ function ClientHeader({
       <div className="flex flex-wrap items-center gap-2 shrink-0">
         <Link
           href="/hq/clients"
-          className="text-[10px] text-gray-500 uppercase tracking-[0.2em] hover:text-white/70 border border-white/[0.07] px-3 py-1.5 transition-colors"
+          className="ds-focus-ring text-[10px] text-white/50 uppercase tracking-[0.2em] font-medium hover:text-white/85 hover:bg-white/5 border border-white/10 hover:border-white/20 rounded-lg px-3 py-1.5 transition-colors"
         >
           ← Clients
         </Link>
@@ -204,7 +207,7 @@ function ClientHeader({
 function AttentionBanner({ level, reason }: { level: AttentionLevel; reason: string }) {
   if (level === "healthy") {
     return (
-      <div className="border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3 flex items-center gap-3">
+      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3 flex items-center gap-3">
         <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
         <p className="text-emerald-400 text-xs font-medium">
           On Track — no immediate coaching action required.
@@ -214,12 +217,13 @@ function AttentionBanner({ level, reason }: { level: AttentionLevel; reason: str
   }
 
   return (
-    <div className={`border px-4 py-3 flex items-start gap-3 ${attentionBorder(level)}`}>
-      <div className={`w-1.5 h-1.5 rounded-full mt-1 shrink-0 ${
-        level === "critical" ? "bg-red-500" : level === "high" ? "bg-amber-400" : "bg-yellow-400"
-      }`} />
+    <div className={cx("rounded-xl border px-4 py-3 flex items-start gap-3", attentionBorder(level))}>
+      <div className={cx(
+        "w-1.5 h-1.5 rounded-full mt-1 shrink-0",
+        level === "critical" ? "bg-red-500" : level === "high" ? "bg-amber-400" : "bg-yellow-400",
+      )} />
       <div>
-        <p className={`text-xs font-semibold uppercase tracking-[0.15em] ${attentionColor(level)}`}>
+        <p className={cx("text-xs font-semibold uppercase tracking-[0.15em]", attentionColor(level))}>
           {level === "critical" ? "Critical" : level === "high" ? "Needs Attention" : "Review This Week"}
         </p>
         <p className="text-gray-300 text-xs mt-0.5">{reason}</p>
@@ -290,12 +294,12 @@ function CoachingSnapshot({ w }: { w: CoachClientWorkspace }) {
       <SectionHeader title="Coaching Snapshot" />
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         {cards.map(({ label, value, color, sub }) => (
-          <div key={label} className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-4 relative overflow-hidden">
+          <Card key={label} tone="dark" padding="sm" className="relative overflow-hidden">
             <div className="h-px absolute top-0 inset-x-0 bg-gradient-to-r from-transparent via-white/[0.05] to-transparent" />
-            <p className={`text-2xl font-bold tabular-nums leading-none mb-1.5 ${color}`}>{value}</p>
+            <p className={cx("text-2xl font-bold tabular-nums leading-none mb-1.5", color)}>{value}</p>
             <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] leading-relaxed">{label}</p>
             {sub && <p className="text-[9px] text-gray-600 mt-0.5">{sub}</p>}
-          </div>
+          </Card>
         ))}
       </div>
     </section>
@@ -327,19 +331,20 @@ function TrainingPerformance({
       <div>
         <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] mb-2">Recent Sessions</p>
         {recentSessions.length === 0 ? (
-          <EmptyState message="No sessions recorded yet." />
+          <EmptyState tone="dark" title="No sessions recorded yet." />
         ) : (
-          <div className="bg-[#0d0e0f] border border-white/[0.06] divide-y divide-white/[0.04]">
+          <div className="rounded-xl bg-[var(--surface)] border border-white/[0.07] divide-y divide-white/[0.05] overflow-hidden">
             {recentSessions.slice(0, 6).map((s) => (
               <Link
                 key={s.id}
                 href={`/hq/clients/${clientId}/history/${s.id}`}
-                className="flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.02] transition-colors group focus-visible:outline-none"
+                className="ds-focus-ring flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.03] transition-colors group"
               >
                 <div
-                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                    s.status === "completed" ? "bg-emerald-400" : "bg-gray-600"
-                  }`}
+                  className={cx(
+                    "w-1.5 h-1.5 rounded-full shrink-0",
+                    s.status === "completed" ? "bg-emerald-400" : "bg-gray-600",
+                  )}
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-white text-xs font-medium truncate">{s.workoutName}</p>
@@ -355,7 +360,7 @@ function TrainingPerformance({
                 <p className="text-gray-500 text-[10px] shrink-0">
                   {fmtDate(s.completedAt, true)}
                 </p>
-                <span className="text-gray-700 text-xs shrink-0 group-hover:text-gray-500 transition-colors">→</span>
+                <span className="text-gray-700 text-xs shrink-0 group-hover:text-gray-400 transition-colors">→</span>
               </Link>
             ))}
           </div>
@@ -388,10 +393,10 @@ function TrainingPerformance({
                 : "—",
             },
           ].map(({ label, value }) => (
-            <div key={label} className="bg-[#0a0b0c] border border-white/[0.05] px-3 py-3">
+            <Card key={label} tone="dark" padding="sm">
               <p className="text-base font-bold text-white tabular-nums">{value}</p>
               <p className="text-[9px] text-gray-600 uppercase tracking-[0.25em] mt-1">{label}</p>
-            </div>
+            </Card>
           ))}
         </div>
         {setAnalytics.totalSetsLast30d === 0 && (
@@ -409,10 +414,7 @@ function TrainingPerformance({
           </p>
           <div className="space-y-1.5">
             {exerciseHighlights.map((ex) => (
-              <div
-                key={ex.exerciseId}
-                className="bg-[#0d0e0f] border border-white/[0.05] px-4 py-3 flex items-center gap-4"
-              >
+              <Card key={ex.exerciseId} tone="dark" padding="sm" className="flex items-center gap-4">
                 <div className="flex-1 min-w-0">
                   <p className="text-white text-xs font-medium">{ex.exerciseName}</p>
                   <p className="text-gray-500 text-[9px]">{fmtDate(ex.latestDate, true)}</p>
@@ -433,7 +435,7 @@ function TrainingPerformance({
                 <div className="shrink-0 w-14 text-right">
                   {deltaIndicator(ex.weightDeltaLbs)}
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
           <p className="text-[9px] text-gray-700 mt-2">
@@ -462,11 +464,11 @@ function BodyProgress({
     <section>
       <SectionHeader title="Body Progress" />
       {!latest ? (
-        <EmptyState message="No body-composition records have been imported yet." />
+        <EmptyState tone="dark" title="No body-composition records have been imported yet." />
       ) : (
         <div className="space-y-3">
           {/* Key metrics */}
-          <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-4 space-y-3">
+          <Card tone="dark" padding="sm" className="space-y-3">
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em]">Weight</p>
@@ -507,14 +509,14 @@ function BodyProgress({
             <p className="text-[9px] text-gray-600">
               Recorded {fmtDate(latest.recordedAt)} · {latest.source.replace("_", " ")}
             </p>
-          </div>
+          </Card>
 
           {/* Mini sparkline (weight trend) */}
           {history.length >= 2 && (
-            <div className="bg-[#0a0b0c] border border-white/[0.04] px-4 py-3">
+            <Card tone="dark" padding="sm">
               <p className="text-[9px] text-gray-600 uppercase tracking-[0.2em] mb-2">Weight Trend</p>
               <WeightSparkline records={history} />
-            </div>
+            </Card>
           )}
         </div>
       )}
@@ -610,10 +612,10 @@ function GoalsReadiness({
       </div>
 
       {/* Profile readiness */}
-      <div>
+      <Card tone="dark" padding="sm">
         <div className="flex items-center justify-between mb-2">
           <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em]">Profile Readiness</p>
-          <p className={`text-sm font-bold tabular-nums ${readinessColor(readiness.overallPercent)}`}>
+          <p className={cx("text-sm font-bold tabular-nums", readinessColor(readiness.overallPercent))}>
             {readiness.overallPercent}%
           </p>
         </div>
@@ -621,9 +623,9 @@ function GoalsReadiness({
           {sections.map(({ label, level }) => (
             <div key={label} className="flex items-center gap-3">
               <p className="text-[9px] text-gray-500 w-16 shrink-0">{label}</p>
-              <div className="flex-1 h-1 bg-white/[0.05] overflow-hidden">
+              <div className="flex-1 h-1 bg-white/[0.05] overflow-hidden rounded-full">
                 <div
-                  className={`h-full ${readinessBar(level)}`}
+                  className={cx("h-full rounded-full", readinessBar(level))}
                   style={{
                     width: level === "complete" ? "100%" : level === "partial" ? "50%" : "0%",
                   }}
@@ -645,7 +647,7 @@ function GoalsReadiness({
             ))}
           </div>
         )}
-      </div>
+      </Card>
     </section>
   );
 }
@@ -683,7 +685,11 @@ function ProfileSummary({ w }: { w: CoachClientWorkspace }) {
     return (
       <section>
         <SectionHeader title="Client Profile" />
-        <EmptyState message="No profile data on file. Complete the onboarding process to populate this section." />
+        <EmptyState
+          tone="dark"
+          title="No profile data on file"
+          description="Complete the onboarding process to populate this section."
+        />
       </section>
     );
   }
@@ -693,7 +699,7 @@ function ProfileSummary({ w }: { w: CoachClientWorkspace }) {
       <SectionHeader title="Client Profile" />
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Training */}
-        <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-4">
+        <Card tone="dark" padding="sm">
           <p className="text-[10px] text-gray-400 uppercase tracking-[0.35em] mb-3">Training</p>
           {tp ? (
             <div>
@@ -708,10 +714,10 @@ function ProfileSummary({ w }: { w: CoachClientWorkspace }) {
           ) : (
             <p className="text-gray-600 text-xs">Not provided</p>
           )}
-        </div>
+        </Card>
 
         {/* Nutrition */}
-        <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-4">
+        <Card tone="dark" padding="sm">
           <p className="text-[10px] text-gray-400 uppercase tracking-[0.35em] mb-3">Nutrition</p>
           {np ? (
             <div>
@@ -729,10 +735,10 @@ function ProfileSummary({ w }: { w: CoachClientWorkspace }) {
           ) : (
             <p className="text-gray-600 text-xs">Not provided</p>
           )}
-        </div>
+        </Card>
 
         {/* Preferences */}
-        <div className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-4">
+        <Card tone="dark" padding="sm">
           <p className="text-[10px] text-gray-400 uppercase tracking-[0.35em] mb-3">Preferences</p>
           {prefs ? (
             <div>
@@ -749,7 +755,7 @@ function ProfileSummary({ w }: { w: CoachClientWorkspace }) {
           ) : (
             <p className="text-gray-600 text-xs">Not provided</p>
           )}
-        </div>
+        </Card>
       </div>
     </section>
   );
@@ -774,7 +780,7 @@ function ActivityTimeline({ events }: { events: WorkspaceTimelineEntry[] }) {
     <section>
       <SectionHeader title="Activity Timeline" />
       {events.length === 0 ? (
-        <EmptyState message="No activity recorded yet." />
+        <EmptyState tone="dark" title="No activity recorded yet." />
       ) : (
         <div className="space-y-px">
           {events.map((e, i) => (
@@ -834,12 +840,11 @@ function CoachNotesComingSoon() {
   return (
     <section>
       <SectionHeader title="Coach Notes" />
-      <div className="border border-dashed border-white/[0.06] px-5 py-5 text-center">
-        <p className="text-gray-500 text-sm font-medium">Coach Notes — Coming Soon</p>
-        <p className="text-gray-600 text-xs mt-1">
-          Private coach notes will appear here once the note-taking feature is built.
-        </p>
-      </div>
+      <EmptyState
+        tone="dark"
+        title="Coach Notes — Coming Soon"
+        description="Private coach notes will appear here once the note-taking feature is built."
+      />
     </section>
   );
 }
@@ -940,28 +945,29 @@ export default async function ClientWorkspacePage({
           }
         />
         {checkInSummary.totalCheckIns === 0 ? (
-          <EmptyState message="No check-ins submitted yet." />
+          <EmptyState tone="dark" title="No check-ins submitted yet." />
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-[#0a0b0c] border border-white/[0.05] px-4 py-4">
+            <Card tone="dark" padding="sm">
               <p className="text-2xl font-bold text-white tabular-nums">
                 {checkInSummary.totalCheckIns}
               </p>
               <p className="text-[9px] text-gray-600 uppercase tracking-[0.25em] mt-1">
                 Total Check-Ins
               </p>
-            </div>
-            <div className="bg-[#0a0b0c] border border-white/[0.05] px-4 py-4">
-              <p className={`text-2xl font-bold tabular-nums ${
-                checkInSummary.pendingCount > 0 ? "text-blue-400" : "text-white"
-              }`}>
+            </Card>
+            <Card tone="dark" padding="sm">
+              <p className={cx(
+                "text-2xl font-bold tabular-nums",
+                checkInSummary.pendingCount > 0 ? "text-blue-400" : "text-white",
+              )}>
                 {checkInSummary.pendingCount}
               </p>
               <p className="text-[9px] text-gray-600 uppercase tracking-[0.25em] mt-1">
                 Pending Review
               </p>
-            </div>
-            <div className="bg-[#0a0b0c] border border-white/[0.05] px-4 py-4">
+            </Card>
+            <Card tone="dark" padding="sm">
               {checkInSummary.lastCheckIn ? (
                 <>
                   <p className="text-sm font-semibold text-white">
@@ -980,7 +986,7 @@ export default async function ClientWorkspacePage({
               ) : (
                 <p className="text-gray-600 text-xs">No recent check-in</p>
               )}
-            </div>
+            </Card>
           </div>
         )}
       </section>
@@ -998,7 +1004,7 @@ export default async function ClientWorkspacePage({
             </Link>
           }
         />
-        <div className="bg-[#0a0b0c] border border-white/[0.05] px-4 py-4">
+        <Card tone="dark" padding="sm">
           <p className="text-xs text-white/40 leading-relaxed">
             Set daily calorie and macro targets for this client. Targets are calculated
             using Mifflin-St Jeor and require coach review before publishing.
@@ -1009,7 +1015,7 @@ export default async function ClientWorkspacePage({
           >
             Open Nutrition →
           </Link>
-        </div>
+        </Card>
       </section>
 
       {/* Sensitive health — collapsible client component */}

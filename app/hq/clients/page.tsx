@@ -11,7 +11,7 @@ export default async function ClientsPage() {
   const clients = await listCoachClients();
 
   return (
-    <div className="space-y-0">
+    <div>
       <HQPageHeader
         title="Clients"
         subtitle="Manage every athlete in one place."
