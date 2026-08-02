@@ -35,7 +35,7 @@ Every capability, tool, and integration referenced below is tagged so implementa
 - Compliance/risk signal: `AttentionLevel` (critical/high/medium/healthy) already computed in `coach-dashboard-service.ts`.
 - Lead-intake fields: `referralSource` / `referral_name` already captured on `/apply` and `/coach-apply`.
 - The HQ shell (Mission Control, Clients, Programs, Check-Ins) as the natural home for new coach-facing surfaces such as the Approval Queue and agent Observability views.
-- The Founding Coach onboarding funnel (`/for-coaches`, `/coach-apply`, `POST /api/applications` — `/api/coach-applications` was retired in favor of this canonical, Supabase-backed endpoint) and admin coach invitation (`/admin/coaches`).
+- The Founding Coach onboarding funnel (`/for-coaches`, `/coach-apply`, `/api/coach-applications`) and admin coach invitation (`/admin/coaches`).
 - The medical/scope disclaimer already live in `components/Footer.tsx`.
 - Stripe webhook signature verification, and the standing constraint — already honored across this codebase's history — that Stripe checkout/webhook logic is never touched casually.
 
