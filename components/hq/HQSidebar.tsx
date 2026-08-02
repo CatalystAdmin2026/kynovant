@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Users,
+  UserPlus,
   BookOpen,
   FileText,
   ClipboardCheck,
@@ -26,6 +27,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { icon: LayoutDashboard, label: "Mission Control", href: "/hq",            exact: true },
   { icon: Rocket,          label: "Get Started",     href: "/hq/get-started"             },
+  { icon: UserPlus,        label: "Applications",    href: "/hq/applications"            },
   { icon: Users,           label: "Clients",         href: "/hq/clients"                 },
   { icon: BookOpen,        label: "Programs",        href: "/hq/programs"                },
   { icon: FileText,        label: "Blueprints",      href: "/hq/blueprints"              },
