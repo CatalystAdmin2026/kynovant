@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { and, eq, ilike, inArray, asc, desc, sql, max } from "drizzle-orm";
+import { and, eq, exists, ilike, inArray, asc, desc, sql, max } from "drizzle-orm";
 import { getDb } from "./client";
 import {
   exercises,
@@ -145,14 +145,28 @@ export async function searchExercises(
       conditions.push(sql`${exercises.searchVector} @@ websearch_to_tsquery('english', ${name})`);
     }
 
-    // Muscle group filter — EXISTS subquery covering all roles
+    // Muscle group filter — EXISTS subquery covering all roles (primary,
+    // secondary, and stabilizer). Built with Drizzle's query builder
+    // (exists() + inArray()) rather than a raw `sql` template: Drizzle's
+    // `sql` tag does not serialize an interpolated JS array as a Postgres
+    // array literal the way postgres.js's own tag does, so
+    // `= ANY(${muscleGroups}::muscle_group[])` binds a malformed array
+    // parameter and throws "malformed array literal" on every call. That
+    // error was silently swallowed by safeQuery() below, which is why the
+    // filter appeared to just return zero results instead of erroring.
     if (muscleGroups && muscleGroups.length > 0) {
       conditions.push(
-        sql`EXISTS (
-          SELECT 1 FROM exercise_muscles em
-          WHERE em.exercise_id = ${exercises.id}
-            AND em.muscle_group = ANY(${muscleGroups}::muscle_group[])
-        )`,
+        exists(
+          db
+            .select({ one: exerciseMuscles.id })
+            .from(exerciseMuscles)
+            .where(
+              and(
+                eq(exerciseMuscles.exerciseId, exercises.id),
+                inArray(exerciseMuscles.muscleGroup, muscleGroups),
+              ),
+            ),
+        ),
       );
     }
 

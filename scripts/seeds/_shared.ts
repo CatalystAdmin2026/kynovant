@@ -164,9 +164,30 @@ export async function seedExercises(
   label: string,
 ) {
   console.log(`\n  Inserting ${exerciseDefs.length} exercises…`);
+
+  // Derive primaryMuscleGroup from the `muscles` array rather than requiring
+  // it be authored twice — the exercise_muscles rows are the single source
+  // of truth. Mirrors the tie-break rule used by
+  // exercise-admin-service.ts's refreshPrimaryMuscleGroup (first "primary"
+  // role entry wins; seed data never sets emphasisPercent, so ties don't
+  // occur in practice since every exercise has exactly one primary).
+  const primaryMuscleBySlug = new Map<string, MuscleGroup>();
+  for (const [slug, muscleGroup, role] of muscles) {
+    if (role === "primary" && !primaryMuscleBySlug.has(slug)) {
+      primaryMuscleBySlug.set(slug, muscleGroup);
+    }
+  }
+
   await db
     .insert(exercises)
-    .values(exerciseDefs.map((e) => ({ ...e, status: "active" as const, coachCreated: true })))
+    .values(
+      exerciseDefs.map((e) => ({
+        ...e,
+        status: "active" as const,
+        coachCreated: true,
+        primaryMuscleGroup: primaryMuscleBySlug.get(e.slug) ?? null,
+      })),
+    )
     .onConflictDoNothing();
 
   const allEx = await db
