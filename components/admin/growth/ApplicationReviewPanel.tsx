@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   updateApplicationStatusAction,
   saveApplicationNotesAction,
-} from "@/app/hq/applications/[id]/actions";
+} from "@/app/admin/growth/applications/[id]/actions";
 import type { ApplicationStatus } from "@/lib/db/schema-applications";
 
 const STAGE_ORDER: ApplicationStatus[] = [
@@ -110,7 +110,7 @@ export default function ApplicationReviewPanel({
       {/* Review notes */}
       <div className="flex flex-col gap-2">
         <label className="text-[9px] text-gray-500 uppercase tracking-[0.3em] font-semibold">
-          Coach Notes
+          Staff Notes
         </label>
         <textarea
           value={notes}

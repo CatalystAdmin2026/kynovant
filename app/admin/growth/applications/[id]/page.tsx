@@ -1,14 +1,15 @@
 // ─────────────────────────────────────────────────────────────
-// Kynovant HQ — Application Detail
+// Kynovant Admin — Application Detail
 //
-// Server Component. Auth via HQ layout (requireCoachOrAdminPage).
-// Returns 404 if the application ID does not exist.
+// Server Component. Auth via app/admin/growth/layout.tsx
+// (requireAdminPage) — admin-only. Returns 404 if the application
+// ID does not exist.
 // ─────────────────────────────────────────────────────────────
 
 import { notFound } from "next/navigation";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import { getApplicationById } from "@/lib/db/application-service";
-import ApplicationReviewPanel from "@/components/hq/applications/ApplicationReviewPanel";
+import ApplicationReviewPanel from "@/components/admin/growth/ApplicationReviewPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,7 @@ function Field({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-export default async function ApplicationDetailPage({
+export default async function AdminGrowthApplicationDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
@@ -66,15 +67,15 @@ export default async function ApplicationDetailPage({
     <div className="space-y-6">
       <HQBreadcrumbs
         crumbs={[
-          { label: "Mission Control", href: "/hq" },
-          { label: "Applications", href: "/hq/applications" },
-          { label: application.fullName },
+          { label: "Kynovant Admin" },
+          { label: "Applications", href: "/admin/growth/applications" },
+          { label: application.name },
         ]}
       />
 
       <div className="flex items-start justify-between gap-6">
         <div>
-          <h1 className="text-xl font-semibold text-white mb-1">{application.fullName}</h1>
+          <h1 className="text-xl font-semibold text-white mb-1">{application.name}</h1>
           <p className="text-gray-500 text-sm">{application.email}</p>
         </div>
         <span
@@ -89,16 +90,14 @@ export default async function ApplicationDetailPage({
         <div className="bg-[#0d0e0f] border border-white/[0.06] p-6 space-y-5">
           <div className="grid grid-cols-2 gap-5">
             <Field label="Phone" value={application.phone} />
-            <Field label="Primary Goal" value={application.primaryGoal} />
-            <Field label="Readiness" value={application.readiness} />
-            <Field label="Budget Range" value={application.budgetRange} />
+            <Field label="Business Stage" value={application.businessStage} />
+            <Field label="Client Count" value={application.clientCount} />
             <Field label="Referral Source" value={application.referralSource} />
-            <Field label="Referral Name" value={application.referralName} />
           </div>
 
           <div className="h-px bg-white/[0.06]" />
 
-          <Field label="Goals & Background" value={application.goalsDetails} />
+          <Field label="Context" value={application.context} />
 
           <div className="h-px bg-white/[0.06]" />
 

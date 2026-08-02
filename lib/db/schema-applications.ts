@@ -1,25 +1,42 @@
 // ─────────────────────────────────────────────────────────────
-// Kynovant — Coaching Application Pipeline Schema
+// Kynovant — Coach Application Pipeline Schema
 //
 // SERVER-ONLY — never import this file from a Client Component.
 //
 // Tables:
-//   applications — one row per distinct "Apply for Coaching" attempt
+//   applications — one row per Kynovant coach-application attempt
 //
-// Status lifecycle (coach-driven, HQ Applications dashboard):
+// ARCHITECTURE CORRECTION (this revision): this table's public
+// intake was previously wired to /apply (Jermaine's personal
+// physique-coaching application) by mistake. It is now, exclusively,
+// the backing store for /coach-apply — coaches applying to become
+// Kynovant SaaS customers. /apply has been restored to its original,
+// unrelated GAS-direct submission and never touches this table.
+//
+// Access model: admin-only. Ordinary coach accounts must never see
+// this data — this is Kynovant's own prospect pipeline for acquiring
+// *other* coaches, not something a coach using the platform to run
+// their own business has any reason to access. Every page, server
+// action, and query against this table sits behind requireAdmin()/
+// requireAdminPage() (lib/auth/guards.ts), not just nav visibility.
+//
+// Status lifecycle (staff-driven, /admin/growth/applications):
 //   new → qualified → demo_scheduled → demo_complete → accepted
 //   any non-terminal status → declined (available at every stage)
 //
-// This table is the authoritative record of what a coach submitted
-// through the public application form — not a general sales CRM.
-// It stores exactly what was submitted and where it is in the
-// coach's own qualify/schedule/decide workflow. Anything broader
-// (multi-channel lead sourcing, outbound sequences, deal stages
-// beyond this one form) belongs in a future Growth CRM, not here —
-// see the "Future Growth CRM linkage" note below.
+// This table is the authoritative record of what a coach applicant
+// submitted through the public form — not a general sales CRM. A
+// design spec for a broader Growth CRM exists at
+// docs/catalyst-os-growth-crm.md (pending review/approval, not yet
+// built) — its §4.2 independently proposes the same field names used
+// here (name/email/phone/businessStage/clientCount/context/
+// referralSource), which is a strong signal this shape is correct,
+// but its event-log tables, dedup-by-status-bucket rules, and
+// growth_leads handoff are intentionally NOT implemented in this
+// revision. See "Future Growth CRM linkage" below.
 //
 // The Google Sheet remains a secondary, best-effort mirror written
-// by the API route after the Supabase insert succeeds — see
+// by the API route after the Supabase insert/update succeeds — see
 // app/api/applications/route.ts.
 // ─────────────────────────────────────────────────────────────
 
@@ -69,15 +86,14 @@ export const applicationStatusEnum = pgEnum("application_status", [
 //     in schema.ts) is what dedup lookups key off — email preserves
 //     exactly what the applicant typed.
 //
-// reviewedBy is nullable and unscoped today (solo-mode, matching
-// the rest of HQ) — it records which coach is working the
-// application, not an ownership boundary. See
-// docs/roadmaps/saas-evolution/kynovant-saas-evolution-roadmap.md
-// for the multi-tenant plan this will need to join into later.
+// reviewedBy tracks which Kynovant admin/staff member is working the
+// application. Unlike every coach-scoped table elsewhere in this
+// schema, this is not a multi-tenancy concern — the audience with
+// requireAdmin() access is small by design, not "every coach."
 //
 // sheetSyncedAt is set only after the best-effort Google Sheets
 // mirror succeeds — null means "not yet synced or last sync
-// failed," visible to the coach in the HQ detail view so a silent
+// failed," visible to staff in the admin detail view so a silent
 // Sheets outage is never truly silent.
 //
 // submitterIp backs the API route's DB-based rate limiting (see
@@ -85,25 +101,21 @@ export const applicationStatusEnum = pgEnum("application_status", [
 // field — nullable because IP is best-effort (may be absent behind
 // some proxies) and never required for the record to be valid.
 //
-// FUTURE GROWTH CRM LINKAGE (not implemented — no Growth CRM schema
-// exists on this branch as of this migration):
-//   When a Growth CRM lead model exists, add a nullable
-//   growth_lead_id uuid column here, referencing that table's PK
-//   with ON DELETE SET NULL. Do NOT have the Growth CRM duplicate
-//   applicant identity (name/email/phone) or the submitted answers —
-//   it should hold only CRM-specific state (deal stage, outbound
-//   touches, source attribution beyond this form) and point back at
-//   this row for "what they actually told us when they applied."
-//   This table stays the immutable record of the submission; the
-//   Growth CRM lead is free to represent the same person across
-//   multiple touchpoints (this application, a future referral, a
-//   newsletter signup) without this table needing to know about any
-//   of that. Adding the FK now, before that schema exists, would be
-//   a foreign key with nothing to reference — deferred intentionally,
-//   not an oversight.
+// FUTURE GROWTH CRM LINKAGE (not implemented — no growth_leads table
+// exists as code on this branch; docs/catalyst-os-growth-crm.md §5.1
+// specifies its intended shape but is an unapproved design spec, not
+// shipped code):
+//   When growth_leads exists, add a nullable growth_lead_id uuid
+//   column here, referencing that table's PK with ON DELETE SET NULL.
+//   Do NOT have the Growth CRM duplicate applicant identity or the
+//   submitted answers — it should hold only CRM-specific state and
+//   point back at this row. This table stays the immutable record of
+//   the submission. Adding the FK now, before that schema exists,
+//   would be a foreign key with nothing to reference — deferred
+//   intentionally, not an oversight.
 //
 // FK behavior:
-//   reviewedBy → SET NULL: application record survives coach archival
+//   reviewedBy → SET NULL: application record survives staff-account archival
 // ─────────────────────────────────────────────────────────────
 
 export const applications = pgTable(
@@ -111,17 +123,17 @@ export const applications = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
 
-    fullName: text("full_name").notNull(),
+    name: text("name").notNull(),
     email: text("email").notNull(),
     normalizedEmail: text("normalized_email").notNull(),
     phone: text("phone"),
 
-    primaryGoal: text("primary_goal").notNull(),
-    readiness: text("readiness").notNull(),
-    budgetRange: text("budget_range").notNull(),
-    goalsDetails: text("goals_details"),
+    // What the /coach-apply form actually asks — see
+    // app/(site)/coach-apply/page.tsx for the exact option sets.
+    businessStage: text("business_stage").notNull(),
+    clientCount: text("client_count").notNull(),
+    context: text("context"),
     referralSource: text("referral_source").notNull(),
-    referralName: text("referral_name"),
 
     status: applicationStatusEnum("status").notNull().default("new"),
     reviewedBy: uuid("reviewed_by").references(() => users.id, {
@@ -129,7 +141,7 @@ export const applications = pgTable(
     }),
     reviewNotes: text("review_notes"),
 
-    source: text("source").notNull().default("apply_page"),
+    source: text("source").notNull().default("coach_apply"),
     sheetSyncedAt: timestamp("sheet_synced_at", { withTimezone: true }),
 
     // Duplicate-submission handling (see policy note above).

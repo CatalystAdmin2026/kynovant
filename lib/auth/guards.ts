@@ -172,6 +172,25 @@ export async function requireCoachOrAdminPage(): Promise<AuthedUser> {
   return { authUser: resolved.authUser, dbUser: resolved.dbUser };
 }
 
+// Admin-only page guard — mirrors requireCoachOrAdminPage() exactly,
+// but does not admit the "coach" role. Use for surfaces an ordinary
+// coach account must never reach (e.g. app/admin/growth/**), not just
+// hidden from their navigation. A coach hitting one of these routes
+// gets the same access_denied redirect as an unauthenticated visitor —
+// this deliberately does not distinguish "not logged in" from "logged
+// in but not admin" in the response, consistent with this file's
+// existing 401-vs-403 posture for API guards.
+export async function requireAdminPage(): Promise<AuthedUser> {
+  const resolved = await resolveSession();
+  if (!resolved.ok) {
+    redirect("/login?error=access_denied");
+  }
+  if (resolved.dbUser.role !== "admin") {
+    redirect("/login?error=access_denied");
+  }
+  return { authUser: resolved.authUser, dbUser: resolved.dbUser };
+}
+
 // ─────────────────────────────────────────────────────────────
 // OBJECT-LEVEL AUTHORIZATION
 // ─────────────────────────────────────────────────────────────

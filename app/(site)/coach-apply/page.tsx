@@ -32,11 +32,16 @@ export default function CoachApplyPage() {
     setStatus("submitting");
 
     try {
-      const res = await fetch("/api/coach-applications", {
+      const formData = new FormData(formEl);
+      const payload = Object.fromEntries(formData.entries());
+
+      const res = await fetch("/api/applications", {
         method: "POST",
-        body: new FormData(formEl),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error();
+      const data = await res.json().catch(() => ({}) as Record<string, unknown>);
+      if (!res.ok || (data as { ok?: boolean }).ok !== true) throw new Error();
 
       setStatus("success");
       formEl.reset();

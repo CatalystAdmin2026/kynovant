@@ -1,11 +1,14 @@
 // ─────────────────────────────────────────────────────────────
-// Kynovant HQ — Applications Dashboard
+// Kynovant Admin — Growth Applications Dashboard
 //
-// Server Component. Shows all coaching applications, newest first,
-// grouped into an active pipeline and a resolved (accepted/declined)
-// history.
+// Server Component. Shows all Kynovant coach applications (submitted
+// via /coach-apply), newest first, grouped into an active pipeline
+// and a resolved (accepted/declined) history.
 //
-// Auth: HQ layout (requireCoachOrAdminPage) — no secondary gate.
+// Auth: app/admin/growth/layout.tsx (requireAdminPage) — admin-only,
+// not reachable by an ordinary coach account. No secondary gate
+// needed at this level; the mutating actions on the detail page
+// re-validate independently (see [id]/actions.ts).
 // ─────────────────────────────────────────────────────────────
 
 import Link from "next/link";
@@ -47,7 +50,7 @@ const PIPELINE_STATUSES = new Set(["new", "qualified", "demo_scheduled", "demo_c
 // PAGE
 // ─────────────────────────────────────────────────────────────
 
-export default async function ApplicationsPage() {
+export default async function AdminGrowthApplicationsPage() {
   const all = await listApplications();
 
   const pipeline = all.filter((a) => PIPELINE_STATUSES.has(a.status));
@@ -56,10 +59,10 @@ export default async function ApplicationsPage() {
 
   return (
     <div className="space-y-6">
-      <HQBreadcrumbs crumbs={[{ label: "Mission Control", href: "/hq" }, { label: "Applications" }]} />
+      <HQBreadcrumbs crumbs={[{ label: "Kynovant Admin" }, { label: "Applications" }]} />
 
       <HQPageHeader
-        title="Applications"
+        title="Coach Applications"
         subtitle={
           newCount === 0
             ? "No new applications waiting for triage."
@@ -71,7 +74,7 @@ export default async function ApplicationsPage() {
         <div className="border border-dashed border-white/[0.06] px-5 py-10 text-center">
           <p className="text-gray-400 text-sm font-medium">No active applications</p>
           <p className="text-gray-600 text-xs mt-1">
-            New submissions from the public Apply page will appear here.
+            New submissions from /coach-apply will appear here.
           </p>
         </div>
       ) : (
@@ -83,7 +86,7 @@ export default async function ApplicationsPage() {
             {pipeline.map((item) => (
               <Link
                 key={item.id}
-                href={`/hq/applications/${item.id}`}
+                href={`/admin/growth/applications/${item.id}`}
                 className="bg-[#0d0e0f] border border-white/[0.06] px-4 py-3.5 flex items-center gap-4 hover:border-white/[0.12] hover:bg-[#101213] transition-colors block focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#C9A24D]/40"
               >
                 <div
@@ -94,7 +97,7 @@ export default async function ApplicationsPage() {
 
                 <div className="flex-1 min-w-0">
                   <p className="text-white text-sm font-semibold truncate">
-                    {item.fullName}
+                    {item.name}
                     {item.resubmissionCount > 0 && (
                       <span className="ml-2 text-[9px] text-amber-400/80 font-normal align-middle">
                         resubmitted ×{item.resubmissionCount}
@@ -102,7 +105,7 @@ export default async function ApplicationsPage() {
                     )}
                   </p>
                   <p className="text-gray-500 text-[10px] truncate">
-                    {item.primaryGoal} · via {item.referralSource}
+                    {item.businessStage} · via {item.referralSource}
                   </p>
                 </div>
 
@@ -133,11 +136,11 @@ export default async function ApplicationsPage() {
             {resolved.slice(0, 30).map((item) => (
               <Link
                 key={item.id}
-                href={`/hq/applications/${item.id}`}
+                href={`/admin/growth/applications/${item.id}`}
                 className="bg-[#0a0b0c] border border-white/[0.04] px-4 py-3 flex items-center gap-4 hover:border-white/[0.08] transition-colors block"
               >
                 <div className="flex-1 min-w-0">
-                  <p className="text-gray-300 text-sm truncate">{item.fullName}</p>
+                  <p className="text-gray-300 text-sm truncate">{item.name}</p>
                   <p className="text-gray-600 text-[10px] truncate">{fmtDate(item.createdAt)}</p>
                 </div>
                 <span

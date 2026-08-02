@@ -32,16 +32,12 @@ export default function ApplyPage() {
     setStatus("submitting");
 
     try {
-      const formData = new FormData(formEl);
-      const payload = Object.fromEntries(formData.entries());
-
-      const res = await fetch("/api/applications", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(
+        "https://script.google.com/macros/s/AKfycbxf3VInd_v9ZJpIedP0fImdFedh-1xi9oBPA7dRKMATwLupMLdy41OmrRFwnIzYVqXd5w/exec",
+        { method: "POST", body: new FormData(formEl) }
+      );
       const data = await res.json().catch(() => ({}) as Record<string, unknown>);
-      if (!res.ok || (data as { ok?: boolean }).ok !== true) throw new Error();
+      if (!res.ok || (data as { status?: string }).status !== "success") throw new Error();
 
       setStatus("success");
       formEl.reset();

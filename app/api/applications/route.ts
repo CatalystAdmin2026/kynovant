@@ -1,8 +1,12 @@
 // ─────────────────────────────────────────────────────────────
-// Kynovant — Coaching Application Intake
+// Kynovant — Coach Application Intake
 //
-// Public route — applicants are not authenticated. Called by the
-// "Apply for Coaching" form (app/(site)/apply/page.tsx).
+// Public route — applicants are not authenticated. Called by
+// "Apply as a Coach" (app/(site)/coach-apply/page.tsx). This is
+// Kynovant's own SaaS prospect funnel — NOT Jermaine's personal
+// coaching-client application (app/(site)/apply/page.tsx), which
+// submits directly to its own, unrelated Google Apps Script and
+// never touches this route or the applications table.
 //
 // Pipeline on submit:
 //   1. Validate required fields server-side (presence, email format,
@@ -16,20 +20,24 @@
 //   3. submitApplication() — Supabase is the source of truth and the
 //      only step that can fail the request back to the applicant.
 //      Duplicate-submission policy lives in lib/db/application-service.ts.
-//   4. Non-fatal: mirror the same fields to the existing
-//      Applications Google Sheet (SHEETS_APPLICATIONS_GAS_URL),
-//      using the exact field names the sheet's doPost handler
-//      already expects, so the live sheet keeps working unchanged.
-//   5. Non-fatal: email RESEND_ADMIN_EMAIL so the coach knows a
-//      new application arrived, instead of relying on someone
-//      checking HQ or the sheet manually.
+//   4. Non-fatal: mirror the same fields to the Coach Applications
+//      Google Sheet (COACH_APPLICATIONS_GAS_URL) — optional; skipped
+//      silently if unset, per env.local.example.
+//   5. Non-fatal: email RESEND_ADMIN_EMAIL so an admin knows a new
+//      coach application arrived, instead of relying on someone
+//      checking /admin/growth/applications or the sheet manually.
 //
 // Steps 4 and 5 never block or fail the response — the applicant
 // only needs step 3 to succeed. Failures are logged, not thrown.
-// Secrets (SHEETS_APPLICATIONS_GAS_URL, RESEND_*) are read from
+// Secrets (COACH_APPLICATIONS_GAS_URL, RESEND_*) are read from
 // process.env only, inside this server-only route file, and never
 // echoed back in a response body — only server-side console logs
 // reference them on failure.
+//
+// This is the ONLY public POST endpoint for Kynovant coach
+// applications. app/api/coach-applications/route.ts (the earlier,
+// non-persisting version) has been retired — see its removal in the
+// same change that added this comment.
 // ─────────────────────────────────────────────────────────────
 
 import { Resend } from "resend";
@@ -59,18 +67,19 @@ function getClientIp(req: NextRequest): string | null {
 
 // ─────────────────────────────────────────────────────────────
 // VALIDATION
+//
+// Field names match app/(site)/coach-apply/page.tsx's <input>/
+// <select> `name` attributes exactly.
 // ─────────────────────────────────────────────────────────────
 
 interface ApplicationPayload {
   name?: string;
   email?: string;
   phone?: string;
-  goal?: string;
-  commitment?: string;
-  budget?: string;
-  goals_details?: string;
+  business_stage?: string;
+  client_count?: string;
+  context?: string;
   referral_source?: string;
-  referral_name?: string;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -82,12 +91,10 @@ const MAX_LENGTHS: Record<string, number> = {
   name: 200,
   email: 200,
   phone: 40,
-  goal: 200,
-  commitment: 200,
-  budget: 200,
-  goals_details: 4000,
+  business_stage: 200,
+  client_count: 200,
+  context: 4000,
   referral_source: 200,
-  referral_name: 200,
 };
 
 function validate(body: ApplicationPayload): string | null {
@@ -107,49 +114,57 @@ function validate(body: ApplicationPayload): string | null {
   return null;
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ─────────────────────────────────────────────────────────────
 // GOOGLE SHEETS MIRROR — non-fatal, matches the persistToGas
-// pattern already used in app/api/stripe/webhook/route.ts
+// pattern already used in app/api/stripe/webhook/route.ts.
+// Posts JSON, matching the convention already established for
+// COACH_APPLICATIONS_GAS_URL by the now-retired
+// app/api/coach-applications/route.ts.
 // ─────────────────────────────────────────────────────────────
 
 async function mirrorToSheet(
   applicationId: string,
   body: ApplicationPayload,
 ): Promise<void> {
-  const gasUrl = process.env.SHEETS_APPLICATIONS_GAS_URL;
+  const gasUrl = process.env.COACH_APPLICATIONS_GAS_URL;
   if (!gasUrl) {
-    console.warn("[Applications] SHEETS_APPLICATIONS_GAS_URL not configured — skipping Sheets mirror");
+    console.log("[Applications] COACH_APPLICATIONS_GAS_URL not configured — skipping Sheets mirror");
     return;
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3000);
+  const timer = setTimeout(() => controller.abort(), 5000);
 
   try {
-    // Field names match exactly what the form used to send directly to
-    // GAS — the sheet's doPost handler and existing columns are unchanged.
-    const params = new URLSearchParams();
-    params.set("name", body.name ?? "");
-    params.set("email", body.email ?? "");
-    params.set("phone", body.phone ?? "");
-    params.set("goal", body.goal ?? "");
-    params.set("commitment", body.commitment ?? "");
-    params.set("budget", body.budget ?? "");
-    params.set("goals_details", body.goals_details ?? "");
-    params.set("referral_source", body.referral_source ?? "");
-    params.set("referral_name", body.referral_name ?? "");
+    const payload = {
+      name: body.name ?? "",
+      email: body.email ?? "",
+      phone: body.phone ?? "",
+      business_stage: body.business_stage ?? "",
+      client_count: body.client_count ?? "",
+      context: body.context ?? "",
+      referral_source: body.referral_source ?? "",
+    };
 
     const res = await fetch(gasUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params.toString(),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
     clearTimeout(timer);
 
-    const data = await res.json().catch(() => ({}) as Record<string, unknown>);
-    if (!res.ok || (data as { status?: string }).status !== "success") {
-      console.error("[Applications] Sheets mirror returned non-success:", data);
+    if (!res.ok) {
+      console.error(`[Applications] Sheets mirror returned HTTP ${res.status}`);
       return;
     }
 
@@ -158,7 +173,7 @@ async function mirrorToSheet(
   } catch (err) {
     clearTimeout(timer);
     if (err instanceof Error && err.name === "AbortError") {
-      console.error("[Applications] Sheets mirror timed out after 3s");
+      console.error("[Applications] Sheets mirror timed out after 5s");
     } else {
       console.error("[Applications] Sheets mirror threw:", err instanceof Error ? err.message : err);
     }
@@ -182,8 +197,8 @@ async function notifyAdmin(applicationId: string, body: ApplicationPayload): Pro
 
   const row = (label: string, value: string) => `
     <tr>
-      <td style="padding:11px 16px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.05);white-space:nowrap;width:38%;vertical-align:top;">${label}</td>
-      <td style="padding:11px 16px;font-size:13px;color:#e5e7eb;border-bottom:1px solid rgba(255,255,255,0.05);word-break:break-word;">${value || "—"}</td>
+      <td style="padding:11px 16px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.05);white-space:nowrap;width:38%;vertical-align:top;">${escapeHtml(label)}</td>
+      <td style="padding:11px 16px;font-size:13px;color:#e5e7eb;border-bottom:1px solid rgba(255,255,255,0.05);word-break:break-word;">${escapeHtml(value || "—")}</td>
     </tr>`;
 
   const html = `<!DOCTYPE html>
@@ -191,7 +206,7 @@ async function notifyAdmin(applicationId: string, body: ApplicationPayload): Pro
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>New Application — Kynovant</title>
+  <title>New Coach Application — Kynovant</title>
 </head>
 <body style="margin:0;padding:0;background:#080909;font-family:Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#080909;padding:40px 24px;">
@@ -202,7 +217,7 @@ async function notifyAdmin(applicationId: string, body: ApplicationPayload): Pro
           <tr>
             <td style="background:#0d0e0f;padding:28px 32px 20px;">
               <p style="margin:0 0 6px;font-size:10px;letter-spacing:0.4em;text-transform:uppercase;color:#C9A24D;font-weight:600;">Admin Notification</p>
-              <h1 style="margin:0;font-size:22px;font-weight:700;color:#ffffff;text-transform:uppercase;letter-spacing:-0.01em;line-height:1.1;">New Coaching Application</h1>
+              <h1 style="margin:0;font-size:22px;font-weight:700;color:#ffffff;text-transform:uppercase;letter-spacing:-0.01em;line-height:1.1;">New Kynovant Coach Application</h1>
             </td>
           </tr>
           <tr>
@@ -211,26 +226,25 @@ async function notifyAdmin(applicationId: string, body: ApplicationPayload): Pro
                 ${row("Name", body.name ?? "")}
                 ${row("Email", body.email ?? "")}
                 ${row("Phone", body.phone ?? "")}
-                ${row("Primary Goal", body.goal ?? "")}
-                ${row("Readiness", body.commitment ?? "")}
-                ${row("Budget Range", body.budget ?? "")}
+                ${row("Business Stage", body.business_stage ?? "")}
+                ${row("Client Count", body.client_count ?? "")}
                 ${row("Referral Source", body.referral_source ?? "")}
-                ${row("Referral Name", body.referral_name ?? "")}
+                ${row("Context", body.context ?? "")}
               </table>
             </td>
           </tr>
           <tr>
             <td style="background:#0d0e0f;padding:0 32px 28px;">
-              <a href="https://www.kynovant.com/hq/applications/${applicationId}"
+              <a href="https://www.kynovant.com/admin/growth/applications/${applicationId}"
                  style="display:inline-block;background:#C9A24D;color:#000000;padding:12px 24px;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;text-decoration:none;">
-                Review in HQ
+                Review in Admin
               </a>
             </td>
           </tr>
           <tr><td style="height:1px;background:rgba(201,162,77,0.20);"></td></tr>
           <tr>
             <td style="background:#080909;padding:18px 40px;text-align:center;">
-              <p style="margin:0;font-size:11px;color:#374151;">Kynovant Elite</p>
+              <p style="margin:0;font-size:11px;color:#374151;">Kynovant — Growth</p>
             </td>
           </tr>
         </table>
@@ -245,7 +259,7 @@ async function notifyAdmin(applicationId: string, body: ApplicationPayload): Pro
     const { error } = await resend.emails.send({
       from: `Kynovant <${fromEmail}>`,
       to: adminEmail,
-      subject: `New Application — ${body.name ?? "Unknown"}`,
+      subject: `New Kynovant Coach Application — ${body.name ?? "Unknown"}`,
       html,
     });
 
@@ -293,15 +307,13 @@ export async function POST(req: NextRequest) {
   }
 
   const input: NewApplicationInput = {
-    fullName: body.name!.trim(),
+    name: body.name!.trim(),
     email: body.email!.trim().toLowerCase(),
     phone: body.phone?.trim() || null,
-    primaryGoal: body.goal?.trim() || "Unspecified",
-    readiness: body.commitment?.trim() || "Unspecified",
-    budgetRange: body.budget?.trim() || "Unspecified",
-    goalsDetails: body.goals_details?.trim() || null,
+    businessStage: body.business_stage?.trim() || "Unspecified",
+    clientCount: body.client_count?.trim() || "Unspecified",
+    context: body.context?.trim() || null,
     referralSource: body.referral_source!.trim(),
-    referralName: body.referral_name?.trim() || null,
     submitterIp,
   };
 

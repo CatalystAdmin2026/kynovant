@@ -1,12 +1,12 @@
 // ─────────────────────────────────────────────────────────────
-// Kynovant HQ — Application Pipeline Service
+// Kynovant Admin — Coach Application Pipeline Service
 //
 // SERVER-ONLY — never import from a Client Component.
 //
-// Handles the coaching application pipeline end to end:
-//   - submitting an application from the public "Apply" form,
+// Handles the Kynovant coach-application pipeline end to end:
+//   - submitting an application from the public /coach-apply form,
 //     including the duplicate-submission policy (see submitApplication)
-//   - listing applications for the HQ Applications dashboard
+//   - listing applications for the admin Growth Applications dashboard
 //   - fetching a single application's full detail
 //   - status transitions (new → qualified → demo_scheduled →
 //     demo_complete → accepted, or → declined from any stage)
@@ -14,18 +14,24 @@
 //   - recording best-effort Google Sheets sync outcome
 //   - counting recent submissions by IP for the API route's rate limit
 //
+// ADMIN-ONLY. This is Kynovant's own pipeline for acquiring coach
+// customers, not something an ordinary coach account has any reason
+// to reach. Every exported function here is only ever called from
+// admin-guarded call sites — app/admin/growth/applications/** (pages
+// gated by requireAdminPage() in app/admin/growth/layout.tsx) and
+// app/admin/growth/applications/[id]/actions.ts (each action
+// independently calls requireAdmin()) — plus the public, intentionally
+// unauthenticated submitApplication()/countRecentApplicationsByIp()/
+// markApplicationSheetSynced() path from app/api/applications/route.ts,
+// which only ever writes or counts, never returns another applicant's
+// data back to the caller.
+//
 // This is the applications pipeline only — not a general sales CRM.
 // It answers "what did this person submit, and where is it in the
-// coach's qualify/schedule/decide workflow." A future Growth CRM can
-// reference rows here (see schema-applications.ts) without this
-// service needing to know anything about deal stages, outbound
-// sequences, or multi-channel lead sourcing.
-//
-// Solo-mode note: reviewedBy is unscoped — any coach/admin can see
-// and act on any application, matching every other HQ surface today.
-// See docs/roadmaps/saas-evolution/kynovant-saas-evolution-roadmap.md
-// §5 for the ownership-enforcement work this will need once a
-// second coach exists.
+// qualify/schedule/decide workflow." A design spec for a broader
+// Growth CRM exists at docs/catalyst-os-growth-crm.md (not yet built,
+// pending review) — this service intentionally does not implement its
+// event-log tables or growth_leads handoff.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
@@ -41,23 +47,21 @@ const TERMINAL_STATUSES: ApplicationStatus[] = ["accepted", "declined"];
 // ─────────────────────────────────────────────────────────────
 
 export interface NewApplicationInput {
-  fullName: string;
+  name: string;
   email: string;
   phone: string | null;
-  primaryGoal: string;
-  readiness: string;
-  budgetRange: string;
-  goalsDetails: string | null;
+  businessStage: string;
+  clientCount: string;
+  context: string | null;
   referralSource: string;
-  referralName: string | null;
   submitterIp: string | null;
 }
 
 export interface ApplicationListItem {
   id: string;
-  fullName: string;
+  name: string;
   email: string;
-  primaryGoal: string;
+  businessStage: string;
   referralSource: string;
   status: ApplicationStatus;
   resubmissionCount: number;
@@ -67,10 +71,8 @@ export interface ApplicationListItem {
 
 export interface ApplicationDetail extends ApplicationListItem {
   phone: string | null;
-  readiness: string;
-  budgetRange: string;
-  goalsDetails: string | null;
-  referralName: string | null;
+  clientCount: string;
+  context: string | null;
   reviewNotes: string | null;
   reviewedByName: string | null;
   updatedAt: Date;
@@ -88,7 +90,7 @@ export interface ApplicationDetail extends ApplicationListItem {
 //      mirror needs to re-sync the refreshed answers), and return its
 //      original id. This is what stops "double submit" or repeated-
 //      click abuse from silently producing unlimited rows for one
-//      person — the count is visible to the coach, not hidden.
+//      person — the count is visible to staff, not hidden.
 //   3. If none exists (first-ever application, or every prior
 //      application from this email already reached a decision):
 //      insert a brand new row. A declined applicant reapplying later
@@ -115,16 +117,14 @@ export async function submitApplication(
     .limit(1);
 
   const values = {
-    fullName: input.fullName,
+    name: input.name,
     email: input.email,
     normalizedEmail,
     phone: input.phone,
-    primaryGoal: input.primaryGoal,
-    readiness: input.readiness,
-    budgetRange: input.budgetRange,
-    goalsDetails: input.goalsDetails,
+    businessStage: input.businessStage,
+    clientCount: input.clientCount,
+    context: input.context,
     referralSource: input.referralSource,
-    referralName: input.referralName,
     submitterIp: input.submitterIp,
   };
 
@@ -182,7 +182,7 @@ export async function markApplicationSheetSynced(id: string): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────
-// READ — HQ Applications dashboard
+// READ — admin Growth Applications dashboard
 // ─────────────────────────────────────────────────────────────
 
 export async function listApplications(filter?: {
@@ -194,9 +194,9 @@ export async function listApplications(filter?: {
     ? await db
         .select({
           id: applications.id,
-          fullName: applications.fullName,
+          name: applications.name,
           email: applications.email,
-          primaryGoal: applications.primaryGoal,
+          businessStage: applications.businessStage,
           referralSource: applications.referralSource,
           status: applications.status,
           resubmissionCount: applications.resubmissionCount,
@@ -209,9 +209,9 @@ export async function listApplications(filter?: {
     : await db
         .select({
           id: applications.id,
-          fullName: applications.fullName,
+          name: applications.name,
           email: applications.email,
-          primaryGoal: applications.primaryGoal,
+          businessStage: applications.businessStage,
           referralSource: applications.referralSource,
           status: applications.status,
           resubmissionCount: applications.resubmissionCount,
@@ -232,15 +232,13 @@ export async function getApplicationById(
   const rows = await db
     .select({
       id: applications.id,
-      fullName: applications.fullName,
+      name: applications.name,
       email: applications.email,
       phone: applications.phone,
-      primaryGoal: applications.primaryGoal,
-      readiness: applications.readiness,
-      budgetRange: applications.budgetRange,
-      goalsDetails: applications.goalsDetails,
+      businessStage: applications.businessStage,
+      clientCount: applications.clientCount,
+      context: applications.context,
       referralSource: applications.referralSource,
-      referralName: applications.referralName,
       status: applications.status,
       resubmissionCount: applications.resubmissionCount,
       reviewNotes: applications.reviewNotes,
@@ -259,15 +257,13 @@ export async function getApplicationById(
 
   return {
     id: row.id,
-    fullName: row.fullName,
+    name: row.name,
     email: row.email,
     phone: row.phone,
-    primaryGoal: row.primaryGoal,
-    readiness: row.readiness,
-    budgetRange: row.budgetRange,
-    goalsDetails: row.goalsDetails,
+    businessStage: row.businessStage,
+    clientCount: row.clientCount,
+    context: row.context,
     referralSource: row.referralSource,
-    referralName: row.referralName,
     status: row.status,
     resubmissionCount: row.resubmissionCount,
     reviewNotes: row.reviewNotes,
@@ -279,7 +275,7 @@ export async function getApplicationById(
 }
 
 // ─────────────────────────────────────────────────────────────
-// MUTATE — coach actions from app/hq/applications/[id]/actions.ts
+// MUTATE — admin actions from app/admin/growth/applications/[id]/actions.ts
 // ─────────────────────────────────────────────────────────────
 
 export async function updateApplicationStatus(
