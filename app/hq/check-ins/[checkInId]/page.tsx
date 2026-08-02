@@ -372,7 +372,7 @@ export default async function CheckInReviewPage({
   return (
     <div className="space-y-6 max-w-5xl">
       <HQBreadcrumbs crumbs={[
-        { label: "Mission Control", href: "/hq" },
+        { label: "Overview", href: "/hq" },
         { label: "Check-Ins", href: "/hq/check-ins" },
         { label: checkIn.clientName },
       ]} />

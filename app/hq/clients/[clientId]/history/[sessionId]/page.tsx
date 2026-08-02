@@ -241,7 +241,7 @@ export default async function CoachSessionReviewPage({
   return (
     <div className="max-w-2xl">
       <HQBreadcrumbs crumbs={[
-        { label: "Mission Control", href: "/hq" },
+        { label: "Overview", href: "/hq" },
         { label: "Clients",         href: "/hq/clients" },
         { label: "Client",          href: `/hq/clients/${clientId}` },
         { label: "Workout Review" },

@@ -902,7 +902,7 @@ export default async function ClientWorkspacePage({
   return (
     <div className="space-y-8 max-w-[1200px]">
       <HQBreadcrumbs crumbs={[
-        { label: "Mission Control", href: "/hq" },
+        { label: "Overview", href: "/hq" },
         { label: "Clients",         href: "/hq/clients" },
         { label: displayName },
       ]} />

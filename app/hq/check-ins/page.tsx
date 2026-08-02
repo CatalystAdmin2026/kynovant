@@ -176,7 +176,7 @@ export default async function CheckInQueuePage() {
   return (
     <div className="space-y-8">
       <HQBreadcrumbs crumbs={[
-        { label: "Mission Control", href: "/hq" },
+        { label: "Overview", href: "/hq" },
         { label: "Check-Ins" },
       ]} />
 

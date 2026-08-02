@@ -4,6 +4,7 @@
 import { listCoachClients } from "@/lib/db/coach-dashboard-service";
 import ClientsDirectory from "@/components/hq/ClientsDirectory";
 import HQPageHeader from "@/components/hq/HQPageHeader";
+import AddClientButton from "@/components/hq/clients/AddClientButton";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ export default async function ClientsPage() {
       <HQPageHeader
         title="Clients"
         subtitle="Manage every athlete in one place."
+        action={<AddClientButton />}
       />
       <ClientsDirectory clients={clients} />
     </div>

@@ -65,7 +65,7 @@ export default async function MissionControlPage() {
   return (
     <div className="space-y-8">
       <HQPageHeader
-        title="Mission Control"
+        title="Overview"
         subtitle={today}
         action={
           <Link

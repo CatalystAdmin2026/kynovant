@@ -24,7 +24,7 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { icon: LayoutDashboard, label: "Mission Control", href: "/hq",            exact: true },
+  { icon: LayoutDashboard, label: "Overview",        href: "/hq",            exact: true },
   { icon: Rocket,          label: "Get Started",     href: "/hq/get-started"             },
   { icon: Users,           label: "Clients",         href: "/hq/clients"                 },
   { icon: BookOpen,        label: "Programs",        href: "/hq/programs"                },

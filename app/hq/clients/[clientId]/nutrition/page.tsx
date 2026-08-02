@@ -112,7 +112,7 @@ export default async function ClientNutritionPage({
         {/* Breadcrumbs */}
         <HQBreadcrumbs
           crumbs={[
-            { label: "Mission Control", href: "/hq" },
+            { label: "Overview", href: "/hq" },
             { label: "Clients", href: "/hq/clients" },
             { label: displayName, href: `/hq/clients/${clientId}` },
             { label: "Nutrition" },
