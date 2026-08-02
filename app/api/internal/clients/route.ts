@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { listActiveClients } from "@/lib/db/client-program-service";
 import { requireCoachOrAdmin } from "@/lib/auth/guards";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin";
 import { getDb } from "@/lib/db/client";
 import { clientProfiles } from "@/lib/db/schema";
 
@@ -84,6 +84,13 @@ export async function POST(req: NextRequest) {
       { status: 201 },
     );
   } catch (err) {
+    if (err instanceof AdminClientConfigError) {
+      console.error("[internal/clients] " + err.message);
+      return NextResponse.json(
+        { ok: false, error: "Client invite service is temporarily unavailable. Please try again shortly or contact support." },
+        { status: 503 },
+      );
+    }
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : "Failed" },
       { status: 500 },

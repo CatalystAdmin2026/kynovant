@@ -21,15 +21,28 @@
 import "server-only";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
+// Thrown when required server env vars are missing. Callers should catch
+// this specifically and return a generic, safe message to the HTTP
+// response (this message names env vars and a local file — fine for a
+// server log or a trusted admin, not for an arbitrary authenticated
+// caller, e.g. a plain coach hitting /api/internal/clients from
+// /hq/get-started). Never includes any credential value.
+export class AdminClientConfigError extends Error {
+  constructor() {
+    super(
+      "SUPABASE_SERVICE_ROLE_KEY (or NEXT_PUBLIC_SUPABASE_URL) is not configured — " +
+      "admin invite operations are unavailable. See env.local.example.",
+    );
+    this.name = "AdminClientConfigError";
+  }
+}
+
 export function createAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url || !serviceRoleKey) {
-    throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY (or NEXT_PUBLIC_SUPABASE_URL) is not configured — " +
-      "admin invite operations are unavailable. See env.local.example.",
-    );
+    throw new AdminClientConfigError();
   }
 
   return createSupabaseClient(url, serviceRoleKey, {

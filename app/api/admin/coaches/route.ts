@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq, inArray, desc } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth/guards";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin";
 import { getDb } from "@/lib/db/client";
 import { users, coachProfiles } from "@/lib/db/schema";
 
@@ -117,6 +117,13 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, coachId: newUserId }, { status: 201 });
   } catch (err) {
+    if (err instanceof AdminClientConfigError) {
+      console.error("[admin/coaches] " + err.message);
+      return NextResponse.json(
+        { ok: false, error: "Invite service is temporarily unavailable. Please try again shortly." },
+        { status: 503 },
+      );
+    }
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : "Failed" },
       { status: 500 },
