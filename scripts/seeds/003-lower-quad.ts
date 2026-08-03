@@ -15,7 +15,7 @@
 // Spec: docs/exercise-intelligence-spec.md
 // ─────────────────────────────────────────────────────────────
 
-import { SHARED_EQUIPMENT, db, sql, seedEquipment, seedExercises } from "./_shared";
+import { SHARED_EQUIPMENT, sql, seedEquipment, seedExercises } from "./_shared";
 import type { MuscleGroup, MuscleRole, EquipmentRequirement, ExerciseCueType, ExerciseRelationType } from "./_shared";
 
 // ─── LOCAL EQUIPMENT ─────────────────────────────────────────
@@ -628,7 +628,7 @@ const EXERCISE_EQUIPMENT: Array<[string, string, EquipmentRequirement]> = [
 // ─── COACHING CUES ───────────────────────────────────────────
 // [slug, cue_type, content, order_index]
 
-const CUES: Array<[string, ExerciseCueType, string, number]> = [
+export const CUES: Array<[string, ExerciseCueType, string, number]> = [
 
   ["back-squat", "setup",
     "Bar rests on the upper traps, just below the base of the neck. Grip just outside shoulder-width. Unrack, take two steps back, and set feet to hip- or shoulder-width.",
@@ -691,6 +691,19 @@ const CUES: Array<[string, ExerciseCueType, string, number]> = [
     "Locking the knees out hard at the top: unnecessary joint stress with no added training benefit. Stop just short of full lockout and reverse.",
     3],
 
+  ["barbell-hack-squat", "setup",
+    "Place the barbell behind the legs against the calves with feet about hip-width. Hinge down to grip the bar, brace, and keep the chest as tall as mobility allows.",
+    1],
+  ["barbell-hack-squat", "execution",
+    "Drive through the whole foot and let the knees travel forward as the bar slides close behind the legs. Lower under control until the plates or mobility set the range.",
+    2],
+  ["barbell-hack-squat", "common_error",
+    "Letting the bar drift backward pulls the shoulders down and rounds the spine. Keep the bar close to the legs and reduce load if posture changes.",
+    3],
+  ["barbell-hack-squat", "safety",
+    "Use bumper plates or blocks to set a manageable start height; this advanced variation stresses knees, grip, and spinal position when loaded too aggressively.",
+    4],
+
   ["belt-squat", "setup",
     "Attach the belt around the hips, stand on the platform with the load hanging below. No bar on the back or shoulders.",
     1],
@@ -745,6 +758,19 @@ const CUES: Array<[string, ExerciseCueType, string, number]> = [
   ["walking-lunge", "execution",
     "Lower the rear knee toward the floor, then drive through the front foot to step into the next lunge. Keep the torso upright throughout.",
     2],
+
+  ["barbell-walking-lunge", "setup",
+    "Set the bar on the upper back as for a squat, brace, and choose a clear lane before stepping. Start with a shorter route than dumbbell walking lunges.",
+    1],
+  ["barbell-walking-lunge", "execution",
+    "Step forward into each lunge with control, lower the rear knee toward the floor, then drive through the front foot to bring the rear leg through into the next rep.",
+    2],
+  ["barbell-walking-lunge", "common_error",
+    "Rushing the step or crossing the feet narrows the base and causes side-to-side wobble under the bar. Step deliberately and keep feet on parallel tracks.",
+    3],
+  ["barbell-walking-lunge", "safety",
+    "Avoid near-failure sets and use spotter arms or an open lane; missed balance with a barbell is harder to recover than with dumbbells.",
+    4],
 
   ["cossack-squat", "setup",
     "Take a wide stance, feet turned slightly out. Shift your weight to one side while keeping the opposite leg straight.",

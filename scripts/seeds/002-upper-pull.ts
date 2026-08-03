@@ -14,7 +14,7 @@
 // Spec: docs/exercise-intelligence-spec.md
 // ─────────────────────────────────────────────────────────────
 
-import { SHARED_EQUIPMENT, db, sql, seedEquipment, seedExercises } from "./_shared";
+import { SHARED_EQUIPMENT, sql, seedEquipment, seedExercises } from "./_shared";
 import type { MuscleGroup, MuscleRole, EquipmentRequirement, ExerciseCueType, ExerciseRelationType } from "./_shared";
 
 // ─── LOCAL EQUIPMENT ─────────────────────────────────────────
@@ -682,7 +682,7 @@ const EXERCISE_EQUIPMENT: Array<[string, string, EquipmentRequirement]> = [
 // ─── COACHING CUES ───────────────────────────────────────────
 // [slug, cue_type, content, order_index]
 
-const CUES: Array<[string, ExerciseCueType, string, number]> = [
+export const CUES: Array<[string, ExerciseCueType, string, number]> = [
 
   ["bent-over-barbell-row", "setup",
     "Hinge at the hips to roughly 45° with a soft knee bend. Grip just outside shoulder-width. Let the bar hang at arm's length below the shoulders before the first pull.",
@@ -714,6 +714,32 @@ const CUES: Array<[string, ExerciseCueType, string, number]> = [
   ["single-arm-dumbbell-row", "execution",
     "Pull the dumbbell to the hip, not the armpit — driving the elbow back and slightly up. Avoid rotating the torso to help the weight up.",
     2],
+
+  ["kroc-row", "setup",
+    "Brace one hand and knee or one hand on a flat bench, with the working-side foot planted wide. Use a heavy dumbbell only after the torso position is locked in.",
+    1],
+  ["kroc-row", "execution",
+    "Row the dumbbell powerfully toward the hip for high reps while keeping the supporting shoulder packed and the torso from twisting excessively.",
+    2],
+  ["kroc-row", "common_error",
+    "Turning each rep into a full torso rotation removes lat tension and overloads the low back. Allow slight body English, but keep the ribcage controlled.",
+    3],
+  ["kroc-row", "safety",
+    "Use straps when grip is the limiter and stop before support-side shoulder or low-back position fails; this is intentionally heavy, not intentionally sloppy.",
+    4],
+
+  ["renegade-row", "setup",
+    "Set dumbbells under the shoulders in a high plank with feet wider than hip-width. Brace the glutes and abs before lifting either hand.",
+    1],
+  ["renegade-row", "execution",
+    "Row one dumbbell toward the ribs while pushing the opposite dumbbell into the floor. Keep hips square, lower with control, then switch sides if alternating.",
+    2],
+  ["renegade-row", "common_error",
+    "Rocking the hips open to clear the dumbbell turns the row into a rotation drill and reduces core demand. Widen the feet or reduce load.",
+    3],
+  ["renegade-row", "safety",
+    "Use flat-sided dumbbells or handles that will not roll. Avoid maximal loads because wrist stability and plank control are the limiting safety factors.",
+    4],
 
   ["chest-supported-dumbbell-row", "setup",
     "Lie chest-down on an incline bench set to 30–45°, dumbbells hanging at arm's length below the shoulders.",
@@ -762,6 +788,19 @@ const CUES: Array<[string, ExerciseCueType, string, number]> = [
   ["pull-up", "common_error",
     "Kipping or using leg swing to generate momentum: removes tension from the lats and increases shoulder injury risk under load. Keep the body still and controlled unless training kipping intentionally.",
     3],
+
+  ["wide-grip-pull-up", "setup",
+    "Grip the bar wider than shoulder-width with palms facing away. Start from a controlled dead hang with ribs down and shoulders elevated but not painful.",
+    1],
+  ["wide-grip-pull-up", "execution",
+    "Pull by driving elbows down and slightly out until the chin clears the bar or the upper chest approaches it. Lower under control to a full hang.",
+    2],
+  ["wide-grip-pull-up", "common_error",
+    "Using an excessively wide grip shortens range of motion and can irritate the shoulders. Choose the widest grip that still allows controlled scapular movement.",
+    3],
+  ["wide-grip-pull-up", "safety",
+    "Regress to assisted or standard-width pull-ups if shoulder pinching, elbow pain, or uncontrolled swinging appears; the wide grip increases shoulder demand.",
+    4],
 
   ["chin-up", "setup",
     "Grip shoulder-width or slightly narrower, palms facing you. Start from a full dead hang.",

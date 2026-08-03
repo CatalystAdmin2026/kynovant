@@ -14,6 +14,36 @@ import type { ExerciseDef } from "../../../scripts/seeds/_shared";
 
 const newActiveExerciseSlugs = ["lying-leg-curl", "nordic-curl"] as const;
 
+const safetyCriticalCueFiles = [
+  {
+    file: "scripts/seeds/004-hip-hinge.ts",
+    slugs: [
+      "deficit-deadlift",
+      "deficit-romanian-deadlift",
+      "snatch-grip-deadlift",
+      "barbell-single-leg-romanian-deadlift",
+      "banded-deadlift",
+      "good-morning",
+      "seated-good-morning",
+      "single-arm-kettlebell-swing",
+    ],
+  },
+  {
+    file: "scripts/seeds/003-lower-quad.ts",
+    slugs: ["barbell-walking-lunge", "barbell-hack-squat"],
+  },
+  {
+    file: "scripts/seeds/002-upper-pull.ts",
+    slugs: ["kroc-row", "renegade-row", "wide-grip-pull-up"],
+  },
+] as const;
+
+function cueTypesForSlug(source: string, slug: string) {
+  const escapedSlug = slug.replaceAll("-", "\\-");
+  const cuePattern = new RegExp(`\\["${escapedSlug}",\\s*"([^"]+)"`, "g");
+  return Array.from(source.matchAll(cuePattern), (match) => match[1]);
+}
+
 describe("P0 exercise library remediation seed data", () => {
   it("gives every new active exercise setup and execution cues", () => {
     for (const slug of newActiveExerciseSlugs) {
@@ -97,5 +127,20 @@ describe("P0 exercise library remediation seed data", () => {
     expect(repairSource).toContain("ON CONFLICT DO NOTHING");
     expect(repairSource).toContain("AND em.muscle_group <> 'quadriceps'");
     expect(repairSource).not.toContain("WHERE slug <> 'back-squat'");
+  });
+
+  it("gives every safety-critical advanced or specialist zero-cue exercise the active cue gate", () => {
+    for (const { file, slugs } of safetyCriticalCueFiles) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf8");
+
+      for (const slug of slugs) {
+        const cueTypes = cueTypesForSlug(source, slug);
+
+        expect(cueTypes, `${slug} should have setup cue`).toContain("setup");
+        expect(cueTypes, `${slug} should have execution cue`).toContain("execution");
+        expect(cueTypes, `${slug} should have common error cue`).toContain("common_error");
+        expect(cueTypes, `${slug} should have safety cue`).toContain("safety");
+      }
+    }
   });
 });

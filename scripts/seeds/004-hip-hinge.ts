@@ -16,7 +16,7 @@
 // Spec: docs/exercise-intelligence-spec.md
 // ─────────────────────────────────────────────────────────────
 
-import { SHARED_EQUIPMENT, db, sql, seedEquipment, seedExercises } from "./_shared";
+import { SHARED_EQUIPMENT, sql, seedEquipment, seedExercises } from "./_shared";
 import type { MuscleGroup, MuscleRole, EquipmentRequirement, ExerciseCueType, ExerciseRelationType } from "./_shared";
 
 // ─── LOCAL EQUIPMENT ─────────────────────────────────────────
@@ -592,7 +592,7 @@ const EXERCISE_EQUIPMENT: Array<[string, string, EquipmentRequirement]> = [
 // ─── COACHING CUES ───────────────────────────────────────────
 // [slug, cue_type, content, order_index]
 
-const CUES: Array<[string, ExerciseCueType, string, number]> = [
+export const CUES: Array<[string, ExerciseCueType, string, number]> = [
 
   ["conventional-deadlift", "setup",
     "Bar over mid-foot, shins nearly touching the bar. Grip just outside the knees, hips set higher than the shoulders won't drop but lower than a squat.",
@@ -605,6 +605,45 @@ const CUES: Array<[string, ExerciseCueType, string, number]> = [
     3],
   ["conventional-deadlift", "common_error",
     "Rounding the lower back off the floor: increases disc shear force significantly and is the most common cause of deadlift-related low back strain. Reset the brace and hip height before pulling.",
+    4],
+
+  ["deficit-deadlift", "setup",
+    "Stand on a stable deficit platform high enough to increase range of motion without forcing lumbar flexion. Set the bar over mid-foot and brace before pulling slack from the bar.",
+    1],
+  ["deficit-deadlift", "execution",
+    "Push the floor away while keeping the bar close and the chest angle controlled. Only pull from the deeper start if you can keep a neutral spine from the first inch.",
+    2],
+  ["deficit-deadlift", "common_error",
+    "Using a deficit that exceeds hip and hamstring mobility causes the low back to round before the bar leaves the floor. Lower the deficit or return to a standard deadlift.",
+    3],
+  ["deficit-deadlift", "safety",
+    "Use conservative loads and avoid maximal attempts until the deeper start position is consistent; this variation increases bottom-position spinal and hamstring demand.",
+    4],
+
+  ["snatch-grip-deadlift", "setup",
+    "Take a wide snatch grip with the bar over mid-foot, shoulders slightly in front of the bar, and lats locked down. Use straps when grip limits back and hamstring positioning.",
+    1],
+  ["snatch-grip-deadlift", "execution",
+    "Break the floor with a tight brace, sweeping the bar against the legs while maintaining upper-back tension. Stand tall by extending the hips rather than leaning back.",
+    2],
+  ["snatch-grip-deadlift", "common_error",
+    "Letting the wide grip pull the shoulders forward rounds the upper back and drifts the bar away from the body. Reset the lats before every rep.",
+    3],
+  ["snatch-grip-deadlift", "safety",
+    "Treat this as a specialist deadlift variation: reduce load substantially from conventional deadlift numbers and stop if shoulder, wrist, or low-back position degrades.",
+    4],
+
+  ["banded-deadlift", "setup",
+    "Anchor bands evenly so tension increases straight up through lockout. Set up as a conventional deadlift with the bar centered and the bands balanced left to right.",
+    1],
+  ["banded-deadlift", "execution",
+    "Pull with normal deadlift mechanics while accelerating through the rising band tension. Keep the bar path close as lockout demand increases.",
+    2],
+  ["banded-deadlift", "common_error",
+    "Overloading the top-end band tension makes the hips shoot forward and the spine overextend at lockout. Choose band tension that allows a clean, stacked finish.",
+    3],
+  ["banded-deadlift", "safety",
+    "Inspect band anchors and band condition before loading; uneven or slipping bands can change the bar path suddenly under heavy tension.",
     4],
 
   ["sumo-deadlift", "setup",
@@ -634,6 +673,45 @@ const CUES: Array<[string, ExerciseCueType, string, number]> = [
     "Bending the knees further during the descent: turns the RDL into a squat pattern and removes tension from the hamstrings at the stretched position. Keep the knee angle locked after the first inch.",
     4],
 
+  ["deficit-romanian-deadlift", "setup",
+    "Stand on a low, stable platform with the bar at hip height. Set a soft fixed knee bend and brace before hinging into the extended range.",
+    1],
+  ["deficit-romanian-deadlift", "execution",
+    "Push the hips back and let the bar track down the legs below normal RDL depth only as far as hamstring mobility allows. Drive the hips forward to return without changing knee angle.",
+    2],
+  ["deficit-romanian-deadlift", "common_error",
+    "Chasing extra depth by rounding the low back turns the deficit into spinal flexion under load. End the descent when hamstring tension stops increasing cleanly.",
+    3],
+  ["deficit-romanian-deadlift", "safety",
+    "Start lighter than a standard RDL and progress range before load; the longer eccentric creates high hamstring soreness and strain risk if volume jumps too quickly.",
+    4],
+
+  ["good-morning", "setup",
+    "Set the bar across the upper back as for a squat, feet about hip-width, knees softly bent. Brace hard before initiating the hinge.",
+    1],
+  ["good-morning", "execution",
+    "Push the hips back while keeping the knee angle nearly fixed and the spine neutral. Stop when the torso reaches the deepest controlled hamstring stretch, then drive the hips forward.",
+    2],
+  ["good-morning", "common_error",
+    "Turning the rep into a squat by bending the knees removes the intended hamstring and spinal-erector demand. Keep shins nearly vertical throughout.",
+    3],
+  ["good-morning", "safety",
+    "Load conservatively and avoid grinding reps; the long lever places meaningful shear demand on the spine if bracing or bar position breaks down.",
+    4],
+
+  ["seated-good-morning", "setup",
+    "Sit on a flat bench with the bar across the upper back, feet planted wide enough for the torso to hinge between the thighs. Brace before moving.",
+    1],
+  ["seated-good-morning", "execution",
+    "Hinge forward from the hips under control, keeping the ribs down and spine neutral. Reverse once the torso angle or brace starts to change.",
+    2],
+  ["seated-good-morning", "common_error",
+    "Collapsing the chest and rounding forward shifts the exercise from controlled hip hinging to loaded spinal flexion. Reduce load and shorten the range.",
+    3],
+  ["seated-good-morning", "safety",
+    "Use this only with clients who already understand bracing and hinge mechanics; the seated position removes leg assistance and concentrates demand on the trunk and hips.",
+    4],
+
   ["dumbbell-romanian-deadlift", "setup",
     "Hold dumbbells in front of the thighs with a soft, fixed knee bend and neutral spine.",
     1],
@@ -658,6 +736,19 @@ const CUES: Array<[string, ExerciseCueType, string, number]> = [
     "Hips rotating open on the standing leg side: reduces glute and hamstring tension and increases lateral spine loading. Keep both hip points facing the floor throughout the rep.",
     3],
 
+  ["barbell-single-leg-romanian-deadlift", "setup",
+    "Set the bar in the hands or on the back only after a stable single-leg hinge is established. Stand on one leg with a soft knee bend and square hips.",
+    1],
+  ["barbell-single-leg-romanian-deadlift", "execution",
+    "Hinge forward as the free leg reaches back, keeping the bar path centered and hips level. Reverse when balance or hamstring range limits clean control.",
+    2],
+  ["barbell-single-leg-romanian-deadlift", "common_error",
+    "Letting the pelvis rotate open or the bar drift sideways creates rotational stress through the hip and low back. Reduce load or regress to dumbbells.",
+    3],
+  ["barbell-single-leg-romanian-deadlift", "safety",
+    "Reserve this specialist variation for athletes with excellent unilateral hinge control; missed balance under a barbell is higher risk than with dumbbells or cables.",
+    4],
+
   ["kettlebell-swing", "setup",
     "Stand with feet slightly wider than shoulder-width, kettlebell on the floor a foot or so in front. Hike the kettlebell back between the legs to start.",
     1],
@@ -667,6 +758,19 @@ const CUES: Array<[string, ExerciseCueType, string, number]> = [
   ["kettlebell-swing", "safety",
     "Never let the lower back round to catch the kettlebell at the bottom of the hike — hip hinge depth should be limited by hamstring flexibility, not lumbar flexion.",
     3],
+
+  ["single-arm-kettlebell-swing", "setup",
+    "Set up as for a two-hand swing with one hand on the handle and the free arm out for counterbalance. Square the shoulders before hiking the bell.",
+    1],
+  ["single-arm-kettlebell-swing", "execution",
+    "Snap the hips to drive the bell to chest height while resisting rotation through the trunk. Switch hands only at the top if alternating is prescribed.",
+    2],
+  ["single-arm-kettlebell-swing", "common_error",
+    "Pulling with the shoulder or twisting toward the bell turns the movement into an arm raise with rotation. Let the hips drive and keep ribs and pelvis square.",
+    3],
+  ["single-arm-kettlebell-swing", "safety",
+    "Master the two-hand swing first and leave room around the athlete; grip fatigue or poor anti-rotation control can make the bell path unpredictable.",
+    4],
 
   ["barbell-hip-thrust", "setup",
     "Upper back braced against a bench, barbell padded and positioned across the hip crease. Feet planted roughly shin-vertical at the top position.",
