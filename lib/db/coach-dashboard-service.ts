@@ -76,6 +76,7 @@ export interface MissionControlData {
   noActiveProgramCount: number;
   noWorkoutLast7dCount: number;
   workoutsCompletedToday: number;
+  workoutsCompletedLast7d: number;
   recentSkippedCount: number;
   prioritizedClients: CoachClientSummary[]; // non-healthy, sorted by urgency
   recentActivity: RecentSessionActivity[];
@@ -194,7 +195,11 @@ const ATTENTION_ORDER: Record<AttentionLevel, number> = {
 // ─────────────────────────────────────────────────────────────
 
 export async function listCoachClients(
+<<<<<<< HEAD
   coachId: string | null = null,
+=======
+  coachId: string | null = null, // reserved for future multi-tenant filter
+>>>>>>> 3d6c63c (feat: elevate HQ Overview experience)
 ): Promise<CoachClientSummary[]> {
   const db = getDb();
 
@@ -400,6 +405,7 @@ export async function getCoachMissionControl(
   ).length;
 
   const workoutsCompletedToday = clients.reduce((s, c) => s + c.completedToday, 0);
+  const workoutsCompletedLast7d = clients.reduce((s, c) => s + c.completedLast7d, 0);
   const recentSkippedCount = clients.reduce((s, c) => s + c.skippedLast30d, 0);
 
   const prioritizedClients = clients
@@ -425,6 +431,7 @@ export async function getCoachMissionControl(
     noActiveProgramCount,
     noWorkoutLast7dCount,
     workoutsCompletedToday,
+    workoutsCompletedLast7d,
     recentSkippedCount,
     prioritizedClients,
     recentActivity,
@@ -441,7 +448,7 @@ export async function getCoachMissionControl(
 // ─────────────────────────────────────────────────────────────
 
 export async function getCoachClientDetail(
-  clientId: string,
+  coachId: string | null = null,
   coachId: string | null = null,
 ): Promise<CoachClientDetail | null> {
   const db = getDb();
@@ -480,7 +487,11 @@ export async function getCoachClientDetail(
 export async function getCoachClientSessionDetail(
   clientId: string,
   sessionId: string,
+<<<<<<< HEAD
   coachId: string | null = null,
+=======
+  _coachId?: string, // reserved for future multi-tenant filter
+>>>>>>> 3d6c63c (feat: elevate HQ Overview experience)
 ) {
   const db = getDb();
 
