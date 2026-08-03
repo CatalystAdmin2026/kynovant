@@ -79,6 +79,7 @@ export type ExerciseDef = {
   lengthenedBias?: number;
   shortenedBias?: number;
   stretchMediatedPotential?: number;
+  defaultPrescription?: Record<string, unknown>;
 };
 
 // ─── Shared equipment catalog ────────────────────────────────
