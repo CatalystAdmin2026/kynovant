@@ -9,7 +9,7 @@
 // pattern; `tone="light"` renders a white panel for light-surface
 // contexts.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cx } from "./utils";
@@ -50,6 +50,19 @@ export function Modal({
   ariaLabel,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Always-fresh ref instead of an effect dependency. Callers routinely
+  // pass an inline (non-memoized) onClose — that's fine for a close
+  // handler, but it must never cause the effect below to tear down and
+  // re-run: doing so was the root cause of a focus-stealing regression
+  // (see components/hq/clients/AddClientModal.tsx history). The effect
+  // must run exactly once per open/close transition, not once per
+  // caller re-render.
+  const onCloseRef = useRef(onClose);
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -58,14 +71,29 @@ export function Modal({
     if (!panel) return;
 
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    panel.querySelectorAll<HTMLElement>(FOCUSABLE)[0]?.focus();
+
+    // Initial focus. If something inside the panel already claimed
+    // focus during this same commit (e.g. a field with a native
+    // `autoFocus` attribute), respect it and do nothing — that's how a
+    // consumer opts a specific field into initial focus. Otherwise,
+    // fall back to the first focusable element within the CONTENT area
+    // specifically, never the panel as a whole: the panel's header
+    // (title + close button) is earlier in DOM order than any content,
+    // so querying the whole panel would autofocus the close button on
+    // every open, which is never the correct default for a dialog.
+    if (!panel.contains(document.activeElement)) {
+      const target =
+        contentRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE)[0] ??
+        panel.querySelectorAll<HTMLElement>(FOCUSABLE)[0];
+      target?.focus();
+    }
 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -90,7 +118,9 @@ export function Modal({
       document.body.style.overflow = previousOverflow;
       previouslyFocused?.focus();
     };
-  }, [open, onClose]);
+    // Deliberately [open] only — `onClose` is read via onCloseRef, not
+    // as a dependency. See onCloseRef above for why.
+  }, [open]);
 
   if (!open) return null;
 
@@ -156,7 +186,7 @@ export function Modal({
           </div>
         )}
 
-        <div className="overflow-y-auto px-6 py-5">{children}</div>
+        <div ref={contentRef} className="overflow-y-auto px-6 py-5">{children}</div>
 
         {footer && (
           <div

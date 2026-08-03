@@ -22,7 +22,7 @@
 // no stale state to get stuck on between opens.
 // ─────────────────────────────────────────────────────────────
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
 import { Modal } from "@/components/ui";
 
@@ -47,17 +47,21 @@ export default function AddClientModal({ open, onClose, onCreated }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedClient | null>(null);
 
-  function resetAll() {
+  const resetAll = useCallback(() => {
     setForm(EMPTY_FORM);
     setError(null);
     setCreated(null);
     setSubmitting(false);
-  }
+  }, []);
 
-  function handleClose() {
+  // Memoized: Modal's focus-trap effect no longer depends on onClose
+  // (see components/ui/Modal.tsx), but keeping this stable is still
+  // the correct, low-cost convention — matches
+  // components/hq/workspace/AssignProgramModal.tsx's handleClose.
+  const handleClose = useCallback(() => {
     resetAll();
     onClose();
-  }
+  }, [resetAll, onClose]);
 
   function inviteAnother() {
     resetAll();
