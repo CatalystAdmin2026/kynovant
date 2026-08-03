@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
 import { Menu, X, LayoutDashboard, Users, BookOpen, FileText, ClipboardCheck, Dumbbell, Rocket } from "lucide-react";
+import HQSignOutButton from "./HQSignOutButton";
 
 const MAIN_NAV = [
   { icon: LayoutDashboard, label: "Overview",         href: "/hq",             exact: true },
@@ -16,9 +17,19 @@ const MAIN_NAV = [
   { icon: ClipboardCheck,  label: "Check-Ins",        href: "/hq/check-ins"                },
 ];
 
-export default function HQMobileNav({ coachName }: { coachName: string }) {
+export default function HQMobileNav({
+  coachName,
+  onboardingComplete,
+}: {
+  coachName: string;
+  onboardingComplete: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const mainNav = MAIN_NAV.filter((item) => !onboardingComplete || item.href !== "/hq/get-started");
+  const setupNav = onboardingComplete
+    ? MAIN_NAV.filter((item) => item.href === "/hq/get-started")
+    : [];
 
   function isActive(href: string, exact = false): boolean {
     if (exact) return pathname === href;
@@ -58,7 +69,7 @@ export default function HQMobileNav({ coachName }: { coachName: string }) {
             </div>
 
             <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-              {MAIN_NAV.map(({ icon: Icon, label, href, exact }) => {
+              {mainNav.map(({ icon: Icon, label, href, exact }) => {
                 const active = isActive(href, exact);
                 return (
                   <Link
@@ -77,6 +88,35 @@ export default function HQMobileNav({ coachName }: { coachName: string }) {
                 );
               })}
 
+              {setupNav.length > 0 && (
+                <>
+                  <div className="h-px bg-white/[0.05] my-3" />
+
+                  <p className="px-3 pb-1 text-[9px] font-semibold uppercase tracking-[0.35em] text-white/20">
+                    Setup
+                  </p>
+
+                  {setupNav.map(({ icon: Icon, label, href, exact }) => {
+                    const active = isActive(href, exact);
+                    return (
+                      <Link
+                        key={label}
+                        href={href}
+                        onClick={() => setOpen(false)}
+                        className={`flex items-center gap-3 px-3 py-3 text-sm font-medium transition-colors ${
+                          active
+                            ? "bg-white/[0.04] text-white/55"
+                            : "text-white/30 hover:text-white/55 hover:bg-white/[0.03]"
+                        }`}
+                      >
+                        <Icon size={15} className={active ? "text-white/45" : "text-white/20"} />
+                        {label}
+                      </Link>
+                    );
+                  })}
+                </>
+              )}
+
               <div className="h-px bg-white/[0.05] my-3" />
 
               <div className="px-3 py-2 text-xs text-white/20 space-y-2">
@@ -91,6 +131,9 @@ export default function HQMobileNav({ coachName }: { coachName: string }) {
 
             <div className="px-4 py-3 border-t border-white/[0.06]">
               <p className="text-[10px] text-white/30 truncate">{coachName}</p>
+              <div className="mt-3">
+                <HQSignOutButton compact />
+              </div>
             </div>
           </div>
         </div>

@@ -4,7 +4,7 @@
 // Catalyst HQ — Program Assignment Modal (Sprint 6.3A)
 //
 // Three-step flow:
-//   Step 1 — Choose Blueprint (searchable list)
+//   Step 1 — Choose Program (searchable list)
 //   Step 2 — Set Schedule (start date, auto end date)
 //   Step 3 — Preview & Confirm (week 1 schedule + warnings)
 //
@@ -81,7 +81,7 @@ const EXP_LABEL: Record<string, string> = {
 
 function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
   const steps = [
-    { n: 1, label: "Blueprint" },
+    { n: 1, label: "Program" },
     { n: 2, label: "Schedule" },
     { n: 3, label: "Confirm" },
   ];
@@ -160,7 +160,7 @@ export default function AssignProgramModal({
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Selected blueprint derived value
+  // Selected program derived value
   const selected = blueprints.find((b) => b.id === selectedId) ?? null;
   const endDate = selected?.defaultDurationWeeks && startDate
     ? addWeeks(startDate, selected.defaultDurationWeeks)
@@ -193,7 +193,7 @@ export default function AssignProgramModal({
     return () => document.removeEventListener(OPEN_EVENT, handleOpen);
   }, []);
 
-  // ── Filtered blueprint list
+  // ── Filtered program list
   const filtered = search.trim()
     ? blueprints.filter(
         (b) =>
@@ -247,7 +247,7 @@ export default function AssignProgramModal({
   }
 
   // ─────────────────────────────────────────────────────────
-  // STEP 1 — CHOOSE BLUEPRINT
+  // STEP 1 — CHOOSE PROGRAM
   // ─────────────────────────────────────────────────────────
 
   function renderStep1() {
@@ -255,9 +255,9 @@ export default function AssignProgramModal({
       <div className="flex flex-col gap-0">
         {blueprints.length === 0 ? (
           <div className="py-12 text-center">
-            <p className="text-sm font-medium text-white/60">No published blueprints</p>
+            <p className="text-sm font-medium text-white/60">No published programs</p>
             <p className="mt-1 text-xs text-white/30">
-              Create and publish a blueprint in HQ → Blueprints first.
+              Create and publish a multi-week program in HQ → Programs first.
             </p>
           </div>
         ) : (
@@ -267,10 +267,10 @@ export default function AssignProgramModal({
               <Input
                 type="text"
                 tone="dark"
-                placeholder="Search blueprints…"
+                placeholder="Search programs..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                aria-label="Search blueprints"
+                aria-label="Search programs"
               />
             </div>
 
@@ -278,7 +278,7 @@ export default function AssignProgramModal({
             <div className="max-h-[320px] space-y-1.5 overflow-y-auto pr-0.5">
               {filtered.length === 0 && search ? (
                 <p className="py-8 text-center text-xs text-white/30">
-                  No blueprints match &ldquo;{search}&rdquo;
+                  No programs match &ldquo;{search}&rdquo;
                 </p>
               ) : (
                 filtered.map((bp) => {
@@ -356,7 +356,7 @@ export default function AssignProgramModal({
     if (!selected) return null;
     return (
       <div className="space-y-6">
-        {/* Selected blueprint summary */}
+        {/* Selected program summary */}
         <div className="rounded-lg border border-white/[0.06] bg-[#0a0b0c] px-4 py-3">
           <p className="text-sm font-semibold text-white">{selected.name}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -646,7 +646,7 @@ export default function AssignProgramModal({
         success
           ? undefined
           : step === 1
-          ? "Choose a blueprint to assign"
+          ? "Choose a program to assign"
           : step === 2
           ? "Set the program start date"
           : "Review and confirm the assignment"

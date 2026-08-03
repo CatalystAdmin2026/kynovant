@@ -5,19 +5,20 @@ import HQTopBar from "./HQTopBar";
 interface Props {
   children: React.ReactNode;
   coachName: string;
+  onboardingComplete: boolean;
 }
 
-export default function HQShell({ children, coachName }: Props) {
+export default function HQShell({ children, coachName, onboardingComplete }: Props) {
   return (
     <div className="min-h-screen bg-[#080909] text-[#f0efeb]">
       {/* Fixed sidebar — desktop */}
-      <HQSidebar coachName={coachName} />
+      <HQSidebar coachName={coachName} onboardingComplete={onboardingComplete} />
 
       {/* Fixed top bar — desktop (sits right of sidebar) */}
       <HQTopBar />
 
       {/* Mobile nav (fixed top bar + slide-out drawer) */}
-      <HQMobileNav coachName={coachName} />
+      <HQMobileNav coachName={coachName} onboardingComplete={onboardingComplete} />
 
       {/* Content canvas */}
       <main className="lg:ml-64 min-h-screen">

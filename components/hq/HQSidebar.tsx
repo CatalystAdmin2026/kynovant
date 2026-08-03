@@ -35,8 +35,18 @@ const NAV: NavItem[] = [
   { icon: Folder,          label: "Documents",       href: "/hq/documents",  comingSoon: true },
 ];
 
-export default function HQSidebar({ coachName }: { coachName: string }) {
+export default function HQSidebar({
+  coachName,
+  onboardingComplete,
+}: {
+  coachName: string;
+  onboardingComplete: boolean;
+}) {
   const pathname = usePathname();
+  const mainNav = NAV.filter((i) => !i.comingSoon && (!onboardingComplete || i.href !== "/hq/get-started"));
+  const setupNav = onboardingComplete
+    ? NAV.filter((i) => !i.comingSoon && i.href === "/hq/get-started")
+    : [];
 
   function isActive(item: NavItem): boolean {
     if (item.comingSoon) return false;
@@ -79,7 +89,7 @@ export default function HQSidebar({ coachName }: { coachName: string }) {
           Coaching
         </p>
 
-        {NAV.filter((i) => !i.comingSoon).map((item) => {
+        {mainNav.map((item) => {
           const active = isActive(item);
           const Icon = item.icon;
           return (
@@ -97,6 +107,35 @@ export default function HQSidebar({ coachName }: { coachName: string }) {
             </Link>
           );
         })}
+
+        {setupNav.length > 0 && (
+          <>
+            <div className="h-px bg-white/[0.05] my-3 mx-3" />
+
+            <p className="text-[9px] text-white/20 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
+              Setup
+            </p>
+
+            {setupNav.map((item) => {
+              const active = isActive(item);
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.label}
+                  href={item.href}
+                  className={`flex items-center gap-3 px-3 py-2.5 text-xs font-medium tracking-wide transition-colors ${
+                    active
+                      ? "bg-white/[0.04] text-white/55 border border-white/[0.08]"
+                      : "text-white/25 hover:text-white/45 hover:bg-white/[0.03] border border-transparent"
+                  }`}
+                >
+                  <Icon size={13} className={active ? "text-white/45" : "text-white/20"} />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </>
+        )}
 
         <div className="h-px bg-white/[0.05] my-3 mx-3" />
 
