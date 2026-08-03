@@ -9,7 +9,7 @@ const nextSteps = [
   {
     num: "01",
     title: "We review your application",
-    body: "Every application is read personally by Jermaine — usually within 48 hours.",
+    body: "We review your coaching workflow, client load, and what you need from a system before scheduling next steps.",
   },
   {
     num: "02",
@@ -18,7 +18,7 @@ const nextSteps = [
   },
   {
     num: "03",
-    title: "You're personally onboarded",
+    title: "Your workspace is set up",
     body: "We set up your first client, your first program, and your first workout assignment together.",
   },
 ];
@@ -62,7 +62,7 @@ export default function CoachApplyPage() {
       <section className="pt-36 pb-12 px-6 bg-[#0c0e0f] border-b border-white/5">
         <div className="max-w-6xl mx-auto text-center">
           <p className="text-[#C9A24D] text-[11px] font-semibold tracking-[0.45em] mb-3 uppercase">
-            Founding Coach — Limited to 10 Coaches
+            Kynovant Coach Access
           </p>
           <h1 className="font-headline text-5xl md:text-6xl font-bold uppercase text-white mb-4">
             Apply as a Coach
@@ -117,9 +117,9 @@ export default function CoachApplyPage() {
                 </span>
               </div>
               <p className="text-gray-500 text-sm leading-relaxed">
-                Founding Coach access is capped at 10 coaches while we
-                personally onboard each one. Applying is not a commitment —
-                no payment is required until you&apos;re accepted.
+                Coach access starts with an application so we can understand
+                your workflow before discussing setup. Applying is not a
+                commitment — no payment is required to submit.
               </p>
             </div>
           </div>
@@ -135,8 +135,8 @@ export default function CoachApplyPage() {
                   Application received
                 </h3>
                 <p className="text-gray-500 text-sm leading-relaxed max-w-sm mx-auto">
-                  Thanks for applying. Jermaine personally reviews every
-                  application — expect to hear back within 48 hours.
+                  Thanks for applying. We&apos;ll review your application and
+                  follow up with the next step if Kynovant is a fit.
                 </p>
               </div>
             ) : (

@@ -16,17 +16,17 @@ const barlowCondensed = Barlow_Condensed({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://kynovant.com"),
-  title: "Kynovant | Intelligence Behind Elite Coaching",
+  title: "Kynovant | Coaching Operations Platform",
   description:
-    "Kynovant is the operating system behind elite coaching — custom programming, nutrition guidance, and accountability for driven people who want real results.",
+    "Kynovant is a coaching operations platform for managing clients, programs, check-ins, nutrition targets, and progress context.",
   icons: {
     icon: "/kynovant_favicon.png",
     shortcut: "/kynovant_favicon.png",
     apple: "/kynovant_favicon.png",
   },
   openGraph: {
-    title: "Kynovant | Intelligence Behind Elite Coaching",
-    description: "Kynovant is the operating system behind elite coaching. Real structure. Real results.",
+    title: "Kynovant | Coaching Operations Platform",
+    description: "Kynovant helps coaches manage clients, programs, check-ins, nutrition targets, and progress context.",
     url: "https://kynovant.com",
     siteName: "Kynovant",
     images: [{ url: "/kynovant_primary.png", width: 1254, height: 1254 }],

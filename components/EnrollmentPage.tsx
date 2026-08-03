@@ -81,13 +81,12 @@ export default function EnrollmentPage({
                 {body}
               </p>
 
-              {/* Founder signature */}
               <div className="flex items-start gap-5">
                 <div className="w-px bg-[#C9A24D]/25 self-stretch shrink-0" />
                 <div>
-                  <p className="text-white font-semibold text-sm tracking-wide italic mb-1">Jermaine Jones</p>
-                  <p className="text-[#C9A24D] text-[10px] tracking-[0.22em] uppercase mb-1">Founder &amp; Head Coach</p>
-                  <p className="text-gray-600 text-[10px] tracking-wide">NFPT-CPT &nbsp;·&nbsp; NPC Competitive Bodybuilder</p>
+                  <p className="text-white font-semibold text-sm tracking-wide italic mb-1">Kynovant</p>
+                  <p className="text-[#C9A24D] text-[10px] tracking-[0.22em] uppercase mb-1">Coaching Operations Platform</p>
+                  <p className="text-gray-600 text-[10px] tracking-wide">Built for client context, programming, check-ins, and progress review</p>
                 </div>
               </div>
             </div>
@@ -219,7 +218,7 @@ export default function EnrollmentPage({
                 &ldquo;{coachQuote}&rdquo;
               </p>
               <p className="text-[#C9A24D] text-[10px] tracking-[0.45em] uppercase font-semibold mb-14">
-                — Jermaine Jones, Founder &amp; Head Coach
+                — Kynovant
               </p>
             </>
           ) : (
