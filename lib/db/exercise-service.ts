@@ -3,11 +3,12 @@
 //
 // SERVER-ONLY — never import from a Client Component.
 // All helpers bypass RLS (Drizzle uses the direct Postgres connection).
-// All helpers return null / empty arrays on error.
+// List-style helpers return null / empty arrays on error; detail helpers
+// surface query failures so routes can distinguish DB errors from true 404s.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { and, eq, exists, ilike, inArray, asc, desc, sql, max } from "drizzle-orm";
+import { and, eq, exists, inArray, asc, desc, sql, max, or } from "drizzle-orm";
 import { getDb } from "./client";
 import {
   exercises,
@@ -20,13 +21,11 @@ import {
   exerciseFavorites,
   exerciseCoachOverrides,
   workoutTemplateExercises,
-  workoutTemplateSections,
   type Exercise,
   type ExerciseMuscle,
   type ExerciseRelation,
   type ExerciseCue,
   type ExerciseContraindication,
-  type ExerciseFavorite,
   type ExerciseCoachOverride,
   type MuscleGroup,
   type MovementPattern,
@@ -34,7 +33,6 @@ import {
   type ExerciseDifficulty,
   type ExerciseScope,
 } from "./schema-exercise";
-import { workoutTemplates } from "./schema";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -75,6 +73,11 @@ export interface ExerciseListRow extends Exercise {
   // Coach override prescription takes precedence over the canonical default.
   // Null when neither the coach nor the exercise has a prescription set.
   effectivePrescription: Exercise["defaultPrescription"];
+}
+
+export interface ExerciseDetailViewer {
+  id: string;
+  role: "admin" | "coach";
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -318,42 +321,49 @@ export async function getExerciseContraindications(exerciseId: string): Promise<
 
 export async function getExerciseWithDetails(
   exerciseId: string,
-  coachId?: string,
+  viewer?: ExerciseDetailViewer,
 ): Promise<(ExerciseWithRelations & { isFavorited: boolean; coachOverride: ExerciseCoachOverride | null }) | null> {
-  const result = await safeQuery(async () => {
-    const db = getDb();
-    const exerciseRows = await db
-      .select()
-      .from(exercises)
-      .where(eq(exercises.id, exerciseId))
-      .limit(1);
+  const db = getDb();
+  const accessConditions = [eq(exercises.id, exerciseId)];
 
-    const exercise = exerciseRows[0];
-    if (!exercise) return null;
+  if (viewer?.role === "coach") {
+    accessConditions.push(
+      or(
+        eq(exercises.scope, "system"),
+        and(eq(exercises.scope, "coach"), eq(exercises.createdBy, viewer.id)),
+      )!,
+    );
+  }
 
-    const [muscles, relations, cues, contraindications] = await Promise.all([
-      db.select().from(exerciseMuscles).where(eq(exerciseMuscles.exerciseId, exerciseId)).orderBy(asc(exerciseMuscles.role)),
-      db.select().from(exerciseRelations).where(eq(exerciseRelations.sourceExerciseId, exerciseId)),
-      db.select().from(exerciseCues).where(eq(exerciseCues.exerciseId, exerciseId)).orderBy(asc(exerciseCues.orderIndex)),
-      db.select().from(exerciseContraindications).where(eq(exerciseContraindications.exerciseId, exerciseId)).orderBy(asc(exerciseContraindications.severity)),
+  const exerciseRows = await db
+    .select()
+    .from(exercises)
+    .where(and(...accessConditions))
+    .limit(1);
+
+  const exercise = exerciseRows[0];
+  if (!exercise) return null;
+
+  const [muscles, relations, cues, contraindications] = await Promise.all([
+    db.select().from(exerciseMuscles).where(eq(exerciseMuscles.exerciseId, exerciseId)).orderBy(asc(exerciseMuscles.role)),
+    db.select().from(exerciseRelations).where(eq(exerciseRelations.sourceExerciseId, exerciseId)),
+    db.select().from(exerciseCues).where(eq(exerciseCues.exerciseId, exerciseId)).orderBy(asc(exerciseCues.orderIndex)),
+    db.select().from(exerciseContraindications).where(eq(exerciseContraindications.exerciseId, exerciseId)).orderBy(asc(exerciseContraindications.severity)),
+  ]);
+
+  let isFavorited = false;
+  let coachOverride: ExerciseCoachOverride | null = null;
+
+  if (viewer) {
+    const [favRows, overrideRows] = await Promise.all([
+      db.select().from(exerciseFavorites).where(and(eq(exerciseFavorites.exerciseId, exerciseId), eq(exerciseFavorites.coachId, viewer.id))).limit(1),
+      db.select().from(exerciseCoachOverrides).where(and(eq(exerciseCoachOverrides.exerciseId, exerciseId), eq(exerciseCoachOverrides.coachId, viewer.id))).limit(1),
     ]);
+    isFavorited = favRows.length > 0;
+    coachOverride = overrideRows[0] ?? null;
+  }
 
-    let isFavorited = false;
-    let coachOverride: ExerciseCoachOverride | null = null;
-
-    if (coachId) {
-      const [favRows, overrideRows] = await Promise.all([
-        db.select().from(exerciseFavorites).where(and(eq(exerciseFavorites.exerciseId, exerciseId), eq(exerciseFavorites.coachId, coachId))).limit(1),
-        db.select().from(exerciseCoachOverrides).where(and(eq(exerciseCoachOverrides.exerciseId, exerciseId), eq(exerciseCoachOverrides.coachId, coachId))).limit(1),
-      ]);
-      isFavorited = favRows.length > 0;
-      coachOverride = overrideRows[0] ?? null;
-    }
-
-    return { ...exercise, muscles, relations, cues, contraindications, isFavorited, coachOverride };
-  });
-
-  return result ?? null;
+  return { ...exercise, muscles, relations, cues, contraindications, isFavorited, coachOverride };
 }
 
 // ─────────────────────────────────────────────────────────────

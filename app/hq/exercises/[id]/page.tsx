@@ -551,6 +551,9 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorDescription, setErrorDescription] = useState(
+    "This exercise may have been removed, or you may not have access to it.",
+  );
   const [starring, setStarring] = useState(false);
   const [bioOpen, setBioOpen] = useState(true); // desktop default
 
@@ -611,8 +614,11 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
   useEffect(() => {
     let mounted = true;
     fetch(`/api/internal/exercises/${id}`)
-      .then((r) => r.json())
-      .then((data: { ok: boolean; exercise?: Exercise; error?: string }) => {
+      .then(async (r) => {
+        const data = await r.json() as { ok: boolean; exercise?: Exercise; error?: string };
+        return { data, status: r.status };
+      })
+      .then(({ data, status }) => {
         if (!mounted) return;
         if (data.ok && data.exercise) {
           const ex = data.exercise;
@@ -659,7 +665,13 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
             privateNotes: ov?.privateNotes ?? "",
           });
         } else {
-          setError(data.error ?? "Exercise not found");
+          if (status === 404) {
+            setError(data.error ?? "Not found");
+            setErrorDescription("This exercise may have been removed, or you may not have access to it.");
+          } else {
+            setError("Unable to load exercise");
+            setErrorDescription(data.error ?? "The exercise detail query failed. Please try again or contact support if it persists.");
+          }
         }
         setLoading(false);
       })
@@ -808,7 +820,7 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
       tone="dark"
       icon={<Dumbbell className="size-5" />}
       title={error ?? "Exercise not found"}
-      description="This exercise may have been removed, or you may not have access to it."
+      description={errorDescription}
       action={
         <Link
           href="/hq/exercises"

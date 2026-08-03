@@ -12,9 +12,22 @@ export async function GET(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
-  const exercise = await getExerciseWithDetails(id, guard.dbUser.id);
-  if (!exercise) return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
-  return NextResponse.json({ ok: true, exercise });
+  try {
+    const exercise = await getExerciseWithDetails(id, {
+      id: guard.dbUser.id,
+      role: guard.dbUser.role === "admin" ? "admin" : "coach",
+    });
+    if (!exercise) return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
+    return NextResponse.json({ ok: true, exercise });
+  } catch (err) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: err instanceof Error ? err.message : "Failed to load exercise",
+      },
+      { status: 500 },
+    );
+  }
 }
 
 export async function PATCH(
