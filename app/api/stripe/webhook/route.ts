@@ -1,9 +1,12 @@
 // ─────────────────────────────────────────────────────────────
 // Stripe Webhook Handler — server-only
 //
+// Handles Catalyst Coaching Elite client payments (coaching packages —
+// Standard/Founding Member/Legacy/Executive Performance), NOT Kynovant
+// SaaS billing (no coach-subscription Stripe integration exists yet).
 // Registered in Stripe Dashboard under:
 //   Developers → Webhooks → Add endpoint
-//   URL: https://www.kynovant.com/api/stripe/webhook
+//   URL: https://www.catalystcoachingelite.com/api/stripe/webhook
 //   Events: checkout.session.completed, customer.subscription.*,
 //           invoice.paid, invoice.payment_failed
 //
@@ -114,7 +117,10 @@ async function persistToGas(gasUrl: string, payload: GasStripePayload): Promise<
 // one failure does not prevent the other.
 // ─────────────────────────────────────────────────────────────
 
-const SITE_ORIGIN = "https://www.kynovant.com";
+// Catalyst Coaching Elite domain — this webhook only ever builds links
+// to Catalyst pages (/onboarding, /executive-onboarding), never
+// Kynovant SaaS pages. See docs/domain-architecture.md.
+const SITE_ORIGIN = process.env.NEXT_PUBLIC_CATALYST_URL ?? "https://www.catalystcoachingelite.com";
 
 /** Returns the correct onboarding URL for a given package name. */
 function onboardingUrlForPackage(packageName: string): string {

@@ -1,29 +1,147 @@
 // ─────────────────────────────────────────────────────────────
 // Catalyst OS — Proxy (Next.js 16 replacement for middleware)
 //
-// Responsibilities:
-//   1. Refresh expired Supabase auth sessions via cookie exchange
-//   2. Protect /portal and /account — redirect to /login if no session
+// Two responsibilities, kept deliberately separate:
+//
+//   1. Domain-aware routing — kynovant.com serves only Kynovant SaaS
+//      routes, catalystcoachingelite.com serves only the (dormant)
+//      Catalyst Coaching Elite personal-coaching routes. Cheap
+//      hostname/pathname string checks only — no Supabase call, so
+//      this runs on every page view without adding latency to
+//      anonymous marketing traffic. See docs/domain-architecture.md
+//      for the full route ownership map and rationale.
+//
+//   2. Auth session refresh + protected-path enforcement (unchanged
+//      from before domain routing was added) — scoped to only the
+//      paths where it's relevant, not broadened just because the
+//      matcher below now covers more routes for reason #1.
+//
+// Local dev / Vercel preview deployments (any hostname that isn't one
+// of the two production domains) get NO domain gating by default —
+// every route is reachable, exactly as before this file changed. Add
+// ?__brand=kynovant or ?__brand=catalyst to preview either domain's
+// routing behavior without needing real DNS.
 //
 // IMPORTANT: Do not add any logic between createServerClient and
 // supabase.auth.getUser(). The cookie mutation in setAll must happen
 // immediately after client creation or sessions break.
 //
-// Routes NOT intercepted by this middleware:
-//   - /api/stripe/*      — webhook, no browser session
-//   - /api/docusign/*    — webhook, no browser session
-//   - /api/sheets/*      — server proxy, no browser session
-//   - /api/calendly/*    — server call, no browser session
-//   - /api/internal/*    — protected by INTERNAL_API_SECRET header
-//   - Static assets      — Next.js static serving
+// Routes NOT intercepted by this proxy at all (excluded by the
+// matcher below):
+//   - /api/*             — webhooks and internal routes never carry a
+//                           browser session and must never be
+//                           domain-gated (Stripe/DocuSign/GAS post to
+//                           whichever domain they're registered
+//                           against, independent of a visitor's host)
+//   - Static assets       — Next.js static serving
 // ─────────────────────────────────────────────────────────────
 
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+// ─────────────────────────────────────────────────────────────
+// DOMAIN CLASSIFICATION
+// ─────────────────────────────────────────────────────────────
+
+type Brand = "kynovant" | "catalyst" | null;
+
+const KYNOVANT_HOSTS = new Set(["kynovant.com", "www.kynovant.com"]);
+const CATALYST_HOSTS = new Set(["catalystcoachingelite.com", "www.catalystcoachingelite.com"]);
+
+const KYNOVANT_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://kynovant.com";
+const CATALYST_URL = process.env.NEXT_PUBLIC_CATALYST_URL ?? "https://catalystcoachingelite.com";
+
+// Catalyst Coaching Elite — dormant personal-coaching business.
+// "/" is intentionally NOT listed here — it's shared (different
+// homepage content per domain, same path), handled as a rewrite below.
+const CATALYST_ONLY_PREFIXES = [
+  "/about",
+  "/programs",
+  "/apply",
+  "/enroll",
+  "/onboarding",
+  "/onboarding-complete",
+  "/executive-onboarding",
+  "/executive-performance-confirmed",
+  "/payment-confirmed",
+  "/thank-you",
+];
+
+// Kynovant SaaS — software marketing, coach auth, HQ, client portal.
+const KYNOVANT_ONLY_PREFIXES = [
+  "/for-coaches",
+  "/coach-apply",
+  "/features",
+  "/pricing",
+  "/login",
+  "/forgot-password",
+  "/reset-password",
+  "/setup-password",
+  "/auth",
+  "/hq",
+  "/portal",
+  "/account",
+  "/admin",
+];
+
+function matchesPrefix(pathname: string, prefixes: string[]): boolean {
+  return prefixes.some((p) => pathname === p || pathname.startsWith(p + "/"));
+}
+
+function hostBrand(hostname: string): Brand {
+  const host = hostname.toLowerCase();
+  if (KYNOVANT_HOSTS.has(host)) return "kynovant";
+  if (CATALYST_HOSTS.has(host)) return "catalyst";
+  return null;
+}
+
+// Resolves which brand's routing rules apply. Unrecognized hosts
+// (localhost, *.vercel.app previews) get no gating by default, with
+// an explicit opt-in override for local/preview testing.
+function resolveBrand(request: NextRequest): Brand {
+  const fromHost = hostBrand(request.nextUrl.hostname);
+  if (fromHost) return fromHost;
+
+  const override = request.nextUrl.searchParams.get("__brand");
+  if (override === "kynovant" || override === "catalyst") return override;
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// AUTH — unchanged scope from before domain routing existed
+// ─────────────────────────────────────────────────────────────
+
 const PROTECTED_PATHS = ["/portal", "/account", "/hq", "/admin"];
+const AUTH_RELEVANT_PATHS = [...PROTECTED_PATHS, "/login", "/auth"];
 
 export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  const brand = resolveBrand(request);
+
+  // ── 1. Domain-aware routing ──
+  if (brand === "kynovant") {
+    if (pathname === "/") {
+      return NextResponse.rewrite(new URL("/for-coaches", request.url));
+    }
+    if (matchesPrefix(pathname, CATALYST_ONLY_PREFIXES)) {
+      const target = new URL(pathname + request.nextUrl.search, CATALYST_URL);
+      return NextResponse.redirect(target, 308);
+    }
+  } else if (brand === "catalyst") {
+    if (matchesPrefix(pathname, KYNOVANT_ONLY_PREFIXES)) {
+      const target = new URL(pathname + request.nextUrl.search, KYNOVANT_URL);
+      return NextResponse.redirect(target, 308);
+    }
+  }
+
+  // ── 2. Auth session refresh + protected-path enforcement ──
+  // Only runs for paths where it's actually relevant — same scope as
+  // before domain routing was added, despite the broader matcher.
+  if (!matchesPrefix(pathname, AUTH_RELEVANT_PATHS)) {
+    return NextResponse.next();
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -56,10 +174,7 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const pathname = request.nextUrl.pathname;
-  const isProtected = PROTECTED_PATHS.some(
-    (p) => pathname === p || pathname.startsWith(p + "/"),
-  );
+  const isProtected = matchesPrefix(pathname, PROTECTED_PATHS);
 
   if (isProtected && !user) {
     const loginUrl = request.nextUrl.clone();
@@ -77,13 +192,11 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Protected routes — unauthenticated visits receive ?next= redirect to /login
-    "/portal/:path*",
-    "/account/:path*",
-    "/hq/:path*",
-    "/admin/:path*",
-    // Auth routes — needed so session cookies are refreshed on login/callback
-    "/login",
-    "/auth/:path*",
+    // Everything except API routes, Next.js internals, and static
+    // files — domain routing (cheap) needs to see every page request;
+    // the auth logic inside proxy() further narrows itself to
+    // AUTH_RELEVANT_PATHS so this broader match doesn't add Supabase
+    // overhead to marketing pages.
+    "/((?!api/|_next/static|_next/image|favicon\\.ico|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webp|css|js|woff2?)$).*)",
   ],
 };

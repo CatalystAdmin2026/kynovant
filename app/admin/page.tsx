@@ -948,7 +948,10 @@ const STRIPE_HANDLED_EVENTS: { type: string; description: string }[] = [
   { type: "invoice.payment_failed",        description: "Payment failed — flag past_due, create urgent task" },
 ];
 
-const PROD_WEBHOOK_URL = "https://www.kynovant.com/api/stripe/webhook";
+// Diagnostics display only — matches the actual registered Stripe
+// webhook domain (Catalyst Coaching Elite client payments, not
+// Kynovant SaaS billing). See docs/domain-architecture.md.
+const PROD_WEBHOOK_URL = "https://www.catalystcoachingelite.com/api/stripe/webhook";
 
 function StripeEventsTab({ diagnostic }: { diagnostic?: ReconciliationDiagnostic }) {
   return (
