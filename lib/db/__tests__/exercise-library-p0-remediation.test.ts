@@ -10,6 +10,10 @@ import {
   MUSCLES,
   RELATIONS,
 } from "../../../scripts/seeds/008-knee-flexion-data";
+import {
+  HIGH_RISK_RELATIONS,
+  LEGACY_PRIMARY_MUSCLE_REPAIRS,
+} from "../../../scripts/repairs/exercise-library-p0-p1-data";
 import type { ExerciseDef } from "../../../scripts/seeds/_shared";
 
 const newActiveExerciseSlugs = ["lying-leg-curl", "nordic-curl"] as const;
@@ -42,6 +46,10 @@ function cueTypesForSlug(source: string, slug: string) {
   const escapedSlug = slug.replaceAll("-", "\\-");
   const cuePattern = new RegExp(`\\["${escapedSlug}",\\s*"([^"]+)"`, "g");
   return Array.from(source.matchAll(cuePattern), (match) => match[1]);
+}
+
+function exerciseSlugsFromSource(source: string) {
+  return Array.from(source.matchAll(/slug:\s*"([^"]+)"/g), (match) => match[1]);
 }
 
 describe("P0 exercise library remediation seed data", () => {
@@ -142,5 +150,104 @@ describe("P0 exercise library remediation seed data", () => {
         expect(cueTypes, `${slug} should have safety cue`).toContain("safety");
       }
     }
+  });
+
+  it("uses an explicit reviewed mapping for the remaining 15 legacy duplicate-primary exercises", () => {
+    const expectedPrimaryBySlug = new Map([
+      ["romanian-deadlift", "hamstrings"],
+      ["dip", "chest"],
+      ["weighted-dip", "chest"],
+      ["bulgarian-split-squat", "quadriceps"],
+      ["arnold-press", "front_deltoid"],
+      ["behind-neck-press", "front_deltoid"],
+      ["handstand-push-up", "front_deltoid"],
+      ["barbell-floor-press", "chest"],
+      ["dumbbell-floor-press", "chest"],
+      ["decline-push-up", "chest"],
+      ["incline-barbell-bench-press", "chest"],
+      ["incline-dumbbell-bench-press", "chest"],
+      ["incline-dumbbell-fly", "chest"],
+      ["plank", "rectus_abdominis"],
+      ["chest-supported-dumbbell-row", "lats"],
+    ]);
+
+    expect(LEGACY_PRIMARY_MUSCLE_REPAIRS).toHaveLength(15);
+    expect(LEGACY_PRIMARY_MUSCLE_REPAIRS.map((repair) => repair.slug)).not.toContain("back-squat");
+
+    for (const repair of LEGACY_PRIMARY_MUSCLE_REPAIRS) {
+      expect(repair.primaryMuscle).toBe(expectedPrimaryBySlug.get(repair.slug));
+      expect(repair.reviewedDuplicatePrimaries).not.toContain(repair.primaryMuscle);
+    }
+  });
+
+  it("keeps high-risk substitute and lower-joint-stress relations bidirectional", () => {
+    const relationKeys = new Set(
+      HIGH_RISK_RELATIONS.map((relation) => `${relation.sourceSlug}:${relation.relationType}:${relation.targetSlug}`),
+    );
+
+    for (const relation of HIGH_RISK_RELATIONS) {
+      if (relation.relationType === "substitute") {
+        expect(relationKeys, `${relation.sourceSlug} substitute inverse`).toContain(
+          `${relation.targetSlug}:substitute:${relation.sourceSlug}`,
+        );
+      }
+
+      if (relation.relationType === "lower_joint_stress") {
+        expect(relationKeys, `${relation.sourceSlug} lower-stress inverse`).toContain(
+          `${relation.targetSlug}:higher_joint_stress:${relation.sourceSlug}`,
+        );
+      }
+
+      if (relation.relationType === "higher_joint_stress") {
+        expect(relationKeys, `${relation.sourceSlug} higher-stress inverse`).toContain(
+          `${relation.targetSlug}:lower_joint_stress:${relation.sourceSlug}`,
+        );
+      }
+
+      if (relation.relationType === "progression") {
+        expect(relationKeys, `${relation.sourceSlug} progression inverse`).toContain(
+          `${relation.targetSlug}:regression:${relation.sourceSlug}`,
+        );
+      }
+
+      if (relation.relationType === "regression") {
+        expect(relationKeys, `${relation.sourceSlug} regression inverse`).toContain(
+          `${relation.targetSlug}:progression:${relation.sourceSlug}`,
+        );
+      }
+    }
+  });
+
+  it("references only seeded exercise slugs in high-risk relation repairs", () => {
+    const seedFiles = [
+      "scripts/seed-exercises.ts",
+      "scripts/seeds/001-upper-push.ts",
+      "scripts/seeds/002-upper-pull.ts",
+      "scripts/seeds/003-lower-quad.ts",
+      "scripts/seeds/004-hip-hinge.ts",
+      "scripts/seeds/005-core-carries.ts",
+      "scripts/seeds/008-knee-flexion-data.ts",
+    ];
+    const knownSlugs = new Set(
+      seedFiles.flatMap((file) => exerciseSlugsFromSource(readFileSync(resolve(process.cwd(), file), "utf8"))),
+    );
+
+    for (const relation of HIGH_RISK_RELATIONS) {
+      expect(knownSlugs, `missing source ${relation.sourceSlug}`).toContain(relation.sourceSlug);
+      expect(knownSlugs, `missing target ${relation.targetSlug}`).toContain(relation.targetSlug);
+    }
+  });
+
+  it("keeps the legacy metadata repair safe to rerun", () => {
+    const repairSource = readFileSync(
+      resolve(process.cwd(), "scripts/repair-legacy-exercise-metadata.ts"),
+      "utf8",
+    );
+
+    expect(repairSource).toContain("ON CONFLICT DO NOTHING");
+    expect(repairSource).toContain("primary_muscle_group IS DISTINCT FROM");
+    expect(repairSource).toContain("Unexpected primary muscle rows");
+    expect(repairSource).toContain("WHERE e.slug IN");
+    expect(repairSource).not.toContain("DELETE FROM exercises");
   });
 });
