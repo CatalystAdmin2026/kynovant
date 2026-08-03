@@ -13,6 +13,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, ArrowUpRight } from "lucide-react";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
+import { requireCoachOrAdminPage, coachOwnsClient } from "@/lib/auth/guards";
 import {
   getCoachCheckInDetail,
   getClientGoalContext,
@@ -361,9 +362,17 @@ export default async function CheckInReviewPage({
   params: Promise<{ checkInId: string }>;
 }) {
   const { checkInId } = await params;
+  const { dbUser } = await requireCoachOrAdminPage();
 
   const checkIn = await getCoachCheckInDetail(checkInId);
   if (!checkIn) notFound();
+
+  // Ownership check — admin bypasses. A coach only reaches this check-in
+  // (including checkIn.coachResponse and health/compliance fields) if
+  // they're actually enrolled with checkIn.clientId.
+  if (dbUser.role !== "admin" && !(await coachOwnsClient(dbUser.id, checkIn.clientId))) {
+    notFound();
+  }
 
   const goalContext = await getClientGoalContext(checkIn.clientId);
 

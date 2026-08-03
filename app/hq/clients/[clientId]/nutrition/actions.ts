@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, assertCoachOwnsClient } from "@/lib/auth/guards";
 import {
   createDraft,
   updateDraft,
@@ -41,6 +41,8 @@ export async function createDraftAction(
 ): Promise<{ ok: boolean; targetId?: string; error?: string }> {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return { ok: false, error: "Forbidden" };
+  const ownership = await assertCoachOwnsClient(guard.dbUser, clientId);
+  if (!ownership.ok) return { ok: false, error: ownership.error };
 
   const input: NutritionDraftInput = {
     clientId,
@@ -81,6 +83,8 @@ export async function updateDraftAction(
 ): Promise<{ ok: boolean; error?: string }> {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return { ok: false, error: "Forbidden" };
+  const ownership = await assertCoachOwnsClient(guard.dbUser, clientId);
+  if (!ownership.ok) return { ok: false, error: ownership.error };
 
   const result = await updateDraft(targetId, clientId, guard.dbUser.id, updates);
   if (result.ok) {
@@ -102,6 +106,8 @@ export async function publishTargetAction(
 ): Promise<{ ok: boolean; error?: string }> {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return { ok: false, error: "Forbidden" };
+  const ownership = await assertCoachOwnsClient(guard.dbUser, clientId);
+  if (!ownership.ok) return { ok: false, error: ownership.error };
 
   const result = await publishTarget(targetId, guard.dbUser.id, clientId);
   if (result.ok) {
@@ -123,6 +129,8 @@ export async function archiveTargetAction(
 ): Promise<{ ok: boolean; error?: string }> {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return { ok: false, error: "Forbidden" };
+  const ownership = await assertCoachOwnsClient(guard.dbUser, clientId);
+  if (!ownership.ok) return { ok: false, error: ownership.error };
 
   const result = await archiveTarget(targetId, clientId, guard.dbUser.id);
   if (result.ok) {

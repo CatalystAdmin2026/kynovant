@@ -11,6 +11,7 @@ import Link from "next/link";
 import { Inbox, Clock3, CheckCircle2, ChevronRight } from "lucide-react";
 import HQPageHeader from "@/components/hq/HQPageHeader";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
+import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { listCoachCheckIns } from "@/lib/db/coach-check-in-service";
 import { Card, Badge, EmptyState } from "@/components/ui";
 import type { BadgeVariant } from "@/components/ui";
@@ -163,8 +164,11 @@ function QueueRow({ item, variant }: { item: QueueItem; variant: "actionable" | 
 // ─────────────────────────────────────────────────────────────
 
 export default async function CheckInQueuePage() {
+  const { dbUser } = await requireCoachOrAdminPage();
+  const { coachId } = resolveTenantScope(dbUser);
   const allCheckIns = await listCoachCheckIns({
     status: ["submitted", "in_review", "reviewed"],
+    coachId,
   });
 
   const actionable = allCheckIns.filter(

@@ -12,6 +12,7 @@
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getCoachClientWorkspace } from "@/lib/db/coach-client-workspace-service";
 import { listAssignableBlueprints, getClientProgramHistory } from "@/lib/db/coach-program-assignment-service";
 import { getClientCheckInSummary } from "@/lib/db/coach-check-in-service";
@@ -886,14 +887,19 @@ export default async function ClientWorkspacePage({
   params: Promise<{ clientId: string }>;
 }) {
   const { clientId } = await params;
+  const { dbUser } = await requireCoachOrAdminPage();
+  const { coachId } = resolveTenantScope(dbUser);
 
   const [workspace, blueprints, programHistory, checkInSummary] = await Promise.all([
-    getCoachClientWorkspace(clientId),
-    listAssignableBlueprints(),
+    getCoachClientWorkspace(clientId, coachId),
+    listAssignableBlueprints(coachId),
     getClientProgramHistory(clientId),
     getClientCheckInSummary(clientId),
   ]);
 
+  // getCoachClientWorkspace returns null both when clientId doesn't exist
+  // and when this coach isn't enrolled with them — same non-disclosing
+  // 404 posture used throughout this codebase (authorizeWorkoutSession).
   if (!workspace) notFound();
 
   const displayName = workspace.preferredName ?? workspace.fullName;

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { ArrowLeft, CheckCircle2, Clock, Circle, Archive } from "lucide-react";
+import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getDb } from "@/lib/db/client";
 import { healthProfiles } from "@/lib/db/schema-profile";
 import { getCoachClientWorkspace } from "@/lib/db/coach-client-workspace-service";
@@ -55,9 +56,11 @@ export default async function ClientNutritionPage({
   params: Promise<{ clientId: string }>;
 }) {
   const { clientId } = await params;
+  const { dbUser } = await requireCoachOrAdminPage();
+  const { coachId } = resolveTenantScope(dbUser);
 
   const [workspace, activeTarget, draftTargets, history] = await Promise.all([
-    getCoachClientWorkspace(clientId),
+    getCoachClientWorkspace(clientId, coachId),
     getActiveTarget(clientId),
     getDraftTargets(clientId),
     getTargetHistory(clientId),

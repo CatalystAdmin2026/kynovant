@@ -3,6 +3,7 @@
 // Non-disclosing 404: returns notFound() if session doesn't belong to clientId.
 
 import { notFound } from "next/navigation";
+import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import {
   getCoachClientSessionDetail,
   type HistoricalSetLog,
@@ -211,8 +212,10 @@ export default async function CoachSessionReviewPage({
   params: Promise<{ clientId: string; sessionId: string }>;
 }) {
   const { clientId, sessionId } = await params;
+  const { dbUser } = await requireCoachOrAdminPage();
+  const { coachId } = resolveTenantScope(dbUser);
 
-  const detail = await getCoachClientSessionDetail(clientId, sessionId);
+  const detail = await getCoachClientSessionDetail(clientId, sessionId, coachId);
   if (!detail) notFound();
 
   const snapshot = parseSnapshot(detail.snapshot);

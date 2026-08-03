@@ -78,8 +78,11 @@ export async function listCoachCheckIns(opts?: {
   status?: WeeklyCheckInStatus[];
   clientId?: string;
   limit?: number;
+  /** null (default) = admin, unscoped. A coach's userId scopes to their own clients. */
+  coachId?: string | null;
 }): Promise<CoachCheckInQueueItem[]> {
   const db = getDb();
+  const coachId = opts?.coachId ?? null;
 
   const rows = await db
     .select({
@@ -102,6 +105,13 @@ export async function listCoachCheckIns(opts?: {
         opts?.clientId
           ? eq(weeklyCheckIns.clientId, opts.clientId)
           : undefined,
+        coachId === null
+          ? undefined
+          : sql`EXISTS (
+              SELECT 1 FROM ${coachingEnrollments}
+              WHERE ${coachingEnrollments.clientId} = ${weeklyCheckIns.clientId}
+                AND ${coachingEnrollments.coachId} = ${coachId}
+            )`,
       ),
     )
     .orderBy(
@@ -621,7 +631,9 @@ export interface CheckInMissionStats {
   oldestWaitingAt: Date | null;
 }
 
-export async function getCheckInMissionStats(): Promise<CheckInMissionStats> {
+export async function getCheckInMissionStats(
+  coachId: string | null = null,
+): Promise<CheckInMissionStats> {
   const db = getDb();
 
   const rows = await db
@@ -632,9 +644,18 @@ export async function getCheckInMissionStats(): Promise<CheckInMissionStats> {
     })
     .from(weeklyCheckIns)
     .where(
-      or(
-        eq(weeklyCheckIns.status, "submitted"),
-        eq(weeklyCheckIns.status, "in_review"),
+      and(
+        or(
+          eq(weeklyCheckIns.status, "submitted"),
+          eq(weeklyCheckIns.status, "in_review"),
+        ),
+        coachId === null
+          ? undefined
+          : sql`EXISTS (
+              SELECT 1 FROM ${coachingEnrollments}
+              WHERE ${coachingEnrollments.clientId} = ${weeklyCheckIns.clientId}
+                AND ${coachingEnrollments.coachId} = ${coachId}
+            )`,
       ),
     );
 

@@ -11,10 +11,13 @@
 //   Phase 2: everything that depends on phase 1 output (parallel)
 //   Phase 3: synchronous derivations (attention, readiness)
 //
-// Multi-tenant seam:
-//   The optional _coachId parameter is accepted but unused today.
-//   When multi-tenancy ships, add a coachingEnrollments join to
-//   verify the requesting coach owns this client relationship.
+// Multi-tenant:
+//   coachId === null (admin): unscoped, any client.
+//   coachId === <uuid> (coach): returns null unless that coach has a
+//   coaching_enrollments row with this client — see coachOwnsClient()
+//   in lib/auth/guards.ts. Returning null (not throwing) matches this
+//   file's existing role-mismatch behavior below, and the page callers
+//   already treat a null workspace as notFound().
 //
 // Security:
 //   All functions verify role=client before returning data.
@@ -25,6 +28,7 @@
 import "server-only";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { getDb } from "./client";
+import { coachOwnsClient } from "@/lib/auth/guards";
 import {
   users,
   clientProfiles,
@@ -238,8 +242,7 @@ const KG_TO_LBS = 2.20462;
 
 export async function getCoachClientWorkspace(
   clientId: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _coachId?: string, // reserved for future multi-tenant filter
+  coachId: string | null = null,
 ): Promise<CoachClientWorkspace | null> {
   const db = getDb();
 
@@ -251,6 +254,14 @@ export async function getCoachClientWorkspace(
     .limit(1);
 
   if (!roleCheck || roleCheck.role !== "client") return null;
+
+  // ── Ownership verification ────────────────────────────────
+  // Admin (coachId === null) bypasses. A coach only reaches this
+  // client's workspace — including workspace.sensitive health data —
+  // if they actually have a coaching_enrollments row with them.
+  if (coachId !== null && !(await coachOwnsClient(coachId, clientId))) {
+    return null;
+  }
 
   // ── Phase 1: Core client identity + program + session stats (parallel) ──
   const now = new Date();

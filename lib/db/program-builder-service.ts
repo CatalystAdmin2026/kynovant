@@ -38,6 +38,13 @@ import {
   type TemplateCategory,
   type ExperienceLevel,
 } from "./schema";
+
+// Ownership visibility filter — see the matching comment in
+// lib/db/workout-template-service.ts. coachId === null (admin): no
+// filter. Otherwise: only templates this coach authored.
+function ownerFilter(coachId: string | null) {
+  return coachId === null ? undefined : eq(programTemplates.createdBy, coachId);
+}
 import {
   programWeeks,
   programWeekDays,
@@ -102,11 +109,14 @@ export interface UpdateProgramInput {
 // PROGRAM TEMPLATE CRUD
 // ─────────────────────────────────────────────────────────────
 
-export async function listProgramTemplates(): Promise<ProgramTemplate[]> {
+export async function listProgramTemplates(
+  coachId: string | null = null,
+): Promise<ProgramTemplate[]> {
   const db = getDb();
   return db
     .select()
     .from(programTemplates)
+    .where(ownerFilter(coachId))
     .orderBy(asc(programTemplates.createdAt));
 }
 

@@ -4,15 +4,16 @@ import {
   createWorkoutTemplate,
 } from "@/lib/db/workout-template-service";
 import type { ExperienceLevel } from "@/lib/db/schema";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, resolveTenantScope } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
+  const { coachId } = resolveTenantScope(guard.dbUser);
   try {
-    const templates = await listWorkoutTemplatesWithSummary();
+    const templates = await listWorkoutTemplatesWithSummary(coachId);
     return NextResponse.json({ ok: true, templates });
   } catch (err) {
     return NextResponse.json(
@@ -62,6 +63,7 @@ export async function POST(req: Request) {
       defaultSetStyle: body.defaultSetStyle ?? null,
       minimumDaysPerWeek: body.minimumDaysPerWeek ?? null,
       maximumDaysPerWeek: body.maximumDaysPerWeek ?? null,
+      createdBy: guard.dbUser.id,
     });
 
     return NextResponse.json({ ok: true, template }, { status: 201 });

@@ -5,16 +5,17 @@ import {
   createProgramTemplate,
 } from "@/lib/db/program-builder-service";
 import type { TemplateCategory, ExperienceLevel } from "@/lib/db/schema";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, resolveTenantScope } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
+  const { coachId } = resolveTenantScope(guard.dbUser);
   try {
     const [templates, stats] = await Promise.all([
-      listProgramTemplates(),
+      listProgramTemplates(coachId),
       listProgramTemplateStats(),
     ]);
     const statsById = new Map(stats.map((s) => [s.programTemplateId, s]));
@@ -71,6 +72,7 @@ export async function POST(req: NextRequest) {
       description: body.description,
       recommendedDaysPerWeek: body.recommendedDaysPerWeek,
       defaultDurationWeeks: body.defaultDurationWeeks,
+      createdBy: guard.dbUser.id,
     });
 
     return NextResponse.json({ ok: true, template }, { status: 201 });

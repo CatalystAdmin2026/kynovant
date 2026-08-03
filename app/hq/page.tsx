@@ -7,6 +7,7 @@
 
 import Link from "next/link";
 import { Check, Activity, CalendarDays } from "lucide-react";
+import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getCoachMissionControl, type AttentionLevel } from "@/lib/db/coach-dashboard-service";
 import HQPageHeader from "@/components/hq/HQPageHeader";
 import { StatusChip } from "@/components/ui";
@@ -54,7 +55,9 @@ function fmtRelative(d: Date | null): string {
 // ─────────────────────────────────────────────────────────────
 
 export default async function MissionControlPage() {
-  const data = await getCoachMissionControl();
+  const { dbUser } = await requireCoachOrAdminPage();
+  const { coachId } = resolveTenantScope(dbUser);
+  const data = await getCoachMissionControl(coachId);
 
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",

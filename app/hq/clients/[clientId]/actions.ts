@@ -10,43 +10,28 @@
 
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
-import { createClient } from "@/lib/supabase/server";
+import { requireCoachOrAdmin, assertCoachOwnsClient } from "@/lib/auth/guards";
 import { getDb } from "@/lib/db/client";
-import { users } from "@/lib/db/schema";
 import { clientGoals, type GoalType } from "@/lib/db/schema-profile";
 import { archiveAndAssignProgram } from "@/lib/db/coach-program-assignment-service";
 
 // ─────────────────────────────────────────────────────────────
 // AUTH HELPER
+//
+// Replaces a hand-copied, role-only auth check with the single
+// canonical ownership-aware guard from lib/auth/guards.ts. Validates
+// role, suspended/archived status (via requireCoachOrAdmin), AND that
+// the acting coach is actually enrolled with clientId (admin bypasses).
 // ─────────────────────────────────────────────────────────────
 
-// TODO (multi-tenancy): assertCoachOrAdmin validates role only, not coach→client
-// ownership. Once multi-tenancy ships, join coachingEnrollments here and confirm
-// the acting coach is enrolled with the target clientId.
-async function assertCoachOrAdmin(): Promise<{ ok: true } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) return { ok: false, error: "Unauthorized" };
-
-  const db = getDb();
-  const [dbUser] = await db
-    .select({ role: users.role, status: users.status })
-    .from(users)
-    .where(eq(users.id, user.id))
-    .limit(1);
-
-  if (!dbUser) return { ok: false, error: "Unauthorized" };
-  if (dbUser.role !== "coach" && dbUser.role !== "admin") {
-    return { ok: false, error: "Forbidden" };
-  }
-  if (dbUser.status === "suspended" || dbUser.status === "archived") {
-    return { ok: false, error: "Forbidden" };
-  }
-
-  return { ok: true };
+async function assertCoachOwnsClientAction(
+  clientId: string,
+): Promise<{ ok: true; coachId: string | null } | { ok: false; error: string }> {
+  const guard = await requireCoachOrAdmin();
+  if (!guard.ok) return { ok: false, error: "Unauthorized" };
+  const ownership = await assertCoachOwnsClient(guard.dbUser, clientId);
+  if (!ownership.ok) return { ok: false, error: ownership.error };
+  return { ok: true, coachId: ownership.scope.coachId };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -63,10 +48,7 @@ export async function assignProgramAction(data: {
   startDate: string;
   coachNotes?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
-  const auth = await assertCoachOrAdmin();
-  if (!auth.ok) return { ok: false, error: auth.error };
-
-  // Validate required fields
+  // Validate required fields before using clientId in an ownership check
   if (!data.clientId || !data.programTemplateId || !data.startDate) {
     return { ok: false, error: "Missing required fields." };
   }
@@ -76,11 +58,15 @@ export async function assignProgramAction(data: {
     return { ok: false, error: "Invalid date format." };
   }
 
+  const auth = await assertCoachOwnsClientAction(data.clientId);
+  if (!auth.ok) return { ok: false, error: auth.error };
+
   const result = await archiveAndAssignProgram({
     clientId: data.clientId,
     programTemplateId: data.programTemplateId,
     startDate: data.startDate,
     coachNotes: data.coachNotes ?? null,
+    coachId: auth.coachId,
   });
 
   if (result.ok) {
@@ -107,12 +93,12 @@ export async function saveGoalAction(data: {
   description: string;
   targetDate?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
-  const auth = await assertCoachOrAdmin();
-  if (!auth.ok) return { ok: false, error: auth.error };
-
   if (!data.clientId || !data.description.trim()) {
     return { ok: false, error: "Missing required fields." };
   }
+
+  const auth = await assertCoachOwnsClientAction(data.clientId);
+  if (!auth.ok) return { ok: false, error: auth.error };
 
   const db = getDb();
   const today = new Date().toISOString().slice(0, 10);
@@ -134,12 +120,12 @@ export async function archiveGoalAction(
   goalId: string,
   clientId: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const auth = await assertCoachOrAdmin();
-  if (!auth.ok) return { ok: false, error: auth.error };
-
   if (!goalId || !clientId) {
     return { ok: false, error: "Missing required fields." };
   }
+
+  const auth = await assertCoachOwnsClientAction(clientId);
+  if (!auth.ok) return { ok: false, error: auth.error };
 
   const db = getDb();
   await db

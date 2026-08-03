@@ -3,18 +3,18 @@
 //
 // SERVER-ONLY — never import from a Client Component.
 //
-// Solo mode: Jermaine/admin sees all Catalyst Coaching clients.
-// Multi-tenant seam: every public function accepts an optional
-// `_coachId` parameter (unused today). When multi-tenancy ships,
-// pass the authenticated coach's userId here and uncomment the
-// coachingEnrollments join that filters by coachId.
+// Multi-tenant: pass coachId to scope to one coach's own clients via
+// coaching_enrollments. Pass null (admin) for unscoped, all-platform
+// visibility — see resolveTenantScope() in lib/auth/guards.ts, which
+// is the only place that should decide which of the two callers get.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
 import { eq, and, asc, sql, inArray } from "drizzle-orm";
 import { getDb } from "./client";
-import { users, clientProfiles, programTemplates, workoutTemplates } from "./schema";
+import { users, clientProfiles, programTemplates, workoutTemplates, coachingEnrollments } from "./schema";
 import { clientPrograms, workoutSessions } from "./schema-program";
+import { coachOwnsClient } from "@/lib/auth/guards";
 import {
   getWorkoutHistory,
   getHistoricalSessionDetail,
@@ -184,16 +184,17 @@ const ATTENTION_ORDER: Record<AttentionLevel, number> = {
 // ─────────────────────────────────────────────────────────────
 // LIST ALL CLIENTS
 //
-// Returns all users with role='client', enriched with active
-// program and session stats.  Two SQL queries total (no N+1).
+// Returns clients enriched with active program and session stats.
+// Two SQL queries total (no N+1).
 //
-// Future multi-tenant seam:
-//   Pass coachId and join coachingEnrollments to filter by coach.
+// coachId === null (admin): every client on the platform.
+// coachId === <uuid>: only clients this coach has a coaching_enrollments
+//   row with (any status — see coachOwnsClient() in lib/auth/guards.ts
+//   for why status is deliberately not filtered here).
 // ─────────────────────────────────────────────────────────────
 
 export async function listCoachClients(
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _coachId?: string, // reserved for future multi-tenant filter
+  coachId: string | null = null,
 ): Promise<CoachClientSummary[]> {
   const db = getDb();
 
@@ -222,7 +223,23 @@ export async function listCoachClients(
       ),
     )
     .leftJoin(programTemplates, eq(programTemplates.id, clientPrograms.programTemplateId))
-    .where(eq(users.role, "client"))
+    .where(
+      and(
+        eq(users.role, "client"),
+        // EXISTS rather than a join: keeps this a single row per client
+        // regardless of how many coaching_enrollments rows exist (a
+        // client can have several over time — see coachingEnrollments'
+        // own schema comment), and leaves the admin (coachId === null)
+        // path byte-for-byte identical to the pre-scoping query.
+        coachId === null
+          ? undefined
+          : sql`EXISTS (
+              SELECT 1 FROM ${coachingEnrollments}
+              WHERE ${coachingEnrollments.clientId} = ${users.id}
+                AND ${coachingEnrollments.coachId} = ${coachId}
+            )`,
+      ),
+    )
     .orderBy(asc(users.createdAt));
 
   if (rawRows.length === 0) return [];
@@ -321,13 +338,14 @@ export async function listCoachClients(
 // ─────────────────────────────────────────────────────────────
 
 export async function getCoachMissionControl(
-  _coachId?: string,
+  coachId: string | null = null,
 ): Promise<MissionControlData> {
   const db = getDb();
 
   const [clients, recentRows, checkIns] = await Promise.all([
-    listCoachClients(_coachId),
-    // Recent activity: completed/skipped sessions across all clients
+    listCoachClients(coachId),
+    // Recent activity: completed/skipped sessions across this coach's
+    // own clients only (all clients, for admin).
     db
       .select({
         sessionId: workoutSessions.id,
@@ -348,12 +366,23 @@ export async function getCoachMissionControl(
         and(eq(workoutSessions.clientId, users.id), eq(users.role, "client")),
       )
       .leftJoin(clientProfiles, eq(workoutSessions.clientId, clientProfiles.userId))
-      .where(sql`${workoutSessions.status} != 'in_progress'`)
+      .where(
+        and(
+          sql`${workoutSessions.status} != 'in_progress'`,
+          coachId === null
+            ? undefined
+            : sql`EXISTS (
+                SELECT 1 FROM ${coachingEnrollments}
+                WHERE ${coachingEnrollments.clientId} = ${workoutSessions.clientId}
+                  AND ${coachingEnrollments.coachId} = ${coachId}
+              )`,
+        ),
+      )
       .orderBy(
         sql`COALESCE(${workoutSessions.completedAt}, ${workoutSessions.updatedAt}) DESC NULLS LAST`,
       )
       .limit(20),
-    getCheckInMissionStats(),
+    getCheckInMissionStats(coachId),
   ]);
 
   const activeClientCount = clients.filter(
@@ -413,7 +442,7 @@ export async function getCoachMissionControl(
 
 export async function getCoachClientDetail(
   clientId: string,
-  _coachId?: string,
+  coachId: string | null = null,
 ): Promise<CoachClientDetail | null> {
   const db = getDb();
 
@@ -427,7 +456,7 @@ export async function getCoachClientDetail(
   if (!userRow[0] || userRow[0].role !== "client") return null;
 
   const [allClients, recentSessions] = await Promise.all([
-    listCoachClients(_coachId),
+    listCoachClients(coachId),
     getWorkoutHistory(clientId, 10),
   ]);
 
@@ -451,8 +480,7 @@ export async function getCoachClientDetail(
 export async function getCoachClientSessionDetail(
   clientId: string,
   sessionId: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _coachId?: string, // reserved for future multi-tenant filter
+  coachId: string | null = null,
 ) {
   const db = getDb();
 
@@ -463,6 +491,11 @@ export async function getCoachClientSessionDetail(
     .limit(1);
 
   if (!userRow[0] || userRow[0].role !== "client") return null;
+
+  // Coach-ownership check — admin (coachId === null) always passes.
+  if (coachId !== null && !(await coachOwnsClient(coachId, clientId))) {
+    return null;
+  }
 
   // Delegates ownership check to the existing service.
   // Returns null if session doesn't belong to clientId.

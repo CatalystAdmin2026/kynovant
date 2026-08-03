@@ -7,14 +7,16 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { eq, and, asc, desc, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
 import { getDb } from "./client";
+import { coachOwnsClient } from "@/lib/auth/guards";
 import {
   users,
   programTemplates,
   workoutTemplates,
   clientProfiles,
   timelineEvents,
+  coachingEnrollments,
 } from "./schema";
 import { clientGoals } from "./schema-profile";
 import {
@@ -110,6 +112,14 @@ export interface AssignProgramInput {
   enrollmentId?: string | null;
   coachNotes?: string | null;
   overrideAllowMultiple?: boolean;
+  /**
+   * Defense-in-depth ownership check, in addition to whatever the
+   * caller already did at the Server Action / API route boundary.
+   * Omit (or pass null) for an admin-initiated call — no check runs.
+   * Pass the acting coach's userId to also verify, here, that this
+   * coach actually owns clientId before the assignment is written.
+   */
+  coachId?: string | null;
 }
 
 export interface ClientProgramWithMeta {
@@ -151,6 +161,11 @@ export async function assignProgram(
     .limit(1);
 
   if (!client || client.role !== "client") {
+    return { ok: false, error: "Client not found." };
+  }
+
+  // Defense-in-depth ownership check — see AssignProgramInput.coachId.
+  if (input.coachId && !(await coachOwnsClient(input.coachId, input.clientId))) {
     return { ok: false, error: "Client not found." };
   }
 
@@ -372,9 +387,9 @@ export async function listClientPrograms(
   }));
 }
 
-export async function listAllActiveAssignments(): Promise<
-  ClientProgramWithMeta[]
-> {
+export async function listAllActiveAssignments(
+  coachId: string | null = null,
+): Promise<ClientProgramWithMeta[]> {
   const db = getDb();
   const rows = await db
     .select({
@@ -394,7 +409,18 @@ export async function listAllActiveAssignments(): Promise<
       clientProfiles,
       eq(clientPrograms.clientId, clientProfiles.userId),
     )
-    .where(eq(clientPrograms.status, "active"))
+    .where(
+      and(
+        eq(clientPrograms.status, "active"),
+        coachId === null
+          ? undefined
+          : sql`EXISTS (
+              SELECT 1 FROM ${coachingEnrollments}
+              WHERE ${coachingEnrollments.clientId} = ${clientPrograms.clientId}
+                AND ${coachingEnrollments.coachId} = ${coachId}
+            )`,
+      ),
+    )
     .orderBy(asc(clientPrograms.startDate));
 
   return rows.map((r) => ({
@@ -420,7 +446,9 @@ export interface ActiveClientSummary {
   name: string;
 }
 
-export async function listActiveClients(): Promise<ActiveClientSummary[]> {
+export async function listActiveClients(
+  coachId: string | null = null,
+): Promise<ActiveClientSummary[]> {
   const db = getDb();
   const rows = await db
     .select({
@@ -434,6 +462,13 @@ export async function listActiveClients(): Promise<ActiveClientSummary[]> {
       and(
         eq(users.role, "client"),
         inArray(users.status, ["invited", "active"]),
+        coachId === null
+          ? undefined
+          : sql`EXISTS (
+              SELECT 1 FROM ${coachingEnrollments}
+              WHERE ${coachingEnrollments.clientId} = ${users.id}
+                AND ${coachingEnrollments.coachId} = ${coachId}
+            )`,
       ),
     )
     .orderBy(asc(clientProfiles.fullName));

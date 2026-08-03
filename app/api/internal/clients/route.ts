@@ -1,24 +1,22 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { listActiveClients } from "@/lib/db/client-program-service";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, resolveTenantScope } from "@/lib/auth/guards";
 import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin";
 import { getDb } from "@/lib/db/client";
-import { clientProfiles } from "@/lib/db/schema";
+import { clientProfiles, coachingEnrollments } from "@/lib/db/schema";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/internal/clients
-// Returns all active/invited clients for the program Assign panel.
+// Returns active/invited clients for the program Assign panel, scoped
+// to the requesting coach's own coaching_enrollments (admin: all).
 // Deliberately minimal — id + display name only.
-//
-// Known limitation (tracked, not fixed here): this returns every client
-// on the platform, not just the requesting coach's own — see the
-// multi-tenant seam noted in lib/db/client-program-service.ts.
 export async function GET() {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   try {
-    const clients = await listActiveClients();
+    const { coachId } = resolveTenantScope(guard.dbUser);
+    const clients = await listActiveClients(coachId);
     return NextResponse.json({ ok: true, clients });
   } catch (err) {
     return NextResponse.json(
@@ -78,6 +76,30 @@ export async function POST(req: NextRequest) {
         target: clientProfiles.userId,
         set: { fullName },
       });
+
+    // Establish the tenant link. Without this, coach-scoped reads
+    // (lib/db/coach-dashboard-service.ts etc.) would never see a client
+    // this coach just invited — coaching_enrollments is the sole source
+    // of truth for "does this coach own this client." Admin-initiated
+    // invites skip this: admin bypasses tenant scoping entirely and
+    // isn't itself a coach-tenant, so there's no enrollment to create.
+    //
+    // packageType/monthlyRateCents are placeholders here — those columns
+    // predate the coach-as-SaaS-tenant model (they describe Kynovant's
+    // own consumer physique-coaching packages) and have no defined
+    // meaning yet for an independent coach's own client roster. This is
+    // a known open question, not a considered design decision — see the
+    // coach-plan/pricing work in Phase 3 of
+    // docs/roadmaps/saas-evolution/kynovant-saas-evolution-roadmap.md.
+    if (guard.dbUser.role === "coach") {
+      await db.insert(coachingEnrollments).values({
+        clientId: data.user.id,
+        coachId: guard.dbUser.id,
+        packageType: "Standard",
+        monthlyRateCents: 0,
+        status: "active",
+      });
+    }
 
     return NextResponse.json(
       { ok: true, client: { id: data.user.id, name: fullName, email } },

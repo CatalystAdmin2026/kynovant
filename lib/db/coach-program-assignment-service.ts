@@ -60,7 +60,9 @@ export interface ProgramHistoryItem {
 // a Week 1 preview so the coach can preview before assigning.
 // ─────────────────────────────────────────────────────────────
 
-export async function listAssignableBlueprints(): Promise<BlueprintForAssignment[]> {
+export async function listAssignableBlueprints(
+  coachId: string | null = null,
+): Promise<BlueprintForAssignment[]> {
   const db = getDb();
 
   const templates = await db
@@ -74,7 +76,12 @@ export async function listAssignableBlueprints(): Promise<BlueprintForAssignment
       defaultDurationWeeks: programTemplates.defaultDurationWeeks,
     })
     .from(programTemplates)
-    .where(eq(programTemplates.status, "active"))
+    .where(
+      and(
+        eq(programTemplates.status, "active"),
+        coachId === null ? undefined : eq(programTemplates.createdBy, coachId),
+      ),
+    )
     .orderBy(asc(programTemplates.name));
 
   if (templates.length === 0) return [];
@@ -218,11 +225,14 @@ export async function archiveAndAssignProgram({
   programTemplateId,
   startDate,
   coachNotes,
+  coachId,
 }: {
   clientId: string;
   programTemplateId: string;
   startDate: string;
   coachNotes?: string | null;
+  /** Defense-in-depth ownership check — see AssignProgramInput.coachId. */
+  coachId?: string | null;
 }): Promise<{ ok: boolean; error?: string; assignmentId?: string }> {
   const result = await assignProgram({
     clientId,
@@ -230,6 +240,7 @@ export async function archiveAndAssignProgram({
     startDate,
     coachNotes: coachNotes ?? null,
     overrideAllowMultiple: false,
+    coachId,
   });
 
   if (!result.ok) return { ok: false, error: result.error };

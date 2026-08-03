@@ -27,8 +27,9 @@ import { redirect } from "next/navigation";
 import { eq, and } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { getDb } from "@/lib/db/client";
-import { users } from "@/lib/db/schema";
+import { users, coachingEnrollments } from "@/lib/db/schema";
 import { workoutSessions } from "@/lib/db/schema-program";
+import { weeklyCheckIns } from "@/lib/db/schema-check-in";
 import type { User } from "@supabase/supabase-js";
 import type { PublicUser } from "@/lib/supabase/session";
 
@@ -218,4 +219,118 @@ export async function authorizeWorkoutSession(
     return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
   }
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// TENANT SCOPE — coach-as-tenant resolution
+//
+// Kynovant's locked multi-tenancy model (docs/roadmaps/saas-evolution/
+// kynovant-saas-evolution-roadmap.md §3): the coach is the tenant. No
+// organizations, no teams. Every function below is written against a
+// `coachId: string | null` scope rather than assuming a coach is always
+// present, per that document's explicit guidance to model this as a
+// resolver rather than hardcoding `coachId` as a bare parameter
+// threaded everywhere — `null` is the one, single, well-documented
+// meaning "no tenant filter" (i.e. admin) throughout this codebase.
+//
+// `admin` retains full cross-tenant visibility, by design (§4 of the
+// scale-readiness audit: "preserve intentional admin access
+// explicitly"). A `coach` is scoped to clients they are actually
+// enrolled with via `coaching_enrollments` — no other role reaches
+// this function's `coachId !== null` branch.
+// ─────────────────────────────────────────────────────────────
+
+export interface TenantScope {
+  /** null = admin, no tenant filter applied. Otherwise the coach's own userId. */
+  coachId: string | null;
+}
+
+export function resolveTenantScope(dbUser: PublicUser): TenantScope {
+  return { coachId: dbUser.role === "admin" ? null : dbUser.id };
+}
+
+// Core ownership predicate: does this coach have ANY coaching_enrollments
+// row with this client, regardless of status? Deliberately no status
+// filter — see docs/catalyst-os-growth-crm.md-style reasoning applied
+// here: a coach's relationship with a client (lead, active, paused,
+// cancelled, upgraded) is still *their* relationship for isolation
+// purposes. Status governs the coaching lifecycle, not tenant boundaries.
+export async function coachOwnsClient(
+  coachId: string,
+  clientId: string,
+): Promise<boolean> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: coachingEnrollments.id })
+    .from(coachingEnrollments)
+    .where(
+      and(
+        eq(coachingEnrollments.coachId, coachId),
+        eq(coachingEnrollments.clientId, clientId),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+export type OwnershipResult =
+  | { ok: true; scope: TenantScope }
+  | { ok: false; error: string };
+
+// The single, canonical replacement for the "coach owns this client"
+// check that was previously hand-copied (and left unimplemented, role-
+// check-only) in multiple Server Action files. Admin always passes
+// (scope.coachId === null). A coach passes only if coachOwnsClient()
+// finds a real enrollment row. Deliberately returns the same "Not
+// found" wording on both "client doesn't exist" and "not your client"
+// — matches authorizeWorkoutSession's 404-not-403 posture: don't
+// confirm existence of a resource to a requestor who doesn't own it.
+export async function assertCoachOwnsClient(
+  dbUser: PublicUser,
+  clientId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+  const owns = await coachOwnsClient(scope.coachId, clientId);
+  if (!owns) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+// API-route flavor of assertCoachOwnsClient — mirrors
+// authorizeWorkoutSession's NextResponse-or-null shape so route
+// handlers can use the same `if (deny) return deny;` pattern.
+export async function authorizeCoachClientAccess(
+  dbUser: PublicUser,
+  clientId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachOwnsClient(dbUser, clientId);
+  if (!result.ok) {
+    return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
+  }
+  return null;
+}
+
+// Resolves the owning clientId for a check-in, then defers to the same
+// ownership check. Check-in mutations only ever receive a checkInId,
+// not a clientId, so this does the one extra lookup they need.
+export async function assertCoachOwnsCheckIn(
+  dbUser: PublicUser,
+  checkInId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+
+  const db = getDb();
+  const rows = await db
+    .select({ clientId: weeklyCheckIns.clientId })
+    .from(weeklyCheckIns)
+    .where(eq(weeklyCheckIns.id, checkInId))
+    .limit(1);
+
+  const clientId = rows[0]?.clientId;
+  if (!clientId) return { ok: false, error: "Not found" };
+
+  const owns = await coachOwnsClient(scope.coachId, clientId);
+  if (!owns) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
 }

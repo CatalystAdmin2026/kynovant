@@ -4,7 +4,7 @@
 // rather than persisted client-side, so this page can't get stuck on
 // a stale completion screen — see components/hq/onboarding/OnboardingWizard.tsx.
 
-import { requireCoachOrAdminPage } from "@/lib/auth/guards";
+import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { listCoachClients } from "@/lib/db/coach-dashboard-service";
 import { listProgramTemplates } from "@/lib/db/program-builder-service";
 import HQPageHeader from "@/components/hq/HQPageHeader";
@@ -13,11 +13,12 @@ import OnboardingWizard from "@/components/hq/onboarding/OnboardingWizard";
 export const dynamic = "force-dynamic";
 
 export default async function GetStartedPage() {
-  await requireCoachOrAdminPage();
+  const { dbUser } = await requireCoachOrAdminPage();
+  const { coachId } = resolveTenantScope(dbUser);
 
   const [clients, templates] = await Promise.all([
-    listCoachClients(),
-    listProgramTemplates(),
+    listCoachClients(coachId),
+    listProgramTemplates(coachId),
   ]);
 
   return (

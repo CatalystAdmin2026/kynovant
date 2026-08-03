@@ -15,6 +15,18 @@ import {
   type ExperienceLevel,
   type TemplateStatus,
 } from "./schema";
+
+// Ownership visibility filter shared by both list functions below.
+// coachId === null (admin): no filter, every template. Otherwise:
+// only templates this coach authored. See lib/db/schema.ts's comment
+// on programTemplates/workoutTemplates.createdBy, and the note in
+// docs/roadmaps/saas-evolution/kynovant-saas-evolution-roadmap.md §5
+// that private-vs-shared template visibility remains an open product
+// decision — this is the conservative default (private-by-creator)
+// pending that decision, not a resolution of it.
+function ownerFilter(coachId: string | null) {
+  return coachId === null ? undefined : eq(workoutTemplates.createdBy, coachId);
+}
 import {
   workoutTemplateSections,
   workoutTemplateExercises,
@@ -72,11 +84,14 @@ async function nextPrescriptionOrder(
 // TEMPLATE CRUD
 // ─────────────────────────────────────────────────────────────
 
-export async function listWorkoutTemplates(): Promise<WorkoutTemplate[]> {
+export async function listWorkoutTemplates(
+  coachId: string | null = null,
+): Promise<WorkoutTemplate[]> {
   const db = getDb();
   return db
     .select()
     .from(workoutTemplates)
+    .where(ownerFilter(coachId))
     .orderBy(asc(workoutTemplates.createdAt));
 }
 
@@ -89,7 +104,9 @@ export type WorkoutTemplateSummary = Pick<
   | "description" | "updatedAt"
 > & { exerciseCount: number };
 
-export async function listWorkoutTemplatesWithSummary(): Promise<WorkoutTemplateSummary[]> {
+export async function listWorkoutTemplatesWithSummary(
+  coachId: string | null = null,
+): Promise<WorkoutTemplateSummary[]> {
   const db = getDb();
   const rows = await db
     .select({
@@ -109,6 +126,7 @@ export async function listWorkoutTemplatesWithSummary(): Promise<WorkoutTemplate
       workoutTemplateExercises,
       eq(workoutTemplateExercises.workoutTemplateId, workoutTemplates.id),
     )
+    .where(ownerFilter(coachId))
     .groupBy(workoutTemplates.id)
     .orderBy(asc(workoutTemplates.name));
 

@@ -3,7 +3,7 @@ import {
   assignProgram,
   listAllActiveAssignments,
 } from "@/lib/db/client-program-service";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, resolveTenantScope, authorizeCoachClientAccess } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,8 @@ export async function GET() {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   try {
-    const assignments = await listAllActiveAssignments();
+    const { coachId } = resolveTenantScope(guard.dbUser);
+    const assignments = await listAllActiveAssignments(coachId);
     return NextResponse.json({ ok: true, assignments });
   } catch (err) {
     return NextResponse.json(
@@ -47,6 +48,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "startDate is required" }, { status: 400 });
     }
 
+    const deny = await authorizeCoachClientAccess(guard.dbUser, body.clientId);
+    if (deny) return deny;
+
+    const { coachId } = resolveTenantScope(guard.dbUser);
     const result = await assignProgram({
       clientId: body.clientId,
       programTemplateId: body.programTemplateId,
@@ -54,6 +59,7 @@ export async function POST(req: NextRequest) {
       enrollmentId: body.enrollmentId,
       coachNotes: body.coachNotes,
       overrideAllowMultiple: body.overrideAllowMultiple,
+      coachId,
     });
 
     if (!result.ok) {
