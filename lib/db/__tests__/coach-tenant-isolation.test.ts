@@ -369,6 +369,11 @@ describe("listCoachCheckIns — check-ins", () => {
     expect(ids).toContain(checkInA);
     expect(ids).toContain(checkInB);
   });
+
+  it("returns an empty queue (not an error) for a coach with zero enrollments", async () => {
+    const rows = await listCoachCheckIns({ coachId: randomUUID() });
+    expect(rows).toEqual([]);
+  });
 });
 
 describe("listProgramTemplates — programs/blueprints", () => {
