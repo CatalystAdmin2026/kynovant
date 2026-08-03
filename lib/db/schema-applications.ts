@@ -47,6 +47,7 @@ import {
   text,
   integer,
   timestamp,
+  jsonb,
   index,
 } from "drizzle-orm/pg-core";
 import { users } from "./schema";
@@ -114,6 +115,36 @@ export const applicationStatusEnum = pgEnum("application_status", [
 //   would be a foreign key with nothing to reference — deferred
 //   intentionally, not an oversight.
 //
+// businessStage/clientCount/context are NULLABLE — not a relaxation,
+// a correctness requirement. drizzle/0016_applications_coach_fields.sql
+// added these as new columns rather than renaming the original
+// client-coaching columns (primary_goal/readiness/goals_details) into
+// them, specifically because a fitness goal and a business-maturity
+// answer are not the same fact wearing a different label — renaming
+// would have made pre-correction rows display as if they contained
+// real SaaS-application answers they never gave. A row's source
+// column is the ground truth for which world it came from:
+//   source = 'coach_apply' → these three should be populated (the
+//     application service always sets them together, see
+//     lib/db/application-service.ts:submitApplication).
+//   any other source (e.g. the legacy 'apply_page') → these are
+//     legitimately null. Not "missing data to backfill" — there is
+//     no SaaS answer to recover, because the applicant was never
+//     asked these questions. See legacyFields below for what that
+//     applicant actually submitted instead.
+//
+// legacyFields (added by drizzle/0016_applications_coach_fields.sql,
+// not by 0015): archival jsonb preserving every column that existed
+// under the original (pre-correction) client-coaching-shaped table
+// and has no coach-apply equivalent — fullName is not included here
+// (it became `name` via a same-meaning rename, not an archive) but
+// primaryGoal, readiness, goalsDetails, budgetRange, and referralName
+// all are, for any row that predates this migration. Null for every
+// row created after 0016, since nothing writes to it going forward.
+// Displayed under "Archived Original Answers" on the admin detail
+// page for any row where it's non-null — see
+// app/admin/growth/applications/[id]/page.tsx.
+//
 // FK behavior:
 //   reviewedBy → SET NULL: application record survives staff-account archival
 // ─────────────────────────────────────────────────────────────
@@ -130,8 +161,11 @@ export const applications = pgTable(
 
     // What the /coach-apply form actually asks — see
     // app/(site)/coach-apply/page.tsx for the exact option sets.
-    businessStage: text("business_stage").notNull(),
-    clientCount: text("client_count").notNull(),
+    // Nullable: see the "businessStage/clientCount/context are
+    // NULLABLE" note above — null means "not a coach-apply row,"
+    // not "data entry incomplete."
+    businessStage: text("business_stage"),
+    clientCount: text("client_count"),
     context: text("context"),
     referralSource: text("referral_source").notNull(),
 
@@ -147,6 +181,10 @@ export const applications = pgTable(
     // Duplicate-submission handling (see policy note above).
     resubmissionCount: integer("resubmission_count").notNull().default(0),
     submitterIp: text("submitter_ip"),
+
+    // Archive for columns dropped in 0016 with no coach-apply
+    // equivalent. See "legacyFields" note above.
+    legacyFields: jsonb("legacy_fields"),
 
     // Reserved for a future Growth CRM lead reference — intentionally
     // not a column yet. See "FUTURE GROWTH CRM LINKAGE" note above.

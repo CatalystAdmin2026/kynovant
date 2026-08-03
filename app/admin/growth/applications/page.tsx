@@ -105,7 +105,10 @@ export default async function AdminGrowthApplicationsPage() {
                     )}
                   </p>
                   <p className="text-gray-500 text-[10px] truncate">
-                    {item.businessStage} · via {item.referralSource}
+                    {/* businessStage is only null for non-coach_apply rows, which
+                        this list never returns (see listApplications) — the
+                        fallback is defensive, not expected to render. */}
+                    {item.businessStage ?? "—"} · via {item.referralSource}
                   </p>
                 </div>
 

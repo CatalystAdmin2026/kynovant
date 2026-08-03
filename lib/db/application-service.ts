@@ -61,7 +61,14 @@ export interface ApplicationListItem {
   id: string;
   name: string;
   email: string;
-  businessStage: string;
+  // Nullable at the type level to match the DB column — see the
+  // "businessStage/clientCount/context are NULLABLE" note in
+  // schema-applications.ts. In practice, listApplications() only ever
+  // returns source = 'coach_apply' rows (see below), which always
+  // have this populated — but the type stays honest about what the
+  // column actually allows rather than asserting a guarantee the
+  // query happens to provide today.
+  businessStage: string | null;
   referralSource: string;
   status: ApplicationStatus;
   resubmissionCount: number;
@@ -71,8 +78,17 @@ export interface ApplicationListItem {
 
 export interface ApplicationDetail extends ApplicationListItem {
   phone: string | null;
-  clientCount: string;
+  clientCount: string | null;
   context: string | null;
+  // 'coach_apply' for every row created through the current intake
+  // path; any other value (e.g. the legacy 'apply_page') marks a row
+  // that predates the /coach-apply correction — see legacyFields.
+  source: string;
+  // Archived original answers for a pre-correction row (see
+  // drizzle/0016_applications_coach_fields.sql) — null for any row
+  // that was never subject to that migration's archival step, which
+  // in practice means every row created after it ran.
+  legacyFields: Record<string, string> | null;
   reviewNotes: string | null;
   reviewedByName: string | null;
   updatedAt: Date;
@@ -183,47 +199,56 @@ export async function markApplicationSheetSynced(id: string): Promise<void> {
 
 // ─────────────────────────────────────────────────────────────
 // READ — admin Growth Applications dashboard
+//
+// listApplications() always scopes to source = 'coach_apply'. This
+// is a deliberate exclusion, not an oversight: a row from any other
+// source (currently just the one legacy 'apply_page' row created
+// before the /coach-apply correction) is not a Kynovant SaaS
+// application and does not belong in a queue built for triaging
+// them — it would show up with null business_stage/client_count/
+// context no matter how gracefully the UI renders that, which is
+// more confusing than useful. That row is not deleted or hidden
+// entirely — see getApplicationById(), which is not source-scoped —
+// it's excluded from the triage list specifically.
 // ─────────────────────────────────────────────────────────────
+
+const COACH_APPLY_SOURCE = "coach_apply";
 
 export async function listApplications(filter?: {
   status?: ApplicationStatus[];
 }): Promise<ApplicationListItem[]> {
   const db = getDb();
 
-  const rows = filter?.status?.length
-    ? await db
-        .select({
-          id: applications.id,
-          name: applications.name,
-          email: applications.email,
-          businessStage: applications.businessStage,
-          referralSource: applications.referralSource,
-          status: applications.status,
-          resubmissionCount: applications.resubmissionCount,
-          createdAt: applications.createdAt,
-          sheetSyncedAt: applications.sheetSyncedAt,
-        })
-        .from(applications)
-        .where(inArray(applications.status, filter.status))
-        .orderBy(desc(applications.createdAt))
-    : await db
-        .select({
-          id: applications.id,
-          name: applications.name,
-          email: applications.email,
-          businessStage: applications.businessStage,
-          referralSource: applications.referralSource,
-          status: applications.status,
-          resubmissionCount: applications.resubmissionCount,
-          createdAt: applications.createdAt,
-          sheetSyncedAt: applications.sheetSyncedAt,
-        })
-        .from(applications)
-        .orderBy(desc(applications.createdAt));
+  const whereClause = filter?.status?.length
+    ? and(
+        eq(applications.source, COACH_APPLY_SOURCE),
+        inArray(applications.status, filter.status),
+      )
+    : eq(applications.source, COACH_APPLY_SOURCE);
+
+  const rows = await db
+    .select({
+      id: applications.id,
+      name: applications.name,
+      email: applications.email,
+      businessStage: applications.businessStage,
+      referralSource: applications.referralSource,
+      status: applications.status,
+      resubmissionCount: applications.resubmissionCount,
+      createdAt: applications.createdAt,
+      sheetSyncedAt: applications.sheetSyncedAt,
+    })
+    .from(applications)
+    .where(whereClause)
+    .orderBy(desc(applications.createdAt));
 
   return rows;
 }
 
+// Deliberately NOT scoped to source = 'coach_apply' (unlike
+// listApplications) — a legacy row must still be reachable by direct
+// link even though it's excluded from the triage queue. "Excluded
+// from the SaaS queue" is not the same as "inaccessible."
 export async function getApplicationById(
   id: string,
 ): Promise<ApplicationDetail | null> {
@@ -241,6 +266,8 @@ export async function getApplicationById(
       referralSource: applications.referralSource,
       status: applications.status,
       resubmissionCount: applications.resubmissionCount,
+      source: applications.source,
+      legacyFields: applications.legacyFields,
       reviewNotes: applications.reviewNotes,
       reviewedByEmail: users.email,
       sheetSyncedAt: applications.sheetSyncedAt,
@@ -266,6 +293,8 @@ export async function getApplicationById(
     referralSource: row.referralSource,
     status: row.status,
     resubmissionCount: row.resubmissionCount,
+    source: row.source,
+    legacyFields: row.legacyFields as Record<string, string> | null,
     reviewNotes: row.reviewNotes,
     reviewedByName: row.reviewedByEmail,
     sheetSyncedAt: row.sheetSyncedAt,
