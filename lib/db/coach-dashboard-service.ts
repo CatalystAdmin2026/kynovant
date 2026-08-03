@@ -195,11 +195,7 @@ const ATTENTION_ORDER: Record<AttentionLevel, number> = {
 // ─────────────────────────────────────────────────────────────
 
 export async function listCoachClients(
-<<<<<<< HEAD
   coachId: string | null = null,
-=======
-  coachId: string | null = null, // reserved for future multi-tenant filter
->>>>>>> 3d6c63c (feat: elevate HQ Overview experience)
 ): Promise<CoachClientSummary[]> {
   const db = getDb();
 
@@ -448,7 +444,7 @@ export async function getCoachMissionControl(
 // ─────────────────────────────────────────────────────────────
 
 export async function getCoachClientDetail(
-  coachId: string | null = null,
+  clientId: string,
   coachId: string | null = null,
 ): Promise<CoachClientDetail | null> {
   const db = getDb();
@@ -487,11 +483,7 @@ export async function getCoachClientDetail(
 export async function getCoachClientSessionDetail(
   clientId: string,
   sessionId: string,
-<<<<<<< HEAD
   coachId: string | null = null,
-=======
-  _coachId?: string, // reserved for future multi-tenant filter
->>>>>>> 3d6c63c (feat: elevate HQ Overview experience)
 ) {
   const db = getDb();
 

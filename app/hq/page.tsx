@@ -6,12 +6,6 @@
 // ─────────────────────────────────────────────────────────────
 
 import Link from "next/link";
-<<<<<<< HEAD
-import { Check, Activity, CalendarDays } from "lucide-react";
-import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
-import { getCoachMissionControl, type AttentionLevel } from "@/lib/db/coach-dashboard-service";
-import HQPageHeader from "@/components/hq/HQPageHeader";
-=======
 import {
   Activity,
   AlertTriangle,
@@ -26,9 +20,9 @@ import {
   Target,
   Users,
 } from "lucide-react";
+import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getCoachMissionControl } from "@/lib/db/coach-dashboard-service";
 import AddClientButton from "@/components/hq/clients/AddClientButton";
->>>>>>> 3d6c63c (feat: elevate HQ Overview experience)
 import { StatusChip } from "@/components/ui";
 import { SEVERITY_BAR, SEVERITY_DOT, SEVERITY_TEXT, type Severity } from "@/lib/ui/status";
 
@@ -44,31 +38,8 @@ function fmtDateTime(d: Date | null): string {
   });
 }
 
-<<<<<<< HEAD
-function fmtRelative(d: Date | null): string {
-  if (!d) return "Never";
-  const diffMs = Date.now() - new Date(d).getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return `${Math.floor(diffDays / 7)}w ago`;
-}
-
-// ─────────────────────────────────────────────────────────────
-// PAGE
-// ─────────────────────────────────────────────────────────────
-
-export default async function MissionControlPage() {
-  const { dbUser } = await requireCoachOrAdminPage();
-  const { coachId } = resolveTenantScope(dbUser);
-  const data = await getCoachMissionControl(coachId);
-
-  const today = new Date().toLocaleDateString("en-US", {
-=======
 function fmtDate(d: Date): string {
   return d.toLocaleDateString("en-US", {
->>>>>>> 3d6c63c (feat: elevate HQ Overview experience)
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -234,7 +205,9 @@ function QuickAction({
 }
 
 export default async function MissionControlPage() {
-  const data = await getCoachMissionControl();
+  const { dbUser } = await requireCoachOrAdminPage();
+  const { coachId } = resolveTenantScope(dbUser);
+  const data = await getCoachMissionControl(coachId);
   const primaryAction = getPrimaryAction(data);
 
   const today = fmtDate(new Date());
