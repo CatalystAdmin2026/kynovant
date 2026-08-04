@@ -917,7 +917,15 @@ export default async function ClientWorkspacePage({
       <ClientHeader
         w={workspace}
         assignAction={
-          <AssignProgramButton variant="header" hasActiveProgram={hasActiveProgram} />
+          <div className="flex items-center gap-2.5">
+            <Link
+              href={`/hq/programs/generate?clientId=${clientId}`}
+              className="flex items-center gap-2 border border-[#C9A24D]/40 text-[#C9A24D] font-bold text-[10px] tracking-[0.3em] uppercase px-4 py-2.5 hover:bg-[#C9A24D]/10 transition-all duration-150"
+            >
+              Generate with AI
+            </Link>
+            <AssignProgramButton variant="header" hasActiveProgram={hasActiveProgram} />
+          </div>
         }
       />
 

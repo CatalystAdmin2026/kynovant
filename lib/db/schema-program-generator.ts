@@ -1,0 +1,301 @@
+// ─────────────────────────────────────────────────────────────
+// Kynovant — AI-Assisted Program Generator: Draft Storage Schema
+//
+// SERVER-ONLY — never import this file from a Client Component.
+//
+// Tables:
+//   program_generation_drafts            — one row per Program Brief → draft
+//   program_generation_runs              — one row per generation attempt
+//                                           (initial generate, regenerate-all,
+//                                           regenerate-one-day)
+//   program_generation_edit_events       — coach edit audit log
+//   program_generation_validation_events — Kynovant Insights run audit log
+//
+// This is the "temporary review object, not yet a real Program" storage
+// layer described in docs/ai-program-generator-ux-spec.md §16. Generated
+// content lives here as JSONB — completely separate from program_templates/
+// workout_templates (lib/db/schema.ts) and program_weeks/program_week_days
+// (lib/db/schema-program.ts) — until an explicit coach approval creates
+// real rows in those tables. See lib/program-generator/approval.ts.
+//
+// Every JSON field's shape is defined and validated by
+// lib/program-generator/contracts.ts (zod schemas) — this file only
+// defines the storage envelope, not the content contract.
+//
+// Tenant ownership: coachId is NOT nullable and is never null=admin here,
+// unlike TenantScope elsewhere in this codebase. A draft is always
+// attributable to the coach who triggered generation — see
+// docs/roadmaps/saas-evolution/kynovant-saas-evolution-roadmap.md for why
+// coach-scoped ownership matters even before multi-coach launch. Admins
+// reach drafts via the same requireCoachOrAdmin() guard used everywhere
+// else in HQ (admin bypass happens at the query/guard layer, not by a
+// null-coachId convention on this table).
+// ─────────────────────────────────────────────────────────────
+
+import {
+  pgTable,
+  pgEnum,
+  uuid,
+  text,
+  integer,
+  jsonb,
+  timestamp,
+  index,
+} from "drizzle-orm/pg-core";
+import { users, programTemplates } from "./schema";
+
+// ─────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────
+
+// Draft lifecycle. "running" covers both the initial generation and any
+// regenerate-all/regenerate-day attempt currently in flight — the draft
+// itself has exactly one lifecycle even though program_generation_runs
+// tracks each individual attempt separately.
+export const programGenerationStatusEnum = pgEnum("program_generation_status", [
+  "queued",
+  "running",
+  "ready_for_review",
+  "failed",
+  "approved",
+  "discarded",
+]);
+
+export const programGenerationRunStatusEnum = pgEnum("program_generation_run_status", [
+  "queued",
+  "running",
+  "complete",
+  "failed",
+  "cancelled",
+]);
+
+// Distinguishes a full-draft generation/regeneration from a single-day
+// regenerate — see lib/program-generator's regenerateDay() vs
+// generateDraft()/regenerateDraft().
+export const programGenerationRunScopeEnum = pgEnum("program_generation_run_scope", [
+  "full_draft",
+  "single_day",
+]);
+
+export const programGenerationValidationStatusEnum = pgEnum(
+  "program_generation_validation_status",
+  ["ready", "warnings", "blocked", "failed"],
+);
+
+export const programGenerationEditActionEnum = pgEnum("program_generation_edit_action", [
+  "brief_updated",
+  "day_regenerated",
+  "exercise_replaced",
+  "prescription_updated",
+  "exercise_reordered",
+  "day_moved",
+  "progression_updated",
+]);
+
+// ─────────────────────────────────────────────────────────────
+// TABLE — program_generation_drafts
+//
+// briefJson: validated ProgramGenerationBrief (contracts.ts). Set once at
+//   creation; only ever replaced wholesale (brief_updated edit event),
+//   never partially patched in place — matches decision #4/#8 reasoning
+//   already established for the applications table (immutable-unless-
+//   explicitly-versioned inputs, see lib/db/schema-applications.ts).
+// draftJson: validated GeneratedProgramDraft (contracts.ts), or null
+//   before the first successful generation run completes.
+// insightsJson: last GeneratedDraftInsights result, or null before the
+//   first validation run. Re-run after every edit that could change
+//   findings (see validationQueued semantics in the service layer).
+// version: bumped on every edit to draftJson (brief edits do not bump
+//   this — brief and draft are versioned independently since editing the
+//   brief does not retroactively change an already-generated draft).
+// ─────────────────────────────────────────────────────────────
+
+export const programGenerationDrafts = pgTable(
+  "program_generation_drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    coachId: uuid("coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    clientId: uuid("client_id").references(() => users.id, { onDelete: "set null" }),
+
+    status: programGenerationStatusEnum("status").notNull().default("queued"),
+
+    briefJson: jsonb("brief_json").notNull(),
+    briefVersion: integer("brief_version").notNull().default(1),
+
+    draftJson: jsonb("draft_json"),
+    draftVersion: integer("draft_version").notNull().default(0),
+
+    insightsJson: jsonb("insights_json"),
+    validationStatus: programGenerationValidationStatusEnum("validation_status"),
+    lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
+
+    // Locked rule #8: warnings require explicit coach acknowledgement
+    // before approval. Valid only when it postdates lastValidatedAt — a
+    // later validation rerun (which can surface different warnings)
+    // always invalidates a prior acknowledgement. See
+    // lib/program-generator/approval.ts's ownership/blocker/warning
+    // checks and lib/db/program-generation-service.ts's
+    // acknowledgeWarnings().
+    warningsAcknowledgedAt: timestamp("warnings_acknowledged_at", { withTimezone: true }),
+
+    failureReason: text("failure_reason"),
+
+    // Set only on approval — see lib/program-generator/approval.ts. Null
+    // until then. createdWorkoutTemplateIds is a plain jsonb string array;
+    // there's no FK array type in Postgres, and these are audit pointers,
+    // not relationships the DB needs to enforce.
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    approvedBy: uuid("approved_by").references(() => users.id, { onDelete: "set null" }),
+    createdProgramTemplateId: uuid("created_program_template_id").references(
+      () => programTemplates.id,
+      { onDelete: "set null" },
+    ),
+    createdWorkoutTemplateIds: jsonb("created_workout_template_ids"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_program_generation_drafts_coach_id").on(table.coachId),
+    index("idx_program_generation_drafts_client_id").on(table.clientId),
+    index("idx_program_generation_drafts_status").on(table.status),
+    index("idx_program_generation_drafts_created_at").on(table.createdAt),
+  ],
+);
+
+// ─────────────────────────────────────────────────────────────
+// TABLE — program_generation_runs
+//
+// One row per generation attempt. A draft typically has one run (the
+// initial generation) plus zero or more additional runs from
+// "Regenerate Draft" (scope=full_draft) or "Regenerate Day"
+// (scope=single_day, dayRef identifies which day within draftJson).
+// ─────────────────────────────────────────────────────────────
+
+export const programGenerationRuns = pgTable(
+  "program_generation_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => programGenerationDrafts.id, { onDelete: "cascade" }),
+
+    status: programGenerationRunStatusEnum("status").notNull().default("queued"),
+    scope: programGenerationRunScopeEnum("scope").notNull().default("full_draft"),
+    // Stable synthetic day id within draftJson (see contracts.ts) —
+    // null for scope=full_draft.
+    dayRef: text("day_ref"),
+
+    stage: text("stage"),
+    provider: text("provider"),
+    model: text("model"),
+
+    requestedByUserId: uuid("requested_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    errorMessage: text("error_message"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_program_generation_runs_draft_id").on(table.draftId),
+    index("idx_program_generation_runs_status").on(table.status),
+  ],
+);
+
+// ─────────────────────────────────────────────────────────────
+// TABLE — program_generation_edit_events
+//
+// Append-only. Never updated or deleted — matches the enrollment_events/
+// timeline_events convention already established in lib/db/schema.ts.
+// ─────────────────────────────────────────────────────────────
+
+export const programGenerationEditEvents = pgTable(
+  "program_generation_edit_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => programGenerationDrafts.id, { onDelete: "cascade" }),
+
+    actorUserId: uuid("actor_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+
+    action: programGenerationEditActionEnum("action").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id"),
+    summary: text("summary").notNull(),
+
+    // Optional before/after snapshots for the affected slice of draftJson —
+    // not the whole draft, just the edited entity. Null when not captured
+    // (e.g. discard has no before/after shape).
+    beforeJson: jsonb("before_json"),
+    afterJson: jsonb("after_json"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_program_generation_edit_events_draft_id").on(table.draftId),
+    index("idx_program_generation_edit_events_created_at").on(table.createdAt),
+  ],
+);
+
+// ─────────────────────────────────────────────────────────────
+// TABLE — program_generation_validation_events
+//
+// One row per Kynovant Insights run against a draft. Append-only —
+// draftJson.insightsJson always reflects the latest, but this table
+// preserves the full history for the audit drawer (UX spec §12.2).
+// ─────────────────────────────────────────────────────────────
+
+export const programGenerationValidationEvents = pgTable(
+  "program_generation_validation_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => programGenerationDrafts.id, { onDelete: "cascade" }),
+
+    status: programGenerationValidationStatusEnum("status").notNull(),
+    blockerCount: integer("blocker_count").notNull().default(0),
+    warningCount: integer("warning_count").notNull().default(0),
+
+    // Full GeneratedDraftInsights snapshot for this run.
+    findingsJson: jsonb("findings_json").notNull(),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_program_generation_validation_events_draft_id").on(table.draftId),
+  ],
+);
+
+// ─────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────
+
+export type ProgramGenerationDraft = typeof programGenerationDrafts.$inferSelect;
+export type NewProgramGenerationDraft = typeof programGenerationDrafts.$inferInsert;
+export type ProgramGenerationStatus = ProgramGenerationDraft["status"];
+
+export type ProgramGenerationRun = typeof programGenerationRuns.$inferSelect;
+export type NewProgramGenerationRun = typeof programGenerationRuns.$inferInsert;
+export type ProgramGenerationRunStatus = ProgramGenerationRun["status"];
+export type ProgramGenerationRunScope = ProgramGenerationRun["scope"];
+
+export type ProgramGenerationEditEvent = typeof programGenerationEditEvents.$inferSelect;
+export type NewProgramGenerationEditEvent = typeof programGenerationEditEvents.$inferInsert;
+export type ProgramGenerationEditAction = ProgramGenerationEditEvent["action"];
+
+export type ProgramGenerationValidationEvent =
+  typeof programGenerationValidationEvents.$inferSelect;
+export type NewProgramGenerationValidationEvent =
+  typeof programGenerationValidationEvents.$inferInsert;
+export type ProgramGenerationValidationStatus = ProgramGenerationValidationEvent["status"];

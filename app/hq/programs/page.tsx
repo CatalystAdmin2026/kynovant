@@ -245,13 +245,22 @@ export default function HQProgramsPage() {
         title="Programs"
         subtitle="Build, manage, and deliver transformational training experiences."
         action={
-          <button
-            onClick={() => { setShowForm(true); setCreateError(null); }}
-            className="group flex items-center gap-2 bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.3em] uppercase px-4 py-2.5 hover:bg-[#D4B56A] active:scale-[0.98] transition-all duration-150"
-          >
-            <Plus size={13} strokeWidth={2.5} className="transition-transform duration-200 group-hover:rotate-90" />
-            New Program
-          </button>
+          <div className="flex items-center gap-2.5">
+            <Link
+              href="/hq/programs/generate"
+              className="group flex items-center gap-2 border border-[#C9A24D]/40 text-[#C9A24D] font-bold text-[10px] tracking-[0.3em] uppercase px-4 py-2.5 hover:bg-[#C9A24D]/10 active:scale-[0.98] transition-all duration-150"
+            >
+              <Zap size={13} strokeWidth={2.5} />
+              Generate with AI
+            </Link>
+            <button
+              onClick={() => { setShowForm(true); setCreateError(null); }}
+              className="group flex items-center gap-2 bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.3em] uppercase px-4 py-2.5 hover:bg-[#D4B56A] active:scale-[0.98] transition-all duration-150"
+            >
+              <Plus size={13} strokeWidth={2.5} className="transition-transform duration-200 group-hover:rotate-90" />
+              New Program
+            </button>
+          </div>
         }
       />
 
