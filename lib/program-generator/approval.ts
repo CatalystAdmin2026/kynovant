@@ -180,7 +180,16 @@ export async function approveDraft(
         recommendedDaysPerWeek: generated.recommendedDaysPerWeek,
         defaultDurationWeeks: generated.defaultDurationWeeks,
         status: "draft",
-        createdBy: approverUserId,
+        // Attributed to the generating coach, not the approver — an
+        // admin may approve on a coach's behalf (locked rule #6), but
+        // the new nested-ownership model (coachOwnsProgramTemplate /
+        // coachCanViewWorkoutTemplate in lib/auth/guards.ts) resolves
+        // ownership from createdBy alone. If this were the approver's
+        // id, an admin-approved draft would leave the generating coach
+        // unable to see or edit their own Program in the Program
+        // Builder afterward. approvedBy (below) is the separate,
+        // correct place to record who actually clicked approve.
+        createdBy: draft.coachId,
         metadata: { source: "ai_program_generator", generationDraftId: draftId },
       })
       .returning();
@@ -213,7 +222,9 @@ export async function approveDraft(
               recommendedExperienceLevel: generated.experienceLevel,
               estimatedDurationMinutes: blueprint.estimatedDurationMinutes ?? null,
               status: "draft",
-              createdBy: approverUserId,
+              // Same reasoning as the program template above: owned by
+              // the generating coach, not the approver.
+              createdBy: draft.coachId,
               objective: blueprint.primaryFocus ?? null,
               metadata: { source: "ai_program_generator", generationDraftId: draftId },
             })

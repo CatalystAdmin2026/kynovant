@@ -20,10 +20,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { users, programTemplates, workoutTemplates } from "../schema";
 import { workoutTemplateSections, workoutTemplateExercises, exercises } from "../schema-exercise";
 import { programWeeks, programWeekDays } from "../schema-program";
-import {
-  programGenerationDrafts,
-  programGenerationRuns,
-} from "../schema-program-generator";
+import { programGenerationDrafts } from "../schema-program-generator";
 import {
   createDraft,
   getOwnedDraft,
@@ -32,6 +29,7 @@ import {
 } from "../program-generation-service";
 import { validateGeneratedDraft } from "@/lib/program-generator/validation";
 import { approveDraft } from "@/lib/program-generator/approval";
+import { coachOwnsProgramTemplate, coachOwnsWorkoutTemplate } from "@/lib/auth/guards";
 import { generateProgramDraft } from "@/lib/program-generator/provider";
 import type { GeneratedProgramDraft } from "@/lib/program-generator/contracts";
 import type { ProgramGenerationBrief } from "@/lib/program-generator/contracts";
@@ -314,6 +312,10 @@ describe("approveDraft", () => {
     const [programRow] = await db.select().from(programTemplates).where(eq(programTemplates.id, first.programTemplateId));
     expect(programRow).toBeDefined();
     expect(programRow.status).toBe("draft"); // never auto-published
+    // Owned by the generating coach, not whoever clicked approve —
+    // required for the nested-ownership model (coachOwnsProgramTemplate)
+    // to recognize coachA as the owner afterward.
+    expect(programRow.createdBy).toBe(coachA.id);
 
     const weekRows = await db.select().from(programWeeks).where(eq(programWeeks.programTemplateId, first.programTemplateId));
     expect(weekRows).toHaveLength(1);
@@ -375,7 +377,7 @@ describe("approveDraft", () => {
     expect(leaked).toHaveLength(0);
   });
 
-  it("admin can approve any coach's draft, and approvedBy reflects the actual approver", async () => {
+  it("admin can approve any coach's draft; approvedBy is the admin but createdBy stays the generating coach", async () => {
     const draft = buildDraft(exerciseIds[1] ?? exerciseIds[0]);
     const draftId = await makeReadyDraft(coachA.id, draft);
 
@@ -387,6 +389,19 @@ describe("approveDraft", () => {
 
     const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, draftId));
     expect(draftRow.approvedBy).toBe(admin.id);
+
+    // The resulting Program/Blueprint must stay owned by coachA, the
+    // generating coach — not admin.id, the approver. Proven two ways:
+    // the raw column, and the real nested-ownership predicate coachA
+    // will actually be checked against in the Program Builder.
+    const [programRow] = await db.select().from(programTemplates).where(eq(programTemplates.id, outcome.programTemplateId));
+    expect(programRow.createdBy).toBe(coachA.id);
+    expect(await coachOwnsProgramTemplate(coachA.id, outcome.programTemplateId)).toBe(true);
+    expect(await coachOwnsProgramTemplate(admin.id, outcome.programTemplateId)).toBe(false);
+
+    const [workoutRow] = await db.select().from(workoutTemplates).where(eq(workoutTemplates.id, outcome.workoutTemplateIds[0]));
+    expect(workoutRow.createdBy).toBe(coachA.id);
+    expect(await coachOwnsWorkoutTemplate(coachA.id, outcome.workoutTemplateIds[0])).toBe(true);
   });
 
   it("rejects approval attempted by a coach who does not own the draft", async () => {
