@@ -46,9 +46,146 @@ import {
   normalizeStripeEvent,
   toGasPayload,
   packageFromPriceId,
+  isCoachPlanPrice,
   HANDLED_EVENTS,
 } from "@/lib/stripe";
 import type { GasStripePayload, NormalizedStripeEvent } from "@/lib/stripe";
+import { eq } from "drizzle-orm";
+import { getDb } from "@/lib/db/client";
+import { processedStripeEvents, coachSubscriptions } from "@/lib/db/schema-billing";
+import {
+  upsertCoachSubscriptionFromStripe,
+  type StripeSubscriptionSync,
+} from "@/lib/db/coach-subscription-service";
+
+// ─────────────────────────────────────────────────────────────
+// COACH SUBSCRIPTION EVENT HANDLING
+//
+// Distinct from the client-payment path above this file's original
+// handleNewEnrollment — this branch only fires for events on a
+// coach-plan Price ID (isCoachPlanPrice(), gated by
+// STRIPE_COACH_PLAN_PRICE_IDS; empty/unset means this branch never
+// fires, matching current production behavior exactly).
+//
+// coachId is resolved from the Stripe object's metadata.coachId. No
+// checkout-session-creation route exists in this codebase yet (that's
+// self-serve signup, Phase 5 — explicitly out of scope here per the
+// roadmap's own sequencing), so today the only way metadata.coachId
+// gets set is an admin hand-creating the subscription in the Stripe
+// Dashboard, mirroring the existing manual-billing pattern already
+// used for the founding coach.
+// ─────────────────────────────────────────────────────────────
+
+function mapStripeSubscriptionStatus(
+  status: Stripe.Subscription.Status,
+): StripeSubscriptionSync["status"] | null {
+  switch (status) {
+    case "trialing":
+      return "trialing";
+    case "active":
+      return "active";
+    case "past_due":
+      return "past_due";
+    case "canceled":
+      return "cancelled";
+    default:
+      // incomplete, incomplete_expired, unpaid, paused — not modeled
+      // this pass; log and skip rather than guess a mapping.
+      return null;
+  }
+}
+
+function strOrNullLocal(v: unknown): string | null {
+  if (typeof v === "string" && v.length > 0) return v;
+  if (v !== null && typeof v === "object" && "id" in v) {
+    return (v as { id: string }).id ?? null;
+  }
+  return null;
+}
+
+async function handleCoachSubscriptionUpsert(
+  sub: Stripe.Subscription,
+  eventId: string,
+  forceStatus?: "cancelled",
+): Promise<void> {
+  const coachId = sub.metadata?.coachId;
+  if (!coachId) {
+    console.log(`[Stripe Webhook] Coach-plan subscription ${sub.id} has no metadata.coachId — skipping`);
+    return;
+  }
+
+  const item = sub.items?.data?.[0];
+  const priceId = item?.price?.id ?? null;
+
+  const status = forceStatus ?? mapStripeSubscriptionStatus(sub.status);
+  if (!status) {
+    console.log(`[Stripe Webhook] Subscription ${sub.id} has unmapped status '${sub.status}' — skipping`);
+    return;
+  }
+
+  await upsertCoachSubscriptionFromStripe({
+    coachId,
+    stripeCustomerId: strOrNullLocal(sub.customer),
+    stripeSubscriptionId: sub.id,
+    stripePriceId: priceId,
+    status,
+    currentPeriodStart: item?.current_period_start
+      ? new Date(item.current_period_start * 1000)
+      : null,
+    currentPeriodEnd: item?.current_period_end
+      ? new Date(item.current_period_end * 1000)
+      : null,
+    cancelAtPeriodEnd: sub.cancel_at_period_end ?? false,
+    cancelledAt: sub.canceled_at ? new Date(sub.canceled_at * 1000) : null,
+    eventId,
+  });
+
+  console.log(`[Stripe Webhook] Synced coach_subscriptions for coach ${coachId}: ${status}`);
+}
+
+// invoice.paid / invoice.payment_failed don't reliably carry the same
+// metadata.coachId as the subscription itself, so these resolve coachId
+// by looking up the existing row via stripeSubscriptionId instead — the
+// row must already exist from a prior subscription.created event.
+async function handleCoachInvoiceEvent(
+  inv: Stripe.Invoice,
+  eventId: string,
+  outcome: "paid" | "payment_failed",
+): Promise<void> {
+  const subscriptionId = strOrNullLocal(
+    (inv as unknown as Record<string, unknown>)["subscription"],
+  );
+  if (!subscriptionId) return;
+
+  const db = getDb();
+  const [existing] = await db
+    .select({
+      coachId: coachSubscriptions.coachId,
+      stripeCustomerId: coachSubscriptions.stripeCustomerId,
+      stripePriceId: coachSubscriptions.stripePriceId,
+    })
+    .from(coachSubscriptions)
+    .where(eq(coachSubscriptions.stripeSubscriptionId, subscriptionId))
+    .limit(1);
+
+  if (!existing) {
+    console.log(`[Stripe Webhook] Invoice event for unknown coach subscription ${subscriptionId} — skipping`);
+    return;
+  }
+
+  await upsertCoachSubscriptionFromStripe({
+    coachId: existing.coachId,
+    stripeCustomerId: existing.stripeCustomerId,
+    stripeSubscriptionId: subscriptionId,
+    stripePriceId: existing.stripePriceId,
+    status: outcome === "paid" ? "active" : "past_due",
+    eventId,
+  });
+
+  console.log(
+    `[Stripe Webhook] Coach ${existing.coachId} invoice ${outcome} — status now ${outcome === "paid" ? "active" : "past_due"}`,
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 // GAS PERSISTENCE HELPER
@@ -530,59 +667,106 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 5. Normalize and log
+  // 5. Idempotency gate — checked before ANY side effect. Stripe redelivers
+  // on any non-2xx response or timeout as routine production behavior, not
+  // an edge case (see docs/catalyst-os-scale-readiness-audit.md finding #6,
+  // which flagged this exact gap — this closes it for every event type
+  // handled below, both the existing client-payment path and the coach-
+  // subscription path). Zero rows returned means this event ID was already
+  // processed; ack Stripe and skip straight to persistence-logging.
+  const db = getDb();
+  const idempotencyResult = await db
+    .insert(processedStripeEvents)
+    .values({ stripeEventId: event.id, eventType: event.type })
+    .onConflictDoNothing({ target: processedStripeEvents.stripeEventId })
+    .returning({ stripeEventId: processedStripeEvents.stripeEventId });
+
+  const alreadyProcessed = idempotencyResult.length === 0;
+  if (alreadyProcessed) {
+    console.log(`[Stripe Webhook] Duplicate event ignored: ${event.id} (${event.type})`);
+    return NextResponse.json({ received: true, duplicate: true });
+  }
+
+  // 6. Normalize and log
   const normalized = normalizeStripeEvent(event);
   console.log(
     `[Stripe Webhook] ${event.type} — eventId: ${event.id}`,
     "\n  normalized:", JSON.stringify(normalized, null, 2),
   );
 
-  // 6. Handle each event type
+  // 7. Handle each event type
   switch (event.type as (typeof HANDLED_EVENTS)[number] | string) {
 
-    case "checkout.session.completed":
+    case "checkout.session.completed": {
+      // Coach-plan checkout classification is deliberately not wired here:
+      // checkout.session.completed does not carry a price ID without an
+      // extra expanded API call, and no checkout-session-creation route
+      // exists yet in this codebase to test against (self-serve coach
+      // signup is Phase 5, explicitly out of scope for this pass). This
+      // stays the existing client-payment path unchanged.
+      //
       // Sprint 3B.1: Send welcome email to client + admin notification.
       // Both sends are non-fatal — the webhook ack is never blocked by email.
-      //
-      // TODO (idempotency): Gate on GAS duplicate check (body.duplicate from
-      // persistToGas) or a persistent eventId store before re-queuing emails.
-      // For now, Stripe's own retry deduplication is the primary safeguard.
       //
       // TODO (Phase 3): Look up lead by customerEmail, advance pipeline
       // stage to "Paid", create a "Send Onboarding Link" task.
       await handleNewEnrollment(normalized);
       break;
+    }
 
     case "customer.subscription.created":
-      // TODO (Phase 3): Set Lead.stripeStatus = "active", set nextBilling
-      // from current_period_end, set enrolledDate.
-      console.log("[Stripe Webhook] subscription.created — TODO: activate lead");
+    case "customer.subscription.updated": {
+      const sub = event.data.object as Stripe.Subscription;
+      const priceId = sub.items?.data?.[0]?.price?.id ?? null;
+      if (isCoachPlanPrice(priceId)) {
+        await handleCoachSubscriptionUpsert(sub, event.id);
+      } else {
+        // TODO (Phase 3): Set Lead.stripeStatus = "active", set nextBilling
+        // from current_period_end, set enrolledDate.
+        console.log(`[Stripe Webhook] ${event.type} — TODO: sync client lead`);
+      }
       break;
+    }
 
-    case "customer.subscription.updated":
-      // TODO (Phase 3): Sync status, plan, and billing date changes.
-      // Handle cancellation_at_period_end → warn but don't cancel yet.
-      console.log("[Stripe Webhook] subscription.updated — TODO: sync changes");
+    case "customer.subscription.deleted": {
+      const sub = event.data.object as Stripe.Subscription;
+      const priceId = sub.items?.data?.[0]?.price?.id ?? null;
+      if (isCoachPlanPrice(priceId)) {
+        await handleCoachSubscriptionUpsert(sub, event.id, "cancelled");
+      } else {
+        // TODO (Phase 3): Set Lead.stripeStatus = "cancelled",
+        // advance pipeline to "Cancelled", create a win-back task.
+        console.log("[Stripe Webhook] subscription.deleted — TODO: mark client lead cancelled");
+      }
       break;
+    }
 
-    case "customer.subscription.deleted":
-      // TODO (Phase 3): Set Lead.stripeStatus = "cancelled",
-      // advance pipeline to "Cancelled", create a win-back task.
-      console.log("[Stripe Webhook] subscription.deleted — TODO: mark cancelled");
+    case "invoice.paid": {
+      const inv = event.data.object as Stripe.Invoice;
+      const priceId = strOrNullLocal(inv.lines?.data?.[0]?.pricing?.price_details?.price);
+      if (isCoachPlanPrice(priceId)) {
+        await handleCoachInvoiceEvent(inv, event.id, "paid");
+      } else {
+        // TODO (Phase 3): Confirm MRR for this billing period.
+        // Clear any "past_due" flag. Log payment timestamp.
+        console.log("[Stripe Webhook] invoice.paid — TODO: confirm client MRR");
+      }
       break;
+    }
 
-    case "invoice.paid":
-      // TODO (Phase 3): Confirm MRR for this billing period.
-      // Clear any "past_due" flag. Log payment timestamp.
-      console.log("[Stripe Webhook] invoice.paid — TODO: confirm MRR");
+    case "invoice.payment_failed": {
+      const inv = event.data.object as Stripe.Invoice;
+      const priceId = strOrNullLocal(inv.lines?.data?.[0]?.pricing?.price_details?.price);
+      if (isCoachPlanPrice(priceId)) {
+        await handleCoachInvoiceEvent(inv, event.id, "payment_failed");
+      } else {
+        // TODO (Phase 3): Set Lead.stripeStatus = "past_due".
+        // Create an urgent "Payment Issue" task in the admin dashboard.
+        // Consider: trigger retry-payment email via Stripe's Smart Retries.
+        console.log("[Stripe Webhook] invoice.payment_failed — TODO: flag client lead past_due");
+      }
       break;
-
-    case "invoice.payment_failed":
-      // TODO (Phase 3): Set Lead.stripeStatus = "past_due".
-      // Create an urgent "Payment Issue" task in the admin dashboard.
-      // Consider: trigger retry-payment email via Stripe's Smart Retries.
-      console.log("[Stripe Webhook] invoice.payment_failed — TODO: flag past_due");
-      break;
+    }
 
     default:
       // Log non-handled events without error — Stripe sends many event types
@@ -590,7 +774,7 @@ export async function POST(req: NextRequest) {
       break;
   }
 
-  // 7. Persist to Google Sheets via GAS (non-blocking, non-fatal)
+  // 8. Persist to Google Sheets via GAS (non-blocking, non-fatal)
   const gasUrl = process.env.STRIPE_EVENTS_GAS_URL;
   if (gasUrl) {
     await persistToGas(gasUrl, toGasPayload(normalized));

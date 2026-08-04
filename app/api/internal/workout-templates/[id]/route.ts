@@ -5,7 +5,11 @@ import {
   deleteWorkoutTemplate,
 } from "@/lib/db/workout-template-service";
 import type { ExperienceLevel, TemplateStatus } from "@/lib/db/schema";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import {
+  requireCoachOrAdmin,
+  authorizeCoachWorkoutTemplateView,
+  authorizeCoachWorkoutTemplateMutation,
+} from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +19,8 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeCoachWorkoutTemplateView(guard.dbUser, id);
+  if (deny) return deny;
   try {
     const content = await getBlueprintContent(id);
     if (!content) {
@@ -29,10 +35,16 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   }
 }
 
+// Also the publish/unpublish entry point for blueprints — status is a
+// plain field on this same update, guarded the same as every other
+// mutation (owner or admin only, regardless of the template's current
+// published state).
 export async function PUT(req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeCoachWorkoutTemplateMutation(guard.dbUser, id);
+  if (deny) return deny;
   try {
     const body = await req.json() as {
       name?: string;
@@ -76,6 +88,8 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeCoachWorkoutTemplateMutation(guard.dbUser, id);
+  if (deny) return deny;
   try {
     await deleteWorkoutTemplate(id);
     return NextResponse.json({ ok: true });

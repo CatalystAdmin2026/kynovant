@@ -187,6 +187,39 @@ export function packageFromPriceId(priceId: string | null): string {
 }
 
 // ─────────────────────────────────────────────────────────────
+// COACH-PLAN PRICE CLASSIFICATION
+//
+// Distinguishes a Kynovant coach-platform-seat Price ID from a
+// Catalyst Elite end-client coaching-package Price ID, so the same
+// webhook endpoint can route subscription/invoice events to the
+// correct handler. Deliberately env-driven, not hardcoded — no real
+// Stripe Price ID has been created for the coach plan yet (pricing
+// model is still an open product decision), so this set is empty
+// until STRIPE_COACH_PLAN_PRICE_IDS is configured. Until then, every
+// event is classified as the existing client-payment path, which is
+// exactly current behavior — zero risk of misclassifying a real event.
+//
+// Configure as a comma-separated list of price_... IDs:
+//   STRIPE_COACH_PLAN_PRICE_IDS=price_abc,price_def
+// ─────────────────────────────────────────────────────────────
+
+function coachPlanPriceIds(): Set<string> {
+  const raw = process.env.STRIPE_COACH_PLAN_PRICE_IDS ?? "";
+  return new Set(
+    raw
+      .split(",")
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0),
+  );
+}
+
+/** True only if priceId is explicitly configured via STRIPE_COACH_PLAN_PRICE_IDS. */
+export function isCoachPlanPrice(priceId: string | null): boolean {
+  if (!priceId) return false;
+  return coachPlanPriceIds().has(priceId);
+}
+
+// ─────────────────────────────────────────────────────────────
 // GAS PAYLOAD
 // Flat object sent to the Stripe Events GAS script (doPost).
 // Matches the column schema in scripts/stripe-events-backend.gs.

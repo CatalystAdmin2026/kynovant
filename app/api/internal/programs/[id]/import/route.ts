@@ -1,6 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { importProgramSpec, type ImportProgramSpecInput } from "@/lib/db/program-builder-service";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import {
+  requireCoachOrAdmin,
+  authorizeCoachProgramMutation,
+  resolveTenantScope,
+} from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +35,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeCoachProgramMutation(guard.dbUser, id);
+  if (deny) return deny;
   try {
     const body = await req.json() as Partial<ImportProgramSpecInput>;
 
@@ -41,10 +47,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       );
     }
 
-    const result = await importProgramSpec(id, {
-      clearExisting: body.clearExisting !== false, // default true
-      weeks: body.weeks,
-    });
+    const { coachId } = resolveTenantScope(guard.dbUser);
+    const result = await importProgramSpec(
+      id,
+      {
+        clearExisting: body.clearExisting !== false, // default true
+        weeks: body.weeks,
+      },
+      coachId,
+    );
 
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {

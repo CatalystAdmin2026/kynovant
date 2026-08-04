@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { copyProgramWeek } from "@/lib/db/program-builder-service";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, authorizeCoachProgramWeekMutation } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,8 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { weekId } = await params;
+  const deny = await authorizeCoachProgramWeekMutation(guard.dbUser, weekId);
+  if (deny) return deny;
   try {
     const week = await copyProgramWeek(weekId);
     return NextResponse.json({ ok: true, week }, { status: 201 });

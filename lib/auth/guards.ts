@@ -24,12 +24,14 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { redirect } from "next/navigation";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { getDb } from "@/lib/db/client";
-import { users, coachingEnrollments } from "@/lib/db/schema";
-import { workoutSessions } from "@/lib/db/schema-program";
+import { users, coachingEnrollments, programTemplates, workoutTemplates } from "@/lib/db/schema";
+import { workoutSessions, programWeeks } from "@/lib/db/schema-program";
 import { weeklyCheckIns } from "@/lib/db/schema-check-in";
+import { workoutTemplateSections, workoutTemplateExercises } from "@/lib/db/schema-exercise";
+import { getCoachEntitlement, type CoachEntitlement } from "@/lib/db/coach-subscription-service";
 import type { User } from "@supabase/supabase-js";
 import type { PublicUser } from "@/lib/supabase/session";
 
@@ -115,6 +117,31 @@ export async function requireAuthenticatedUser(): Promise<GuardResult> {
   return { ok: true, authUser: resolved.authUser, dbUser: resolved.dbUser };
 }
 
+// ─────────────────────────────────────────────────────────────
+// ENTITLEMENT GATE
+//
+// Extracted as its own dbUser-taking function (rather than inlined in
+// the guards below) for the same reason assertCoachOwnsClient etc. are:
+// it's directly unit-testable without a Next.js request context —
+// resolveSession() needs cookies()/next-headers, this doesn't.
+//
+// Admin (and any non-coach role) always passes — bypass is structural:
+// getCoachEntitlement() is never even called for them, not just
+// ignored. A coach passes only if their current billing status allows
+// access per getCoachEntitlement()'s status behavior table.
+// ─────────────────────────────────────────────────────────────
+
+export type EntitlementResult =
+  | { ok: true }
+  | { ok: false; entitlement: CoachEntitlement };
+
+export async function assertCoachEntitled(dbUser: PublicUser): Promise<EntitlementResult> {
+  if (dbUser.role !== "coach") return { ok: true };
+  const entitlement = await getCoachEntitlement(dbUser.id);
+  if (!entitlement.allowed) return { ok: false, entitlement };
+  return { ok: true };
+}
+
 export async function requireCoachOrAdmin(): Promise<GuardResult> {
   const resolved = await resolveSession();
   if (!resolved.ok) {
@@ -130,6 +157,20 @@ export async function requireCoachOrAdmin(): Promise<GuardResult> {
     return {
       ok: false,
       response: NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 }),
+    };
+  }
+  const entitlementResult = await assertCoachEntitled(resolved.dbUser);
+  if (!entitlementResult.ok) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          ok: false,
+          error: "subscription_inactive",
+          status: entitlementResult.entitlement.status,
+        },
+        { status: 403 },
+      ),
     };
   }
   return { ok: true, authUser: resolved.authUser, dbUser: resolved.dbUser };
@@ -168,6 +209,30 @@ export async function requireCoachOrAdminPage(): Promise<AuthedUser> {
     redirect("/login?error=access_denied");
   }
   if (resolved.dbUser.role !== "coach" && resolved.dbUser.role !== "admin") {
+    redirect("/login?error=access_denied");
+  }
+  // Entitlement gate — admin never reaches this branch (structural
+  // bypass, same as the API guard above). A locked-out coach lands on
+  // a dedicated screen, not the generic "you're not logged in" redirect.
+  //
+  // /account-status deliberately lives OUTSIDE app/hq/** — app/hq/layout.tsx
+  // wraps every nested HQ route with this same requireCoachOrAdminPage()
+  // guard, so a locked screen placed under /hq would redirect to itself
+  // on every load. Top-level route, no shared layout, no loop.
+  const entitlementResult = await assertCoachEntitled(resolved.dbUser);
+  if (!entitlementResult.ok) {
+    redirect("/account-status");
+  }
+  return { authUser: resolved.authUser, dbUser: resolved.dbUser };
+}
+
+// Minimal page guard: authenticated + not suspended/archived, no role
+// or entitlement check at all. Exists solely for /account-status —
+// that page cannot be gated by requireCoachOrAdminPage() without
+// creating a redirect loop back to itself for a locked-out coach.
+export async function requireAuthenticatedPage(): Promise<AuthedUser> {
+  const resolved = await resolveSession();
+  if (!resolved.ok) {
     redirect("/login?error=access_denied");
   }
   return { authUser: resolved.authUser, dbUser: resolved.dbUser };
@@ -333,4 +398,294 @@ export async function assertCoachOwnsCheckIn(
   const owns = await coachOwnsClient(scope.coachId, clientId);
   if (!owns) return { ok: false, error: "Not found" };
   return { ok: true, scope };
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROGRAM & BLUEPRINT OWNERSHIP
+//
+// program_weeks/program_week_days carry no coachId of their own —
+// ownership resolves one hop up via programTemplates.createdBy.
+// workout_template_sections/workout_template_exercises resolve the
+// same way via workoutTemplates.createdBy. Same "resolve parent,
+// then defer" shape as assertCoachOwnsCheckIn above.
+//
+// Approved visibility model (product decision, locked):
+//   - MUTATION (update/delete/add sub-resource) is always owner-or-
+//     admin only, regardless of the template's status.
+//   - VIEW/CLONE additionally admits any coach when the template is
+//     published (status: "active") — a shared platform/admin library
+//     coaches may read and clone from, but never edit or delete.
+//   - A coach's own non-published (draft/archived) templates remain
+//     visible only to that coach and admin.
+// ─────────────────────────────────────────────────────────────
+
+// Strict ownership — used for every MUTATION check. createdBy === null
+// (admin-authored/seeded) never matches a coachId here; only admin's
+// own bypass (scope.coachId === null in the assert* wrappers) can
+// mutate an admin-owned or ownerless template.
+export async function coachOwnsProgramTemplate(
+  coachId: string,
+  programTemplateId: string,
+): Promise<boolean> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: programTemplates.id })
+    .from(programTemplates)
+    .where(
+      and(
+        eq(programTemplates.id, programTemplateId),
+        eq(programTemplates.createdBy, coachId),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+export async function coachOwnsWorkoutTemplate(
+  coachId: string,
+  workoutTemplateId: string,
+): Promise<boolean> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: workoutTemplates.id })
+    .from(workoutTemplates)
+    .where(
+      and(
+        eq(workoutTemplates.id, workoutTemplateId),
+        eq(workoutTemplates.createdBy, coachId),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+// View/clone visibility — owner OR a published (status: "active")
+// template authored by anyone. Used for read access and as the clone
+// source check; never used to authorize a write.
+export async function coachCanViewProgramTemplate(
+  coachId: string,
+  programTemplateId: string,
+): Promise<boolean> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: programTemplates.id })
+    .from(programTemplates)
+    .where(
+      and(
+        eq(programTemplates.id, programTemplateId),
+        or(
+          eq(programTemplates.createdBy, coachId),
+          eq(programTemplates.status, "active"),
+        ),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+export async function coachCanViewWorkoutTemplate(
+  coachId: string,
+  workoutTemplateId: string,
+): Promise<boolean> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: workoutTemplates.id })
+    .from(workoutTemplates)
+    .where(
+      and(
+        eq(workoutTemplates.id, workoutTemplateId),
+        or(
+          eq(workoutTemplates.createdBy, coachId),
+          eq(workoutTemplates.status, "active"),
+        ),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+export async function assertCoachOwnsProgramTemplate(
+  dbUser: PublicUser,
+  programTemplateId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+  const owns = await coachOwnsProgramTemplate(scope.coachId, programTemplateId);
+  if (!owns) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+export async function assertCoachCanViewProgramTemplate(
+  dbUser: PublicUser,
+  programTemplateId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+  const canView = await coachCanViewProgramTemplate(scope.coachId, programTemplateId);
+  if (!canView) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+export async function assertCoachOwnsWorkoutTemplate(
+  dbUser: PublicUser,
+  workoutTemplateId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+  const owns = await coachOwnsWorkoutTemplate(scope.coachId, workoutTemplateId);
+  if (!owns) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+export async function assertCoachCanViewWorkoutTemplate(
+  dbUser: PublicUser,
+  workoutTemplateId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+  const canView = await coachCanViewWorkoutTemplate(scope.coachId, workoutTemplateId);
+  if (!canView) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+// Resolves weekId -> programTemplateId, then defers to the strict
+// (mutation) ownership check. A week is never independently owned —
+// it inherits its parent template's ownership entirely.
+export async function assertCoachOwnsProgramWeek(
+  dbUser: PublicUser,
+  weekId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+
+  const db = getDb();
+  const rows = await db
+    .select({ programTemplateId: programWeeks.programTemplateId })
+    .from(programWeeks)
+    .where(eq(programWeeks.id, weekId))
+    .limit(1);
+
+  const programTemplateId = rows[0]?.programTemplateId;
+  if (!programTemplateId) return { ok: false, error: "Not found" };
+
+  const owns = await coachOwnsProgramTemplate(scope.coachId, programTemplateId);
+  if (!owns) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+// Resolves sectionId -> workoutTemplateId, then defers to the strict
+// (mutation) ownership check.
+export async function assertCoachOwnsWorkoutSection(
+  dbUser: PublicUser,
+  sectionId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+
+  const db = getDb();
+  const rows = await db
+    .select({ workoutTemplateId: workoutTemplateSections.workoutTemplateId })
+    .from(workoutTemplateSections)
+    .where(eq(workoutTemplateSections.id, sectionId))
+    .limit(1);
+
+  const workoutTemplateId = rows[0]?.workoutTemplateId;
+  if (!workoutTemplateId) return { ok: false, error: "Not found" };
+
+  const owns = await coachOwnsWorkoutTemplate(scope.coachId, workoutTemplateId);
+  if (!owns) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+// Resolves prescriptionId -> workoutTemplateId, then defers to the
+// strict (mutation) ownership check.
+export async function assertCoachOwnsPrescription(
+  dbUser: PublicUser,
+  prescriptionId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+
+  const db = getDb();
+  const rows = await db
+    .select({ workoutTemplateId: workoutTemplateExercises.workoutTemplateId })
+    .from(workoutTemplateExercises)
+    .where(eq(workoutTemplateExercises.id, prescriptionId))
+    .limit(1);
+
+  const workoutTemplateId = rows[0]?.workoutTemplateId;
+  if (!workoutTemplateId) return { ok: false, error: "Not found" };
+
+  const owns = await coachOwnsWorkoutTemplate(scope.coachId, workoutTemplateId);
+  if (!owns) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROGRAM & BLUEPRINT — API-ROUTE FLAVORS
+//
+// Same NextResponse-or-null shape as authorizeCoachClientAccess, so
+// route handlers use the identical `if (deny) return deny;` pattern.
+// ─────────────────────────────────────────────────────────────
+
+function denyNotFound(): NextResponse {
+  return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
+}
+
+export async function authorizeCoachProgramMutation(
+  dbUser: PublicUser,
+  programTemplateId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachOwnsProgramTemplate(dbUser, programTemplateId);
+  return result.ok ? null : denyNotFound();
+}
+
+// Used for GET (read) and the clone source — admits published
+// templates authored by anyone, per the shared-library decision.
+export async function authorizeCoachProgramView(
+  dbUser: PublicUser,
+  programTemplateId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachCanViewProgramTemplate(dbUser, programTemplateId);
+  return result.ok ? null : denyNotFound();
+}
+
+export async function authorizeCoachWorkoutTemplateMutation(
+  dbUser: PublicUser,
+  workoutTemplateId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachOwnsWorkoutTemplate(dbUser, workoutTemplateId);
+  return result.ok ? null : denyNotFound();
+}
+
+export async function authorizeCoachWorkoutTemplateView(
+  dbUser: PublicUser,
+  workoutTemplateId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachCanViewWorkoutTemplate(dbUser, workoutTemplateId);
+  return result.ok ? null : denyNotFound();
+}
+
+export async function authorizeCoachProgramWeekMutation(
+  dbUser: PublicUser,
+  weekId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachOwnsProgramWeek(dbUser, weekId);
+  return result.ok ? null : denyNotFound();
+}
+
+export async function authorizeCoachWorkoutSectionMutation(
+  dbUser: PublicUser,
+  sectionId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachOwnsWorkoutSection(dbUser, sectionId);
+  return result.ok ? null : denyNotFound();
+}
+
+export async function authorizeCoachPrescriptionMutation(
+  dbUser: PublicUser,
+  prescriptionId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachOwnsPrescription(dbUser, prescriptionId);
+  return result.ok ? null : denyNotFound();
 }

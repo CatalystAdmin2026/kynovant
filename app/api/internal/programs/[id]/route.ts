@@ -5,7 +5,11 @@ import {
   deleteProgramTemplate,
   publishProgram,
 } from "@/lib/db/program-builder-service";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import {
+  requireCoachOrAdmin,
+  authorizeCoachProgramView,
+  authorizeCoachProgramMutation,
+} from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +19,8 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeCoachProgramView(guard.dbUser, id);
+  if (deny) return deny;
   try {
     const content = await getProgramContent(id);
     if (!content) {
@@ -33,6 +39,8 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeCoachProgramMutation(guard.dbUser, id);
+  if (deny) return deny;
   try {
     const body = await req.json() as {
       publish?: boolean;
@@ -79,6 +87,8 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeCoachProgramMutation(guard.dbUser, id);
+  if (deny) return deny;
   try {
     await deleteProgramTemplate(id);
     return NextResponse.json({ ok: true });

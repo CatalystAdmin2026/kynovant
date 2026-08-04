@@ -5,7 +5,11 @@ import {
   setDayWorkout,
   clearDayWorkout,
 } from "@/lib/db/program-builder-service";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import {
+  requireCoachOrAdmin,
+  authorizeCoachProgramWeekMutation,
+  resolveTenantScope,
+} from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +23,8 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { weekId } = await params;
+  const deny = await authorizeCoachProgramWeekMutation(guard.dbUser, weekId);
+  if (deny) return deny;
   try {
     const body = await req.json() as {
       label?: string;
@@ -33,12 +39,14 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
         await clearDayWorkout(weekId, body.dayOfWeek);
         return NextResponse.json({ ok: true });
       }
+      const { coachId } = resolveTenantScope(guard.dbUser);
       const day = await setDayWorkout(
         weekId,
         body.dayOfWeek,
         body.workoutTemplateId ?? null,
         body.label,
         body.notes,
+        coachId,
       );
       return NextResponse.json({ ok: true, day });
     }
@@ -60,6 +68,8 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { weekId } = await params;
+  const deny = await authorizeCoachProgramWeekMutation(guard.dbUser, weekId);
+  if (deny) return deny;
   try {
     await deleteProgramWeek(weekId);
     return NextResponse.json({ ok: true });

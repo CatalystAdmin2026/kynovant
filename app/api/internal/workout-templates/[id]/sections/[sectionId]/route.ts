@@ -5,7 +5,7 @@ import {
   moveSection,
 } from "@/lib/db/workout-template-service";
 import type { WorkoutSectionType } from "@/lib/db/schema-exercise";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, authorizeCoachWorkoutSectionMutation } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,8 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { sectionId } = await params;
+  const deny = await authorizeCoachWorkoutSectionMutation(guard.dbUser, sectionId);
+  if (deny) return deny;
   try {
     const body = await req.json() as {
       name?: string;
@@ -48,6 +50,8 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { sectionId } = await params;
+  const deny = await authorizeCoachWorkoutSectionMutation(guard.dbUser, sectionId);
+  if (deny) return deny;
   try {
     await deleteSection(sectionId);
     return NextResponse.json({ ok: true });
