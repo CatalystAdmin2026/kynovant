@@ -19,16 +19,28 @@
 //     errorCode "not_configured" rather than guessing a default model.
 //
 // AI SDK's generateObject() enforces schema-conforming structured output
-// at the provider boundary — the zod schema passed to it is the same
-// GeneratedProgramDraftSchema from contracts.ts used everywhere else, so
-// "structured JSON output" and "strict schema rejection" are the same
-// mechanism, not two independent implementations to keep in sync.
+// at the provider boundary — the zod schema passed to it is
+// ModelProgramDraftSchema (contracts.ts), NOT GeneratedProgramDraftSchema.
+// The model-output schema has no exerciseId field on any prescription at
+// all, so the model is structurally incapable of being asked to invent
+// or infer a database id — it can only ever supply exerciseName.
+//
+// This file is provider-only: it returns a ModelProgramDraft, the raw
+// (unresolved) shape the model produced. Turning that into a real,
+// persisted GeneratedProgramDraft — matching exerciseName against the
+// Exercise Library — is exercise-resolution.ts's job, composed in the
+// orchestration/action layer (app/hq/programs/generate/actions.ts), not
+// here. Keeping resolution out of this file means every call site (full
+// generation, regenerate-day) is guaranteed to run the exact same
+// resolution path, since there's no way to get a GeneratedProgramDraft
+// without going through it.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
 import { generateObject } from "ai";
 import {
-  GeneratedProgramDraftSchema,
+  ModelProgramDraftSchema,
+  type ModelProgramDraft,
   type GeneratedProgramDraft,
   type ProgramGenerationBrief,
 } from "./contracts";
@@ -46,7 +58,7 @@ export type GenerationErrorCode =
 
 export interface GenerationSuccess {
   ok: true;
-  draft: GeneratedProgramDraft;
+  draft: ModelProgramDraft;
   provider: string;
   model: string;
 }
@@ -103,7 +115,7 @@ async function callRealProvider(
   try {
     const result = await generateObject({
       model,
-      schema: GeneratedProgramDraftSchema,
+      schema: ModelProgramDraftSchema,
       prompt,
       abortSignal: controller.signal,
     });

@@ -63,6 +63,10 @@ export function replaceExercise(
     ...located.section.prescriptions[idx],
     exerciseId: params.exerciseId,
     exerciseName: params.exerciseName,
+    // Clears any stale ambiguous/unresolved resolution record — the
+    // coach has now manually supplied a real id, which is a stronger
+    // signal than anything exercise-resolution.ts could have produced.
+    exerciseResolution: undefined,
   };
   return { ok: true, draft: next, before, after: located.section.prescriptions[idx] };
 }

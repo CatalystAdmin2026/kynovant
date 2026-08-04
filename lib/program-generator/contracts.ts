@@ -10,14 +10,26 @@
 // locked safety rules #4/#5: only real Exercise Library IDs, never
 // invented enum values.
 //
-// Two schema trees:
+// Three schema trees:
 //   ProgramGenerationBriefSchema — coach input, validated before
 //     generation starts.
-//   GeneratedProgramDraftSchema  — model output, validated after
-//     generation completes and after every coach edit. Every week/day/
-//     section/prescription carries a stable, generator-assigned `id`
-//     (a plain string, not a DB id) so edit operations can address a
-//     specific node inside draftJson without it being a persisted row.
+//   Model*Schema (ModelProgramDraftSchema etc.) — exactly what the LLM
+//     is asked to produce via generateObject(). Prescriptions carry
+//     exerciseName only — never exerciseId. The model is never asked
+//     to know, invent, or infer a database UUID; see
+//     lib/program-generator/exercise-resolution.ts, the only place a
+//     name is ever turned into a real Exercise Library id.
+//   Generated*Schema (GeneratedProgramDraftSchema etc.) — the resolved,
+//     persisted draft. Structurally the same tree, but each
+//     prescription's exerciseId is nullable: non-null only once
+//     exercise-resolution.ts has matched it to a real, unambiguous
+//     library row. A null exerciseId always carries an
+//     `exerciseResolution` record (outcome + candidates) explaining why,
+//     which validation.ts turns into an actionable, approval-blocking
+//     finding. Every week/day/section/prescription also carries a
+//     stable, generator-assigned `id` (a plain string, not a DB id) so
+//     edit operations can address a specific node inside draftJson
+//     without it being a persisted row.
 //
 // Field-level validation only. Cross-referential checks that require a
 // database lookup (exercise exists/active, exclusion enforcement,
@@ -75,6 +87,38 @@ export const EquipmentAccessSchema = z.enum([
 ]);
 
 const uuidSchema = z.string().uuid();
+
+// ─────────────────────────────────────────────────────────────
+// EXERCISE RESOLUTION OUTCOME — see exercise-resolution.ts for the
+// matching logic itself. Defined here (not there) because it's part of
+// the persisted prescription's schema/contract, not an implementation
+// detail of the resolver.
+// ─────────────────────────────────────────────────────────────
+
+export const ExerciseResolutionOutcomeSchema = z.enum([
+  "exact",
+  "alternate_name",
+  "strong_match",
+  "ambiguous",
+  "unresolved",
+]);
+export type ExerciseResolutionOutcome = z.infer<typeof ExerciseResolutionOutcomeSchema>;
+
+export const ExerciseResolutionCandidateSchema = z.object({
+  id: uuidSchema,
+  name: z.string(),
+});
+export type ExerciseResolutionCandidate = z.infer<typeof ExerciseResolutionCandidateSchema>;
+
+// Attached to a prescription only by the resolver (never by the model —
+// omitted entirely from the Model*Schema tree below). Always present
+// when exerciseId is null; may be present when non-null too, purely as
+// an audit trail of how the match was made.
+export const ExerciseResolutionRecordSchema = z.object({
+  outcome: ExerciseResolutionOutcomeSchema,
+  candidates: z.array(ExerciseResolutionCandidateSchema).max(10).default([]),
+});
+export type ExerciseResolutionRecord = z.infer<typeof ExerciseResolutionRecordSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // PROGRAM BRIEF — coach input (docs/ai-program-generator-ux-spec.md §15.2,
@@ -137,11 +181,16 @@ export type ProgramGenerationBrief = z.infer<typeof ProgramGenerationBriefSchema
 // (ZodEffects) does not.
 export const GeneratedPrescriptionDraftObjectSchema = z.object({
   id: z.string().min(1),
-  exerciseId: uuidSchema,
-  // Echoed for human readability / audit only. Never authoritative —
-  // the real name is always re-derived from exerciseId at validation
-  // and approval time, so a mismatched echo can never corrupt data,
-  // only look stale in the UI until the next validation pass.
+  // Null until exercise-resolution.ts has matched exerciseName to a
+  // real, unambiguous, active Exercise Library row. Never a placeholder
+  // UUID (never the nil UUID, never fabricated) — null is the only
+  // representation of "not yet resolved." validation.ts blocks approval
+  // on any null exerciseId; the coach clears it via the existing
+  // Replace Exercise edit action, which always writes a real id.
+  exerciseId: uuidSchema.nullable(),
+  // The model's/coach's exercise name. Authoritative source for
+  // resolution; echoed here for display even after resolution succeeds
+  // so the review UI never depends on a second round-trip.
   exerciseName: z.string().min(1).max(200),
   orderIndex: z.number().int().min(0),
 
@@ -159,6 +208,8 @@ export const GeneratedPrescriptionDraftObjectSchema = z.object({
   coachNotes: z.string().max(1000).optional(),
   isRequired: z.boolean().default(true),
   substitutionPolicy: SubstitutionPolicySchema.optional(),
+  // Set only by exercise-resolution.ts. See ExerciseResolutionRecordSchema.
+  exerciseResolution: ExerciseResolutionRecordSchema.optional(),
 });
 
 export const GeneratedPrescriptionDraftSchema = GeneratedPrescriptionDraftObjectSchema.refine(
@@ -267,6 +318,106 @@ export type GeneratedWeekDraft = z.infer<typeof GeneratedWeekDraftSchema>;
 export type GeneratedProgramDraft = z.infer<typeof GeneratedProgramDraftSchema>;
 
 // ─────────────────────────────────────────────────────────────
+// MODEL OUTPUT DRAFT — exactly what generateObject() asks the LLM to
+// produce (lib/program-generator/provider.ts). Structurally identical
+// to the Generated*Schema tree above, except prescriptions carry
+// exerciseName only. The model is never given a schema field it could
+// fill with a fabricated or nil-UUID id — the field simply isn't part
+// of this contract, which is what makes the earlier zero-UUID-for-
+// every-exercise failure mode structurally impossible rather than
+// merely discouraged in prompt text.
+//
+// lib/program-generator/exercise-resolution.ts is the sole place a
+// ModelProgramDraft is turned into a GeneratedProgramDraft.
+// ─────────────────────────────────────────────────────────────
+
+export const ModelPrescriptionObjectSchema = GeneratedPrescriptionDraftObjectSchema.omit({
+  exerciseId: true,
+  exerciseResolution: true,
+});
+
+export const ModelPrescriptionSchema = ModelPrescriptionObjectSchema.refine(
+  (p) => p.repsMin == null || p.repsMax == null || p.repsMin <= p.repsMax,
+  { message: "repsMin must be <= repsMax.", path: ["repsMax"] },
+);
+
+export const ModelBlueprintSectionSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1).max(200),
+  sectionType: WorkoutSectionTypeSchema,
+  orderIndex: z.number().int().min(0),
+  estimatedMinutes: z.number().int().min(1).max(300).optional(),
+  notes: z.string().max(1000).optional(),
+  prescriptions: z.array(ModelPrescriptionSchema).min(1).max(30),
+}).refine(
+  (section) => {
+    const orders = section.prescriptions.map((p) => p.orderIndex);
+    return new Set(orders).size === orders.length;
+  },
+  { message: "Prescription orderIndex values must be unique within a section.", path: ["prescriptions"] },
+);
+
+export const ModelBlueprintSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1).max(200),
+  description: z.string().max(2000).optional(),
+  primaryFocus: z.string().max(200).optional(),
+  estimatedDurationMinutes: z.number().int().min(1).max(600).optional(),
+  sections: z.array(ModelBlueprintSectionSchema).min(1).max(12),
+}).refine(
+  (bp) => {
+    const orders = bp.sections.map((s) => s.orderIndex);
+    return new Set(orders).size === orders.length;
+  },
+  { message: "Section orderIndex values must be unique within a Blueprint.", path: ["sections"] },
+);
+
+export const ModelDayDraftSchema = z.object({
+  id: z.string().min(1),
+  dayOfWeek: z.number().int().min(0).max(6),
+  label: z.string().max(100).optional(),
+  notes: z.string().max(1000).optional(),
+  workout: ModelBlueprintSchema.nullable(),
+});
+
+export const ModelWeekDraftSchema = z.object({
+  id: z.string().min(1),
+  weekNumber: z.number().int().min(1),
+  label: z.string().max(100).optional(),
+  notes: z.string().max(1000).optional(),
+  days: z.array(ModelDayDraftSchema).min(1).max(7),
+}).refine(
+  (week) => {
+    const dows = week.days.map((d) => d.dayOfWeek);
+    return new Set(dows).size === dows.length;
+  },
+  { message: "dayOfWeek values must be unique within a week.", path: ["days"] },
+);
+
+export const ModelProgramDraftSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(2000).optional(),
+  category: TemplateCategorySchema,
+  experienceLevel: ExperienceLevelSchema,
+  defaultDurationWeeks: z.number().int().min(1).max(16),
+  recommendedDaysPerWeek: z.number().int().min(1).max(7),
+  weeks: z.array(ModelWeekDraftSchema).min(1).max(16),
+}).refine(
+  (program) => {
+    const nums = program.weeks.map((w) => w.weekNumber);
+    return new Set(nums).size === nums.length;
+  },
+  { message: "weekNumber values must be unique within a Program.", path: ["weeks"] },
+);
+
+export type ModelPrescription = z.infer<typeof ModelPrescriptionSchema>;
+export type ModelBlueprintSection = z.infer<typeof ModelBlueprintSectionSchema>;
+export type ModelBlueprint = z.infer<typeof ModelBlueprintSchema>;
+export type ModelDayDraft = z.infer<typeof ModelDayDraftSchema>;
+export type ModelWeekDraft = z.infer<typeof ModelWeekDraftSchema>;
+export type ModelProgramDraft = z.infer<typeof ModelProgramDraftSchema>;
+
+// ─────────────────────────────────────────────────────────────
 // PARSE HELPERS — return a discriminated result instead of throwing,
 // so callers (the provider adapter, edit endpoints) can produce a safe
 // failure state per locked rule "no unknown enum values" / "strict
@@ -289,6 +440,14 @@ export function parseGeneratedProgramDraft(input: unknown): ParseResult<Generate
   const result = GeneratedProgramDraftSchema.safeParse(input);
   if (!result.success) {
     return { ok: false, error: "Generated draft failed schema validation.", issues: result.error.issues };
+  }
+  return { ok: true, data: result.data };
+}
+
+export function parseModelProgramDraft(input: unknown): ParseResult<ModelProgramDraft> {
+  const result = ModelProgramDraftSchema.safeParse(input);
+  if (!result.success) {
+    return { ok: false, error: "Model output draft failed schema validation.", issues: result.error.issues };
   }
   return { ok: true, data: result.data };
 }

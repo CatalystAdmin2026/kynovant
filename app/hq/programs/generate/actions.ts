@@ -46,6 +46,7 @@ import {
   type GeneratedProgramDraft,
 } from "@/lib/program-generator/contracts";
 import { generateProgramDraft, regenerateDayDraft } from "@/lib/program-generator/provider";
+import { resolveProgramDraftExercises } from "@/lib/program-generator/exercise-resolution";
 import { buildClientContextSummary } from "@/lib/program-generator/client-context";
 import { validateGeneratedDraft } from "@/lib/program-generator/validation";
 import { updatePrescription, replaceExercise, reorderExercises, moveWorkoutDay } from "@/lib/program-generator/edit-ops";
@@ -153,9 +154,22 @@ export async function generateProgramDraftAction(input: {
     return { ok: false, error: outcome.errorMessage, data: { draftId: draftRow.id } };
   }
 
+  // Provider returns unresolved model output (exerciseName only, no
+  // exerciseId — see contracts.ts's Model*Schema tree). Resolution
+  // against the real Exercise Library happens exactly once, here, in
+  // the orchestration layer — never inside provider.ts.
+  const resolvedDraft = await resolveProgramDraftExercises(outcome.draft);
+  const reparsed = parseGeneratedProgramDraft(resolvedDraft);
+  if (!reparsed.ok) {
+    await failRun(run.id, reparsed.error);
+    await setDraftStatus(draftRow.id, "failed", { failureReason: reparsed.error });
+    revalidateDraft(draftRow.id);
+    return { ok: false, error: reparsed.error, data: { draftId: draftRow.id } };
+  }
+
   await completeRun(run.id, { provider: outcome.provider, model: outcome.model });
-  await saveDraftContent(draftRow.id, outcome.draft, "ready_for_review");
-  await runAndSaveValidation(draftRow.id, outcome.draft, parsedBrief.data, actor.coachId);
+  await saveDraftContent(draftRow.id, reparsed.data, "ready_for_review");
+  await runAndSaveValidation(draftRow.id, reparsed.data, parsedBrief.data, actor.coachId);
 
   revalidateDraft(draftRow.id);
   return { ok: true, data: { draftId: draftRow.id } };
@@ -350,7 +364,14 @@ export async function regenerateDayAction(params: {
     return { ok: false, error: outcome.errorMessage };
   }
 
-  const reparsed = parseGeneratedProgramDraft(outcome.draft);
+  // Same resolution path as full generation (requirement: regenerate-day
+  // must use the same resolver) — the provider's model-output draft
+  // still has no exerciseId anywhere, even for days it echoed back
+  // unchanged, so every prescription is resolved again here. Exact-name
+  // matches are deterministic, so unchanged exercises reliably resolve
+  // to the same real id they already had.
+  const resolvedDraft = await resolveProgramDraftExercises(outcome.draft);
+  const reparsed = parseGeneratedProgramDraft(resolvedDraft);
   if (!reparsed.ok) {
     await failRun(run.id, reparsed.error);
     return { ok: false, error: `Regeneration produced an invalid draft: ${reparsed.error}` };

@@ -7,33 +7,39 @@
 //
 // This is deliberately NOT a static object with hand-typed exercise
 // UUIDs. A static fixture with invented IDs would violate locked rule
-// #4/#5 ("use only existing canonical Exercise Library IDs") and would
-// trivially fail exercise-existence validation, defeating the entire
-// point of having a fixture — it needs to exercise the full
-// generate → validate → Insights → approve pipeline against real data.
-// Instead, this queries whatever active exercises actually exist in
-// the current database and assembles a small, valid two-day draft from
-// them. If the seeded library doesn't have enough active exercises to
-// build a minimally sane draft, this fails safely (returns null) rather
-// than fabricating anything.
+// #4/#5 ("use only existing canonical Exercise Library IDs"). Instead,
+// this queries whatever active exercises actually exist in the current
+// database and assembles a small, valid two-day draft from their real
+// canonical names.
+//
+// Returns a ModelProgramDraft (name only, no exerciseId) — exactly the
+// same contract the real provider returns — so the fixture exercises
+// the full generate → resolve → validate → Insights → approve pipeline,
+// including exercise-resolution.ts, rather than bypassing it. Using
+// each exercise's own real `name` (not a paraphrase) means resolution
+// deterministically hits the "exact" tier, which is what makes this
+// fixture a reliable, fast, offline stand-in for local dev and tests.
+//
+// If the seeded library doesn't have enough active exercises to build a
+// minimally sane draft, this fails safely (returns null) rather than
+// fabricating anything.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
 import { randomUUID } from "crypto";
 import { searchExercises, type ExerciseListRow } from "@/lib/db/exercise-service";
 import {
-  GeneratedProgramDraftSchema,
-  type GeneratedProgramDraft,
-  type GeneratedBlueprintDraft,
-  type GeneratedPrescriptionDraft,
+  ModelProgramDraftSchema,
+  type ModelProgramDraft,
+  type ModelBlueprint,
+  type ModelPrescription,
 } from "./contracts";
 
 const MIN_EXERCISES_REQUIRED = 4;
 
-function buildPrescription(row: ExerciseListRow, orderIndex: number): GeneratedPrescriptionDraft {
+function buildPrescription(row: ExerciseListRow, orderIndex: number): ModelPrescription {
   return {
     id: randomUUID(),
-    exerciseId: row.id,
     exerciseName: row.name,
     orderIndex,
     sets: 3,
@@ -45,7 +51,7 @@ function buildPrescription(row: ExerciseListRow, orderIndex: number): GeneratedP
   };
 }
 
-function buildBlueprint(label: string, rows: ExerciseListRow[]): GeneratedBlueprintDraft {
+function buildBlueprint(label: string, rows: ExerciseListRow[]): ModelBlueprint {
   return {
     id: randomUUID(),
     name: `${label} — Fixture Session`,
@@ -63,9 +69,10 @@ function buildBlueprint(label: string, rows: ExerciseListRow[]): GeneratedBluepr
 }
 
 // Queries real, currently-active exercises and assembles a two-day,
-// one-week draft from them. Returns null (never throws, never
-// fabricates) if the seeded library can't support a minimal draft.
-export async function buildFixtureProgramDraft(): Promise<GeneratedProgramDraft | null> {
+// one-week model-output draft from their real names. Returns null
+// (never throws, never fabricates) if the seeded library can't support
+// a minimal draft.
+export async function buildFixtureProgramDraft(): Promise<ModelProgramDraft | null> {
   const active = await searchExercises({ statuses: ["active"], limit: 20 });
   if (active.length < MIN_EXERCISES_REQUIRED) return null;
 
@@ -74,7 +81,7 @@ export async function buildFixtureProgramDraft(): Promise<GeneratedProgramDraft 
   const dayBRows = active.slice(half, half + Math.min(4, active.length - half));
   if (dayARows.length < 2 || dayBRows.length < 2) return null;
 
-  const candidate: GeneratedProgramDraft = {
+  const candidate: ModelProgramDraft = {
     name: "Fixture Program Draft",
     description: "Development fixture draft generated from real seeded Exercise Library rows.",
     category: "muscle_growth",
@@ -93,6 +100,6 @@ export async function buildFixtureProgramDraft(): Promise<GeneratedProgramDraft 
     ],
   };
 
-  const parsed = GeneratedProgramDraftSchema.safeParse(candidate);
+  const parsed = ModelProgramDraftSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
 }

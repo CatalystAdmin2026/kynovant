@@ -29,9 +29,10 @@ import {
 } from "../program-generation-service";
 import { validateGeneratedDraft } from "@/lib/program-generator/validation";
 import { approveDraft } from "@/lib/program-generator/approval";
+import { resolveProgramDraftExercises } from "@/lib/program-generator/exercise-resolution";
 import { coachOwnsProgramTemplate, coachOwnsWorkoutTemplate } from "@/lib/auth/guards";
-import { generateProgramDraft } from "@/lib/program-generator/provider";
-import type { GeneratedProgramDraft } from "@/lib/program-generator/contracts";
+import { generateProgramDraft, regenerateDayDraft } from "@/lib/program-generator/provider";
+import type { GeneratedProgramDraft, ModelProgramDraft } from "@/lib/program-generator/contracts";
 import type { ProgramGenerationBrief } from "@/lib/program-generator/contracts";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
 
@@ -46,6 +47,7 @@ let exerciseIds: string[] = [];
 const draftIds: string[] = [];
 const programTemplateIds: string[] = [];
 const workoutTemplateIds: string[] = [];
+const exerciseFixtureIds: string[] = [];
 
 async function createAuthUser(label: string): Promise<string> {
   const adminClient = createAdminClient();
@@ -125,6 +127,43 @@ function buildDraft(exerciseId: string, overrides?: Partial<GeneratedProgramDraf
   };
 }
 
+function buildModelDraft(exerciseName: string): ModelProgramDraft {
+  return {
+    name: `Resolution Integration Test ${randomUUID().slice(0, 8)}`,
+    category: "muscle_growth",
+    experienceLevel: "intermediate",
+    defaultDurationWeeks: 1,
+    recommendedDaysPerWeek: 1,
+    weeks: [
+      {
+        id: randomUUID(),
+        weekNumber: 1,
+        days: [
+          {
+            id: randomUUID(),
+            dayOfWeek: 1,
+            workout: {
+              id: randomUUID(),
+              name: "Full Body A",
+              sections: [
+                {
+                  id: randomUUID(),
+                  name: "Main Work",
+                  sectionType: "main_lift",
+                  orderIndex: 0,
+                  prescriptions: [
+                    { id: randomUUID(), exerciseName, orderIndex: 0, sets: 3, repsMin: 8, repsMax: 12, isRequired: true },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
 const READY_INSIGHTS: DraftValidationResult = {
   status: "ready",
   blockers: [],
@@ -172,6 +211,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (exerciseFixtureIds.length > 0) {
+    await db.delete(exercises).where(inArray(exercises.id, exerciseFixtureIds));
+  }
   if (workoutTemplateIds.length > 0) {
     await db.delete(workoutTemplateExercises).where(inArray(workoutTemplateExercises.workoutTemplateId, workoutTemplateIds));
     await db.delete(workoutTemplateSections).where(inArray(workoutTemplateSections.workoutTemplateId, workoutTemplateIds));
@@ -237,6 +279,82 @@ describe("validateGeneratedDraft — hard exclusions", () => {
 
     expect(result.status).toBe("blocked");
     expect(result.blockers.some((f) => f.code === "PROGRAM_GEN_EXCLUDED_EXERCISE_USED")).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Exercise resolution — ambiguous/unresolved names block approval
+// end-to-end (resolve → validate → approve), full pipeline.
+// ─────────────────────────────────────────────────────────────
+
+describe("exercise resolution — ambiguous/unresolved block approval", () => {
+  it("an ambiguous exercise name blocks validation and approval", async () => {
+    // Two real, active exercises sharing the same canonical name — the
+    // only reliable way to force genuine ambiguity through the exact-
+    // name tier without touching seed data permanently. Cleaned up in
+    // afterAll via exerciseFixtureIds.
+    const duplicateName = `Resolution Test Ambiguous Exercise ${randomUUID().slice(0, 8)}`;
+    const [dupeA] = await db
+      .insert(exercises)
+      .values({
+        slug: `resolution-test-ambiguous-a-${randomUUID()}`,
+        name: duplicateName,
+        movementPattern: "push_horizontal",
+        classification: "compound",
+        difficulty: "beginner",
+        status: "active",
+      })
+      .returning({ id: exercises.id });
+    const [dupeB] = await db
+      .insert(exercises)
+      .values({
+        slug: `resolution-test-ambiguous-b-${randomUUID()}`,
+        name: duplicateName,
+        movementPattern: "push_horizontal",
+        classification: "compound",
+        difficulty: "beginner",
+        status: "active",
+      })
+      .returning({ id: exercises.id });
+    exerciseFixtureIds.push(dupeA.id, dupeB.id);
+
+    const modelDraft = buildModelDraft(duplicateName);
+    const resolved = await resolveProgramDraftExercises(modelDraft);
+    const prescription = resolved.weeks[0].days[0].workout!.sections[0].prescriptions[0];
+    expect(prescription.exerciseId).toBeNull();
+    expect(prescription.exerciseResolution?.outcome).toBe("ambiguous");
+    expect(prescription.exerciseResolution?.candidates.map((c) => c.id).sort()).toEqual(
+      [dupeA.id, dupeB.id].sort(),
+    );
+
+    const validation = await validateGeneratedDraft(resolved, VALID_BRIEF, coachA.id);
+    expect(validation.status).toBe("blocked");
+    const finding = validation.blockers.find((f) => f.code === "PROGRAM_GEN_EXERCISE_AMBIGUOUS");
+    expect(finding).toBeDefined();
+    expect(finding?.candidates?.map((c) => c.id).sort()).toEqual([dupeA.id, dupeB.id].sort());
+
+    const draftId = await makeReadyDraft(coachA.id, resolved, validation);
+    const outcome = await approveDraft(draftId, { coachId: coachA.id }, coachA.id);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.errorCode).toBe("has_blockers");
+  });
+
+  it("an unresolved exercise name blocks validation and approval", async () => {
+    const nonsenseName = `Zzyzx Nonexistent Movement ${randomUUID().slice(0, 8)}`;
+    const modelDraft = buildModelDraft(nonsenseName);
+    const resolved = await resolveProgramDraftExercises(modelDraft);
+    const prescription = resolved.weeks[0].days[0].workout!.sections[0].prescriptions[0];
+    expect(prescription.exerciseId).toBeNull();
+    expect(prescription.exerciseResolution?.outcome).toBe("unresolved");
+
+    const validation = await validateGeneratedDraft(resolved, VALID_BRIEF, coachA.id);
+    expect(validation.status).toBe("blocked");
+    expect(validation.blockers.some((f) => f.code === "PROGRAM_GEN_EXERCISE_UNRESOLVED")).toBe(true);
+
+    const draftId = await makeReadyDraft(coachA.id, resolved, validation);
+    const outcome = await approveDraft(draftId, { coachId: coachA.id }, coachA.id);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.errorCode).toBe("has_blockers");
   });
 });
 
@@ -446,11 +564,64 @@ describe("generateProgramDraft — provider configuration", () => {
     expect(outcome.ok).toBe(true);
     if (outcome.ok) {
       expect(outcome.provider).toBe("dev-fixture");
-      // Every exercise the fixture referenced must resolve against the
-      // real library — proves the fixture builds from real, currently-
-      // seeded rows rather than fabricated ids (see fixture.ts).
-      const validation = await validateGeneratedDraft(outcome.draft, VALID_BRIEF, coachA.id);
+      // Provider returns unresolved model output (name only) — resolve
+      // it exactly as the orchestration layer (actions.ts) would before
+      // validating. Every exercise the fixture referenced must resolve
+      // against the real library via the "exact" tier, since fixture.ts
+      // builds prescriptions from each row's own real canonical name —
+      // proves the fixture exercises the full resolve path rather than
+      // bypassing it.
+      const resolved = await resolveProgramDraftExercises(outcome.draft);
+      for (const week of resolved.weeks) {
+        for (const day of week.days) {
+          for (const section of day.workout?.sections ?? []) {
+            for (const prescription of section.prescriptions) {
+              expect(prescription.exerciseResolution?.outcome).toBe("exact");
+              expect(prescription.exerciseId).not.toBeNull();
+            }
+          }
+        }
+      }
+
+      const validation = await validateGeneratedDraft(resolved, VALID_BRIEF, coachA.id);
       expect(validation.unresolvedExerciseIds).toHaveLength(0);
+      expect(validation.blockers).toHaveLength(0);
     }
+  });
+
+  it("regenerate-day resolves exercises through the same resolver as full generation", async () => {
+    process.env.PROGRAM_GENERATOR_USE_FIXTURE = "true";
+    delete process.env.PROGRAM_GENERATOR_MODEL;
+
+    const initial = await generateProgramDraft(VALID_BRIEF, null);
+    expect(initial.ok).toBe(true);
+    if (!initial.ok) return;
+    const resolvedInitial = await resolveProgramDraftExercises(initial.draft);
+
+    const dayId = resolvedInitial.weeks[0].days[0].id;
+    const regenOutcome = await regenerateDayDraft(VALID_BRIEF, null, resolvedInitial, dayId, undefined);
+    expect(regenOutcome.ok).toBe(true);
+    if (!regenOutcome.ok) return;
+
+    // Provider's regenerate-day output is the same unresolved
+    // ModelProgramDraft shape as full generation — no exerciseId
+    // anywhere, even for days it echoed back unchanged — proving both
+    // entry points require, and are compatible with, the identical
+    // resolveProgramDraftExercises() call.
+    const resolvedAfterRegen = await resolveProgramDraftExercises(regenOutcome.draft);
+    let sawAtLeastOnePrescription = false;
+    for (const week of resolvedAfterRegen.weeks) {
+      for (const day of week.days) {
+        for (const section of day.workout?.sections ?? []) {
+          for (const prescription of section.prescriptions) {
+            sawAtLeastOnePrescription = true;
+            expect(prescription.exerciseId).not.toBeNull();
+            expect(prescription.exerciseId).not.toBe("00000000-0000-0000-0000-000000000000");
+            expect(prescription.exerciseResolution?.outcome).toBe("exact");
+          }
+        }
+      }
+    }
+    expect(sawAtLeastOnePrescription).toBe(true);
   });
 });

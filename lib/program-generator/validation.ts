@@ -52,6 +52,8 @@ import type {
   GeneratedProgramDraft,
   GeneratedBlueprintDraft,
   ProgramGenerationBrief,
+  ExerciseResolutionCandidate,
+  ExerciseResolutionRecord,
 } from "./contracts";
 
 // ─────────────────────────────────────────────────────────────
@@ -73,6 +75,9 @@ export interface ValidationFinding {
   sectionId?: string;
   prescriptionId?: string;
   exerciseId?: string;
+  /** Populated for PROGRAM_GEN_EXERCISE_AMBIGUOUS — the real candidate
+   *  rows the coach can choose from via Replace Exercise. */
+  candidates?: ExerciseResolutionCandidate[];
 }
 
 export interface BlueprintValidationEntry {
@@ -125,7 +130,11 @@ interface PrescriptionRef {
   blueprintId: string;
   sectionId: string;
   prescriptionId: string;
-  exerciseId: string;
+  /** Null when exercise-resolution.ts couldn't place this name uniquely
+   *  (ambiguous or unresolved) — see exerciseResolution below. */
+  exerciseId: string | null;
+  exerciseName: string;
+  exerciseResolution?: ExerciseResolutionRecord;
 }
 
 function collectPrescriptionRefs(draft: GeneratedProgramDraft): PrescriptionRef[] {
@@ -142,6 +151,8 @@ function collectPrescriptionRefs(draft: GeneratedProgramDraft): PrescriptionRef[
             sectionId: section.id,
             prescriptionId: prescription.id,
             exerciseId: prescription.exerciseId,
+            exerciseName: prescription.exerciseName,
+            exerciseResolution: prescription.exerciseResolution,
           });
         }
       }
@@ -191,7 +202,9 @@ export async function validateGeneratedDraft(
   const info: ValidationFinding[] = [];
 
   const refs = collectPrescriptionRefs(draft);
-  const referencedExerciseIds = Array.from(new Set(refs.map((r) => r.exerciseId)));
+  const referencedExerciseIds = Array.from(
+    new Set(refs.map((r) => r.exerciseId).filter((id): id is string => id !== null)),
+  );
   const excludedSet = new Set(brief.excludedExerciseIds);
 
   const db = getDb();
@@ -211,7 +224,11 @@ export async function validateGeneratedDraft(
   const unresolvedExerciseIds = referencedExerciseIds.filter((id) => !foundExerciseIds.has(id));
 
   // Layer 1: exercise existence — never invented, never fabricated.
+  // Prescriptions with a null exerciseId (ambiguous/unresolved — see
+  // Layer 1b below) are a distinct, more specific failure mode and are
+  // skipped here rather than reported as a generic "not found."
   for (const ref of refs) {
+    if (ref.exerciseId === null) continue;
     if (!foundExerciseIds.has(ref.exerciseId)) {
       blockers.push({
         id: randomUUID(),
@@ -229,9 +246,53 @@ export async function validateGeneratedDraft(
     }
   }
 
-  // Layer 2: hard exclusions — always a blocker, never negotiable.
+  // Layer 1b: unresolved/ambiguous exercise names — exercise-resolution.ts
+  // couldn't place the model's exerciseName as exactly one real, active
+  // library exercise. Always a blocker (there is no real id to persist),
+  // never silently defaulted. The coach resolves it with the existing
+  // Replace Exercise edit action, which always writes a real id.
   for (const ref of refs) {
-    if (excludedSet.has(ref.exerciseId)) {
+    if (ref.exerciseId !== null) continue;
+    const resolution = ref.exerciseResolution;
+
+    if (resolution?.outcome === "ambiguous") {
+      const names = resolution.candidates.map((c) => c.name).join(", ");
+      blockers.push({
+        id: randomUUID(),
+        code: "PROGRAM_GEN_EXERCISE_AMBIGUOUS",
+        severity: "blocker",
+        title: "Exercise name matched more than one library exercise",
+        explanation: `"${ref.exerciseName}" matched multiple library exercises (${names || "no candidate names available"}) and could not be resolved automatically. Use Replace Exercise to choose the correct one.`,
+        weekId: ref.weekId,
+        dayId: ref.dayId,
+        blueprintId: ref.blueprintId,
+        sectionId: ref.sectionId,
+        prescriptionId: ref.prescriptionId,
+        candidates: resolution.candidates,
+      });
+    } else {
+      // outcome === "unresolved", or resolution metadata is missing
+      // entirely (defensive — should never happen once every
+      // generation path routes through exercise-resolution.ts).
+      blockers.push({
+        id: randomUUID(),
+        code: "PROGRAM_GEN_EXERCISE_UNRESOLVED",
+        severity: "blocker",
+        title: "Exercise name did not match the library",
+        explanation: `"${ref.exerciseName}" could not be matched to any exercise in the library. Use Replace Exercise to choose the correct one.`,
+        weekId: ref.weekId,
+        dayId: ref.dayId,
+        blueprintId: ref.blueprintId,
+        sectionId: ref.sectionId,
+        prescriptionId: ref.prescriptionId,
+      });
+    }
+  }
+
+  // Layer 2: hard exclusions — always a blocker, never negotiable. Only
+  // meaningful once a prescription has a real exerciseId to compare.
+  for (const ref of refs) {
+    if (ref.exerciseId !== null && excludedSet.has(ref.exerciseId)) {
       const row = exerciseRows.find((e) => e.id === ref.exerciseId);
       blockers.push({
         id: randomUUID(),
@@ -267,7 +328,7 @@ export async function validateGeneratedDraft(
           blueprintId: ref.blueprintId,
           sectionId: ref.sectionId,
           prescriptionId: ref.prescriptionId,
-          exerciseId: ref.exerciseId,
+          exerciseId: row.id,
         });
       }
     }
@@ -389,28 +450,38 @@ function auditDraftBlueprint(
     notes: s.notes ?? null,
   }));
 
+  // Prescriptions with no resolved exerciseId (ambiguous/unresolved)
+  // are excluded from the PIL audit input entirely — there is no real
+  // exercise data for volume/fatigue/joint-stress analysis to read, and
+  // conflating "AI couldn't resolve this name" with PIL's own
+  // VALIDITY_EXERCISE_INACTIVE ("this id points at a deleted/archived
+  // exercise") would blur two different concepts. The dedicated
+  // PROGRAM_GEN_EXERCISE_AMBIGUOUS/UNRESOLVED findings (Layer 1b above)
+  // already cover them.
   const rawPrescriptions = blueprint.sections.flatMap((s) =>
-    s.prescriptions.map((p) => ({
-      id: p.id,
-      exerciseId: p.exerciseId,
-      sectionId: s.id,
-      orderIndex: p.orderIndex,
-      groupId: p.groupId ?? null,
-      groupPosition: p.groupPosition ?? null,
-      sets: p.sets ?? null,
-      repsMin: p.repsMin ?? null,
-      repsMax: p.repsMax ?? null,
-      durationSeconds: p.durationSeconds ?? null,
-      distanceMeters: null,
-      restSeconds: p.restSeconds ?? null,
-      tempo: p.tempo ?? null,
-      targetRpe: p.targetRpe != null ? String(p.targetRpe) : null,
-      targetRir: p.targetRir != null ? String(p.targetRir) : null,
-      setTechnique: p.setTechnique ?? null,
-      substitutionPolicy: p.substitutionPolicy ?? null,
-      isRequired: p.isRequired,
-      coachNotes: p.coachNotes ?? null,
-    })),
+    s.prescriptions
+      .filter((p): p is typeof p & { exerciseId: string } => p.exerciseId !== null)
+      .map((p) => ({
+        id: p.id,
+        exerciseId: p.exerciseId,
+        sectionId: s.id,
+        orderIndex: p.orderIndex,
+        groupId: p.groupId ?? null,
+        groupPosition: p.groupPosition ?? null,
+        sets: p.sets ?? null,
+        repsMin: p.repsMin ?? null,
+        repsMax: p.repsMax ?? null,
+        durationSeconds: p.durationSeconds ?? null,
+        distanceMeters: null,
+        restSeconds: p.restSeconds ?? null,
+        tempo: p.tempo ?? null,
+        targetRpe: p.targetRpe != null ? String(p.targetRpe) : null,
+        targetRir: p.targetRir != null ? String(p.targetRir) : null,
+        setTechnique: p.setTechnique ?? null,
+        substitutionPolicy: p.substitutionPolicy ?? null,
+        isRequired: p.isRequired,
+        coachNotes: p.coachNotes ?? null,
+      })),
   );
 
   const rawData: RawBlueprintData = {

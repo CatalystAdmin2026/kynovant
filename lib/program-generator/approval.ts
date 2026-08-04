@@ -247,6 +247,21 @@ export async function approveDraft(
               .returning();
 
             for (const prescription of section.prescriptions) {
+              // Defense in depth (locked rule #8/#12): validation.ts
+              // already blocks approval on any unresolved/ambiguous
+              // prescription (null exerciseId), so this should be
+              // unreachable — but if it's ever reached anyway, throwing
+              // here (inside the transaction) rolls back everything
+              // created so far rather than writing a NULL into a NOT
+              // NULL FK column. The workout_template_exercises.exercise_id
+              // FK itself would also reject this at the DB level; this
+              // check just fails with a clearer message first.
+              if (prescription.exerciseId === null) {
+                throw new Error(
+                  `Prescription ${prescription.id} has no resolved exerciseId — approval should never reach this state.`,
+                );
+              }
+
               await tx.insert(workoutTemplateExercises).values({
                 workoutTemplateId: workoutRow.id,
                 sectionId: sectionRow.id,
