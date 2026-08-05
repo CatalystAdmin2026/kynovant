@@ -104,9 +104,17 @@ async function main() {
   await sql.begin(async (tx) => {
     for (const update of updates) {
       if (!update.changed) continue;
+      // update.aliases is already a real string[] (see mergeAliases above)
+      // — pass it directly. The postgres package serializes a bound
+      // parameter targeting a jsonb column itself; wrapping it in
+      // JSON.stringify() here first (the historical bug, root-caused
+      // against a live reproduction — see the PR this comment shipped
+      // with) serializes it a SECOND time, storing a jsonb string
+      // ("[\"...\"]") instead of a jsonb array. No ::jsonb cast is
+      // needed or wanted for the same reason.
       await tx`
         UPDATE exercises
-        SET alternate_names = ${JSON.stringify(update.aliases)}::jsonb,
+        SET alternate_names = ${sql.json(update.aliases)},
             updated_at = now()
         WHERE id = ${update.id}
       `;

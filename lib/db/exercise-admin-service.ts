@@ -33,7 +33,32 @@ type CreateExerciseInput = Omit<NewExercise, "id" | "createdAt" | "updatedAt" | 
   slug?: string;
 };
 
+// Runtime guard, not just the schema's .$type<string[]>() annotation —
+// createExercise/updateExercise are reachable from a route handler that
+// spreads an unvalidated request body (app/api/internal/exercises/[id]/
+// route.ts's PATCH), so a caller can supply a value TypeScript never
+// checked. This is the one place every Drizzle-based writer of this
+// column funnels through, so it's the one place that can refuse a
+// malformed value for all of them at once. Throws rather than coercing:
+// a caller that already JSON.stringify'd an array gets a clear error,
+// not a silent, corrupted write — see the four production rows this
+// exact mistake produced via a different (non-Drizzle) writer.
+function assertAlternateNamesIsArray(value: unknown): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw new Error(
+      "alternateNames must be an array of strings, not a JSON-encoded string or other scalar value.",
+    );
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new Error("alternateNames must contain only strings.");
+    }
+  }
+}
+
 export async function createExercise(input: CreateExerciseInput) {
+  assertAlternateNamesIsArray(input.alternateNames);
   const db = getDb();
   const slug = input.slug ?? generateSlug(input.name);
   const [row] = await db
@@ -47,6 +72,7 @@ export async function updateExercise(
   id: string,
   patch: Partial<Omit<NewExercise, "id" | "createdAt" | "searchVector" | "scope" | "status">>,
 ) {
+  assertAlternateNamesIsArray(patch.alternateNames);
   const db = getDb();
   const [row] = await db
     .update(exercises)

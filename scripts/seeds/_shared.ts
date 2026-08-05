@@ -185,6 +185,12 @@ export async function seedExercises(
     .values(
       exerciseDefs.map((e) => ({
         ...e,
+        // Seed data intentionally authors alternateNames as `readonly
+        // string[]` (via `as const`); Drizzle's inferred insert type
+        // (schema-exercise.ts's alternateNames: jsonb(...).$type<string[]>())
+        // wants a mutable array. A shallow copy satisfies that without
+        // loosening the seed data's own immutability.
+        alternateNames: e.alternateNames ? [...e.alternateNames] : undefined,
         status: "active" as const,
         coachCreated: true,
         primaryMuscleGroup: primaryMuscleBySlug.get(e.slug) ?? null,

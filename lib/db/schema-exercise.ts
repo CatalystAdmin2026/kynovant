@@ -259,7 +259,15 @@ export const exercises = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
-    alternateNames: jsonb("alternate_names").notNull().default([]),
+    // .$type<string[]>() is load-bearing, not decorative: without it every
+    // read/write of this column is typed `unknown` and TypeScript cannot
+    // catch a caller accidentally passing an already-JSON.stringify'd
+    // string instead of a real array — exactly the shape of bug that
+    // corrupted four rows in production (see scripts/repair-exercise-
+    // ai-vocabulary-aliases.ts's history and lib/db/exercise-admin-service.ts's
+    // runtime guard, which exists because this compile-time check alone
+    // can't cover writers outside Drizzle, e.g. the raw `postgres` package).
+    alternateNames: jsonb("alternate_names").$type<string[]>().notNull().default([]),
     movementPattern: movementPatternEnum("movement_pattern").notNull(),
     classification: exerciseClassificationEnum("classification").notNull(),
     difficulty: exerciseDifficultyEnum("difficulty").notNull(),
