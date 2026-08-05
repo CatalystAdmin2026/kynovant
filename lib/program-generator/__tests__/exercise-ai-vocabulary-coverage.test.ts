@@ -8,6 +8,7 @@ import {
   CUES,
   EXERCISE_EQUIPMENT,
   EXERCISES,
+  findMissingRelationReferenceSlugs,
   INTRA_FILE_RELATIONS,
   MUSCLES,
   NEW_STRENGTH_SLUGS,
@@ -174,6 +175,30 @@ describe("AI vocabulary exercise coverage", () => {
     }
   });
 
+  it("allows dry-run relation validation to reference same-batch exercise slugs", () => {
+    const existingDbSlugs = existingSeedSlugs();
+    const seedPayloadSlugs = new Set(EXERCISES.map((exercise) => exercise.slug));
+
+    expect(
+      findMissingRelationReferenceSlugs(CROSS_FILE_RELATIONS, existingDbSlugs, seedPayloadSlugs),
+    ).toEqual([]);
+  });
+
+  it("still fails validation for genuinely missing external relation targets", () => {
+    const missing = findMissingRelationReferenceSlugs(
+      [
+        {
+          sourceSlug: "band-chest-fly",
+          targetSlug: "not-a-real-external-exercise",
+        },
+      ],
+      existingSeedSlugs(),
+      new Set(EXERCISES.map((exercise) => exercise.slug)),
+    );
+
+    expect(missing).toEqual(["not-a-real-external-exercise"]);
+  });
+
   it("resolves safe aliases and common spelling/pluralization to exactly one reviewed row", () => {
     const aliasIndex = buildAliasIndex();
     const expected = new Map([
@@ -218,6 +243,8 @@ describe("AI vocabulary exercise coverage", () => {
 
     expect(seedSource).toContain("Safe to rerun");
     expect(seedSource).toContain("ON CONFLICT DO NOTHING");
+    expect(seedSource).toContain("seedPayloadSlugs");
+    expect(seedSource).toContain("findMissingRelationReferenceSlugs");
     expect(seedSource).toContain("--dry-run");
     expect(repairSource).toContain("--dry-run");
     expect(repairSource).toContain("mergeAliases");

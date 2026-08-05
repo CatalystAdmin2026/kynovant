@@ -20,28 +20,41 @@ import {
   CUES,
   EXERCISE_EQUIPMENT,
   EXERCISES,
+  findMissingRelationReferenceSlugs,
   INTRA_FILE_RELATIONS,
   MUSCLES,
 } from "./010-ai-vocabulary-coverage-data";
 
 const dryRun = process.argv.includes("--dry-run");
+const seedPayloadSlugs = new Set<string>(EXERCISES.map((exercise) => exercise.slug));
 
 async function ensureCrossFileRelations() {
   const relationSlugs = Array.from(new Set(CROSS_FILE_RELATIONS.flatMap((relation) => [
     relation.sourceSlug,
     relation.targetSlug,
   ])));
+  const externalRelationSlugs = relationSlugs.filter((slug) => !seedPayloadSlugs.has(slug));
 
   const exerciseRows = await sql`
     SELECT id, slug
     FROM exercises
-    WHERE slug IN ${sql(relationSlugs)}
+    WHERE slug IN ${sql(dryRun ? externalRelationSlugs : relationSlugs)}
   `;
   const exerciseBySlug = new Map(exerciseRows.map((row) => [row.slug as string, row]));
-  const missingSlugs = relationSlugs.filter((slug) => !exerciseBySlug.has(slug));
+  const missingSlugs = findMissingRelationReferenceSlugs(
+    CROSS_FILE_RELATIONS,
+    new Set(exerciseRows.map((row) => row.slug as string)),
+    seedPayloadSlugs,
+  );
 
   if (missingSlugs.length > 0) {
     throw new Error(`Missing referenced relation exercise(s): ${missingSlugs.join(", ")}`);
+  }
+
+  if (dryRun) {
+    console.log(`  Dry run: validated ${CROSS_FILE_RELATIONS.length} cross-file relations`);
+    console.log(`  Dry run: ${EXERCISES.length} same-batch exercise slugs are available for relation validation`);
+    return;
   }
 
   const relationRows = CROSS_FILE_RELATIONS.map((relation) => ({
@@ -52,11 +65,6 @@ async function ensureCrossFileRelations() {
     suitability_score: relation.suitabilityScore,
     notes: relation.notes,
   }));
-
-  if (dryRun) {
-    console.log(`  Dry run: would ensure ${relationRows.length} cross-file relations`);
-    return;
-  }
 
   await sql`
     INSERT INTO exercise_relations ${sql(

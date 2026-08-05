@@ -445,3 +445,18 @@ export const CROSS_FILE_RELATIONS = [
     notes: "Loaded good morning progresses the same hinge pattern with much higher spine and hamstring loading.",
   },
 ] as const satisfies readonly AiVocabularyRelation[];
+
+export function findMissingRelationReferenceSlugs(
+  relations: readonly Pick<AiVocabularyRelation, "sourceSlug" | "targetSlug">[],
+  existingDatabaseSlugs: ReadonlySet<string>,
+  seedPayloadSlugs: ReadonlySet<string> = new Set(EXERCISES.map((exercise) => exercise.slug)),
+) {
+  const referencedSlugs = new Set(relations.flatMap((relation) => [
+    relation.sourceSlug,
+    relation.targetSlug,
+  ]));
+
+  return [...referencedSlugs].filter(
+    (slug) => !seedPayloadSlugs.has(slug) && !existingDatabaseSlugs.has(slug),
+  );
+}
