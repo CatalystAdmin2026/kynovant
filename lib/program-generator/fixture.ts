@@ -30,9 +30,16 @@ import { randomUUID } from "crypto";
 import { searchExercises, type ExerciseListRow } from "@/lib/db/exercise-service";
 import {
   ModelProgramDraftSchema,
+  ModelWeekDraftSchema,
   type ModelProgramDraft,
+  type ModelWeekDraft,
+  type ModelDayDraft,
   type ModelBlueprint,
   type ModelPrescription,
+  type ProgramShell,
+  type ProgramShellDay,
+  type ProgramShellPhase,
+  type ProgramGenerationBrief,
 } from "./contracts";
 
 const MIN_EXERCISES_REQUIRED = 4;
@@ -101,5 +108,94 @@ export async function buildFixtureProgramDraft(): Promise<ModelProgramDraft | nu
   };
 
   const parsed = ModelProgramDraftSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// STAGED FIXTURE — mirrors the real staged provider (generateProgramShell
+// + generateProgramWeek, one call per week) rather than the single-shot
+// path above, so tests and local dev exercise the actual staged
+// orchestration (shell → N week calls → assembly → resolve → validate),
+// not a shortcut around it. buildFixtureProgramShell is synchronous and
+// deterministic (no exercise content, nothing to query); each week is
+// built from the same real, active exercise rows the single-shot fixture
+// uses, applied across every day in that week's fixed split.
+// ─────────────────────────────────────────────────────────────
+
+export function buildFixtureProgramShell(brief: ProgramGenerationBrief): ProgramShell {
+  const dayOfWeekPool = [1, 2, 3, 4, 5, 6, 0];
+  const days: ProgramShellDay[] = dayOfWeekPool.slice(0, brief.daysPerWeek).map((dayOfWeek, i) => ({
+    dayOfWeek,
+    label: `Day ${i + 1}`,
+    focus: "Full Body",
+  }));
+
+  const phases: ProgramShellPhase[] =
+    brief.weeks >= 4
+      ? [
+          {
+            phaseNumber: 1,
+            name: "Fixture Accumulation",
+            weekStart: 1,
+            weekEnd: brief.weeks - 1,
+            progressionTarget: "Fixture phase — no real progression logic, deterministic output only.",
+            isDeload: false,
+          },
+          {
+            phaseNumber: 2,
+            name: "Fixture Deload",
+            weekStart: brief.weeks,
+            weekEnd: brief.weeks,
+            progressionTarget: "Fixture deload week.",
+            isDeload: true,
+          },
+        ]
+      : [
+          {
+            phaseNumber: 1,
+            name: "Fixture Block",
+            weekStart: 1,
+            weekEnd: brief.weeks,
+            progressionTarget: "Fixture phase — no real progression logic, deterministic output only.",
+            isDeload: false,
+          },
+        ];
+
+  return {
+    title: "Fixture Program Shell",
+    description: "Development fixture shell — structural skeleton only, no workout content.",
+    totalWeeks: brief.weeks,
+    days,
+    phases,
+    globalConstraints: brief.limitations ?? "",
+  };
+}
+
+// Queries real, currently-active exercises and assembles one week's
+// content (one blueprint per shell day) from their real names. Returns
+// null (never throws, never fabricates) if the seeded library can't
+// support a minimal week.
+export async function buildFixtureProgramWeek(
+  weekNumber: number,
+  shell: ProgramShell,
+): Promise<ModelWeekDraft | null> {
+  const active = await searchExercises({ statuses: ["active"], limit: 8 });
+  if (active.length < MIN_EXERCISES_REQUIRED) return null;
+
+  const days: ModelDayDraft[] = shell.days.map((shellDay) => ({
+    id: randomUUID(),
+    dayOfWeek: shellDay.dayOfWeek,
+    label: shellDay.label,
+    workout: buildBlueprint(shellDay.label, active),
+  }));
+
+  const candidate: ModelWeekDraft = {
+    id: randomUUID(),
+    weekNumber,
+    label: `Week ${weekNumber}`,
+    days,
+  };
+
+  const parsed = ModelWeekDraftSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
 }

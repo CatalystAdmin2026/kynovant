@@ -20,7 +20,13 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import type { ProgramGenerationBrief, GeneratedProgramDraft } from "./contracts";
+import type {
+  ProgramGenerationBrief,
+  GeneratedProgramDraft,
+  ProgramShell,
+  ProgramShellPhase,
+  ModelWeekDraft,
+} from "./contracts";
 import type { ClientContextSummary } from "./client-context";
 
 function formatBriefSection(brief: ProgramGenerationBrief): string {
@@ -97,18 +103,104 @@ Output requirements:
 - Do not fabricate scientific claims or guarantee outcomes.
 `.trim();
 
-export function buildProgramGenerationPrompt(
+function formatDayLabels(shell: ProgramShell): string {
+  return shell.days
+    .map((d) => `dayOfWeek ${d.dayOfWeek} — "${d.label}"${d.focus ? ` (${d.focus})` : ""}`)
+    .join("\n");
+}
+
+function findPhaseForWeek(shell: ProgramShell, weekNumber: number): ProgramShellPhase | null {
+  return shell.phases.find((p) => weekNumber >= p.weekStart && weekNumber <= p.weekEnd) ?? null;
+}
+
+function formatPhase(phase: ProgramShellPhase | null, weekNumber: number): string {
+  if (!phase) {
+    return `No phase in the shell covers week ${weekNumber} — use your best judgment to continue the program's overall progression.`;
+  }
+  return [
+    `Phase ${phase.phaseNumber} — "${phase.name}" (weeks ${phase.weekStart}-${phase.weekEnd})${phase.isDeload ? " — DELOAD PHASE" : ""}`,
+    `Progression target for this phase: ${phase.progressionTarget}`,
+  ].join("\n");
+}
+
+// Compact, human-readable summary of a completed week — used as "prior
+// week" context for the next week's generation. Deliberately NOT the
+// full JSON (that would reintroduce the large-payload problem staged
+// generation exists to avoid) — just enough for the model to continue
+// coherently: which exercises were used, per day.
+export function summarizeWeekForPrompt(week: ModelWeekDraft): string {
+  const dayLines = week.days.map((day) => {
+    if (!day.workout) return `${day.label ?? `Day ${day.dayOfWeek}`}: rest day`;
+    const exerciseNames = day.workout.sections
+      .flatMap((s) => s.prescriptions.map((p) => p.exerciseName))
+      .join(", ");
+    return `${day.label ?? day.workout.name}${day.workout.primaryFocus ? ` (${day.workout.primaryFocus})` : ""}: ${exerciseNames}`;
+  });
+  return dayLines.join("\n");
+}
+
+export function buildShellGenerationPrompt(
   brief: ProgramGenerationBrief,
   clientContext: ClientContextSummary | null,
 ): string {
   return [
-    "You are drafting a multi-week strength training Program for a professional coach's review. This is a DRAFT — the coach will review, edit, and explicitly approve before anything is created or shown to a client.",
+    "You are designing the STRUCTURE of a multi-week strength training Program for a professional coach's review — not the workout content itself. A separate step will generate each week's actual exercises using the structure you define here, so this structure must be specific enough to keep every week consistent with it.",
     "",
     "## Program Brief",
     formatBriefSection(brief),
     "",
     "## Client Context",
     formatClientContextSection(clientContext),
+    "",
+    "## What to produce",
+    `- totalWeeks must be exactly ${brief.weeks}.`,
+    `- days must have exactly ${brief.daysPerWeek} entries — the fixed weekly training split every week will follow. Give each a clear label (e.g. "Upper Push", "Lower Body", "Full Body A") consistent with the requested split (${brief.preferredSplit}).`,
+    "- phases must divide the program into logical progression blocks (e.g. accumulation, intensification, a deload) with non-overlapping week ranges that together cover every week from 1 to totalWeeks. Mark deload/lighter weeks explicitly via isDeload. Each phase's progressionTarget should describe concretely what should increase or change across weeks in that phase (e.g. \"add 1 rep per set each week, then increase load\").",
+    "- globalConstraints should compactly restate any injury, exclusion, or equipment limitations from the brief above that every week's generation must continue to honor.",
+    "Do not include any exercises, sets, reps, or workout content — that comes later, one week at a time.",
+  ].join("\n");
+}
+
+export function buildWeekGenerationPrompt(
+  brief: ProgramGenerationBrief,
+  clientContext: ClientContextSummary | null,
+  shell: ProgramShell,
+  weekNumber: number,
+  priorWeekSummary: string | null,
+): string {
+  const phase = findPhaseForWeek(shell, weekNumber);
+
+  return [
+    `You are generating week ${weekNumber} of ${shell.totalWeeks} of an already-structured multi-week strength training Program, for a professional coach's review. Produce ONLY this one week — do not restate or summarize other weeks.`,
+    "",
+    "## Program Brief (context for the whole Program)",
+    formatBriefSection(brief),
+    "",
+    "## Client Context",
+    formatClientContextSection(clientContext),
+    "",
+    "## Program Shell (fixed for the whole Program — do not deviate)",
+    `Title: ${shell.title}`,
+    shell.description,
+    "",
+    "Fixed weekly split — this week's `days` must use exactly these dayOfWeek values and labels, no others:",
+    formatDayLabels(shell),
+    "",
+    "Global constraints (apply to every week, including this one):",
+    shell.globalConstraints || "None beyond the brief above.",
+    "",
+    "## This Week",
+    `Week number: ${weekNumber} of ${shell.totalWeeks}`,
+    formatPhase(phase, weekNumber),
+    "",
+    "## Continuity With Prior Weeks",
+    priorWeekSummary
+      ? [
+          "This is NOT the first week. Build on what came before — do not generate an unrelated program:",
+          priorWeekSummary,
+          "Preserve the same core exercises where reasonable and progress them (more load, reps, sets, or reduced rest) according to the phase's progression target above. Only substitute an exercise if there's a clear reason (e.g. this phase's focus shifted, or a deload calls for lighter/simpler movements) — do not vary exercises just for the sake of variety.",
+        ].join("\n")
+      : "This is the first week of the Program — establish the baseline exercises and loading that later weeks will progress from.",
     "",
     "## Output Contract",
     OUTPUT_CONTRACT_NOTES,

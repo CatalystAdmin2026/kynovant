@@ -318,6 +318,79 @@ export type GeneratedWeekDraft = z.infer<typeof GeneratedWeekDraftSchema>;
 export type GeneratedProgramDraft = z.infer<typeof GeneratedProgramDraftSchema>;
 
 // ─────────────────────────────────────────────────────────────
+// PROGRAM SHELL — the lightweight, first generateObject() call of a
+// staged generation (lib/program-generator/provider.ts's
+// generateProgramShell()). Defines the program's structure and intent
+// WITHOUT any workout content: title, description, the fixed weekly
+// split/day labels every week's generation must honor, a phase/
+// progression outline, and a freeform summary of the constraints
+// (injuries, exclusions, equipment) that apply to every week. Generated
+// once per draft and held fixed — every subsequent per-week call
+// receives the same shell, which is what keeps week 6 building on week
+// 1 instead of reading as an unrelated program.
+// ─────────────────────────────────────────────────────────────
+
+export const ProgramShellDaySchema = z.object({
+  dayOfWeek: z.number().int().min(0).max(6),
+  label: z.string().min(1).max(100),
+  focus: z.string().max(200).optional(),
+});
+
+export const ProgramShellPhaseSchema = z.object({
+  phaseNumber: z.number().int().min(1),
+  name: z.string().min(1).max(100),
+  weekStart: z.number().int().min(1),
+  weekEnd: z.number().int().min(1),
+  progressionTarget: z.string().min(1).max(500),
+  isDeload: z.boolean().default(false),
+}).refine((p) => p.weekStart <= p.weekEnd, {
+  message: "weekStart must be <= weekEnd.",
+  path: ["weekEnd"],
+});
+
+export const ProgramShellSchema = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().min(1).max(2000),
+  totalWeeks: z.number().int().min(1).max(16),
+  // Fixed weekly split — every week-generation call is instructed to
+  // use these same dayOfWeek/label values (contracts.ts cannot enforce
+  // this across separate generateObject() calls; prompt.ts does).
+  days: z.array(ProgramShellDaySchema).min(1).max(7),
+  phases: z.array(ProgramShellPhaseSchema).min(1).max(8),
+  // Freeform: injury/exclusion/equipment constraints the model derived
+  // from the brief, restated compactly so every week's prompt can
+  // include it without re-deriving it from the full brief each time.
+  globalConstraints: z.string().max(2000),
+}).refine(
+  (shell) => {
+    const dows = shell.days.map((d) => d.dayOfWeek);
+    return new Set(dows).size === dows.length;
+  },
+  { message: "dayOfWeek values must be unique.", path: ["days"] },
+).refine(
+  (shell) => {
+    const nums = shell.phases.map((p) => p.phaseNumber);
+    return new Set(nums).size === nums.length;
+  },
+  { message: "phaseNumber values must be unique.", path: ["phases"] },
+).refine(
+  (shell) => shell.phases.every((p) => p.weekStart >= 1 && p.weekEnd <= shell.totalWeeks),
+  { message: "Every phase's week range must fall within totalWeeks.", path: ["phases"] },
+);
+
+export type ProgramShellDay = z.infer<typeof ProgramShellDaySchema>;
+export type ProgramShellPhase = z.infer<typeof ProgramShellPhaseSchema>;
+export type ProgramShell = z.infer<typeof ProgramShellSchema>;
+
+export function parseProgramShell(input: unknown): ParseResult<ProgramShell> {
+  const result = ProgramShellSchema.safeParse(input);
+  if (!result.success) {
+    return { ok: false, error: "Program shell failed schema validation.", issues: result.error.issues };
+  }
+  return { ok: true, data: result.data };
+}
+
+// ─────────────────────────────────────────────────────────────
 // MODEL OUTPUT DRAFT — exactly what generateObject() asks the LLM to
 // produce (lib/program-generator/provider.ts). Structurally identical
 // to the Generated*Schema tree above, except prescriptions carry
@@ -326,6 +399,17 @@ export type GeneratedProgramDraft = z.infer<typeof GeneratedProgramDraftSchema>;
 // of this contract, which is what makes the earlier zero-UUID-for-
 // every-exercise failure mode structurally impossible rather than
 // merely discouraged in prompt text.
+//
+// Staged generation (see docs/roadmap on staged generation in
+// provider.ts) never asks the model for a ModelProgramDraft directly —
+// generateProgramWeek() asks for exactly one ModelWeekDraftSchema at a
+// time, keeping each individual generateObject() call's required output
+// bounded to a single week regardless of how many weeks the whole
+// Program has. ModelProgramDraftSchema itself is assembled in-process,
+// by concatenating persisted weeks (actions.ts) — it is still the
+// contract used for that assembly, and remains regenerateDayDraft's
+// (regenerate-day) response schema, which — being already scoped to one
+// day — was not part of the timeout problem staged generation solves.
 //
 // lib/program-generator/exercise-resolution.ts is the sole place a
 // ModelProgramDraft is turned into a GeneratedProgramDraft.

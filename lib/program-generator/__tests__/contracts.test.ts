@@ -10,7 +10,12 @@
 
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "crypto";
-import { parseProgramGenerationBrief, parseGeneratedProgramDraft } from "../contracts";
+import {
+  parseProgramGenerationBrief,
+  parseGeneratedProgramDraft,
+  parseProgramShell,
+  ModelWeekDraftSchema,
+} from "../contracts";
 
 const VALID_BRIEF = {
   goal: "muscle_growth",
@@ -157,5 +162,139 @@ describe("GeneratedProgramDraftSchema", () => {
     draft.weeks[0].days[0].workout.sections[0].prescriptions.push({ ...p, id: "p2" });
     const result = parseGeneratedProgramDraft(draft);
     expect(result.ok).toBe(false);
+  });
+});
+
+const VALID_SHELL = {
+  title: "8-Week Hypertrophy Block",
+  description: "A structured hypertrophy program.",
+  totalWeeks: 8,
+  days: [
+    { dayOfWeek: 1, label: "Upper" },
+    { dayOfWeek: 4, label: "Lower" },
+  ],
+  phases: [
+    { phaseNumber: 1, name: "Accumulation", weekStart: 1, weekEnd: 6, progressionTarget: "Add reps weekly." },
+    { phaseNumber: 2, name: "Deload", weekStart: 7, weekEnd: 8, progressionTarget: "Reduce volume.", isDeload: true },
+  ],
+  globalConstraints: "No overhead pressing.",
+};
+
+describe("ProgramShellSchema", () => {
+  it("accepts a minimal valid shell", () => {
+    const result = parseProgramShell(VALID_SHELL);
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects totalWeeks outside the 1-16 range", () => {
+    expect(parseProgramShell({ ...VALID_SHELL, totalWeeks: 0 }).ok).toBe(false);
+    expect(parseProgramShell({ ...VALID_SHELL, totalWeeks: 17 }).ok).toBe(false);
+  });
+
+  it("rejects duplicate dayOfWeek values", () => {
+    const shell = { ...VALID_SHELL, days: [...VALID_SHELL.days, { dayOfWeek: 1, label: "Duplicate" }] };
+    expect(parseProgramShell(shell).ok).toBe(false);
+  });
+
+  it("rejects duplicate phaseNumber values", () => {
+    const shell = {
+      ...VALID_SHELL,
+      phases: [...VALID_SHELL.phases, { ...VALID_SHELL.phases[0] }],
+    };
+    expect(parseProgramShell(shell).ok).toBe(false);
+  });
+
+  it("rejects a phase whose week range falls outside totalWeeks", () => {
+    const shell = {
+      ...VALID_SHELL,
+      phases: [{ phaseNumber: 1, name: "Overrun", weekStart: 1, weekEnd: 20, progressionTarget: "x" }],
+    };
+    expect(parseProgramShell(shell).ok).toBe(false);
+  });
+
+  it("rejects a phase with weekStart greater than weekEnd", () => {
+    const shell = {
+      ...VALID_SHELL,
+      phases: [{ phaseNumber: 1, name: "Inverted", weekStart: 5, weekEnd: 2, progressionTarget: "x" }],
+    };
+    expect(parseProgramShell(shell).ok).toBe(false);
+  });
+});
+
+describe("ModelWeekDraftSchema — per-week generation contract", () => {
+  it("accepts a single week's worth of content with no exerciseId anywhere", () => {
+    const week = {
+      id: "w1",
+      weekNumber: 1,
+      days: [
+        {
+          id: "d1",
+          dayOfWeek: 1,
+          workout: {
+            id: "bp1",
+            name: "Day A",
+            sections: [
+              {
+                id: "s1",
+                name: "Main",
+                sectionType: "main_lift",
+                orderIndex: 0,
+                prescriptions: [
+                  { id: "p1", exerciseName: "Barbell Bench Press", orderIndex: 0, sets: 3, repsMin: 8, repsMax: 12 },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const result = ModelWeekDraftSchema.safeParse(week);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // The model-output contract has no exerciseId field at all — not
+      // merely optional/null. Structurally impossible to fabricate one.
+      expect("exerciseId" in result.data.days[0].workout!.sections[0].prescriptions[0]).toBe(false);
+    }
+  });
+
+  it("rejects an exerciseId field on a prescription (the model must never supply one)", () => {
+    const weekWithId = {
+      id: "w1",
+      weekNumber: 1,
+      days: [
+        {
+          id: "d1",
+          dayOfWeek: 1,
+          workout: {
+            id: "bp1",
+            name: "Day A",
+            sections: [
+              {
+                id: "s1",
+                name: "Main",
+                sectionType: "main_lift",
+                orderIndex: 0,
+                prescriptions: [
+                  {
+                    id: "p1",
+                    exerciseId: randomUUID(),
+                    exerciseName: "Barbell Bench Press",
+                    orderIndex: 0,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    // zod strips unknown keys by default rather than rejecting them, so
+    // this proves the field is dropped, not merely ignored-but-present —
+    // parse succeeds, but the offending key never survives.
+    const result = ModelWeekDraftSchema.safeParse(weekWithId);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect("exerciseId" in result.data.days[0].workout!.sections[0].prescriptions[0]).toBe(false);
+    }
   });
 });

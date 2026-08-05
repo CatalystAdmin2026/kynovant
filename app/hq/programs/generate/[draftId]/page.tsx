@@ -5,7 +5,7 @@
 
 import { notFound } from "next/navigation";
 import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
-import { getOwnedDraft } from "@/lib/db/program-generation-service";
+import { getOwnedDraft, getLatestRun, listGenerationWeeks } from "@/lib/db/program-generation-service";
 import { parseGeneratedProgramDraft, parseProgramGenerationBrief } from "@/lib/program-generator/contracts";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
@@ -26,6 +26,16 @@ export default async function DraftReviewPage({
   const draft = access.draft;
   const parsedDraft = draft.draftJson ? parseGeneratedProgramDraft(draft.draftJson) : null;
   const parsedBrief = parseProgramGenerationBrief(draft.briefJson);
+
+  // Staged-generation progress — only meaningful while status is
+  // 'running' or 'failed' (a completed draft's weeks are already folded
+  // into draftJson, but the per-week breakdown is still shown so the
+  // coach can see how the draft was built and what, if anything, needed
+  // a retry along the way).
+  const [latestRun, generationWeeks] = await Promise.all([
+    getLatestRun(draftId),
+    listGenerationWeeks(draftId),
+  ]);
 
   return (
     <div className="max-w-5xl">
@@ -49,6 +59,19 @@ export default async function DraftReviewPage({
         warningsAcknowledgedAt={draft.warningsAcknowledgedAt ? draft.warningsAcknowledgedAt.toISOString() : null}
         approvedAt={draft.approvedAt ? draft.approvedAt.toISOString() : null}
         createdProgramTemplateId={draft.createdProgramTemplateId}
+        progress={
+          latestRun
+            ? {
+                totalWeeks: latestRun.totalWeeks,
+                completedWeeks: latestRun.completedWeeks,
+                currentWeek: latestRun.currentWeek,
+              }
+            : null
+        }
+        generationWeeks={generationWeeks.map((w) => ({
+          weekNumber: w.weekNumber,
+          status: w.status,
+        }))}
       />
     </div>
   );

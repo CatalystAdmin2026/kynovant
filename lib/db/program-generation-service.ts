@@ -15,20 +15,27 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { and, eq, desc, sql } from "drizzle-orm";
+import { and, eq, asc, desc, sql } from "drizzle-orm";
 import { getDb } from "./client";
 import {
   programGenerationDrafts,
   programGenerationRuns,
+  programGenerationWeeks,
   programGenerationEditEvents,
   programGenerationValidationEvents,
   type ProgramGenerationDraft,
   type ProgramGenerationStatus,
   type ProgramGenerationRun,
   type ProgramGenerationRunScope,
+  type ProgramGenerationWeek,
   type ProgramGenerationEditAction,
 } from "./schema-program-generator";
-import type { ProgramGenerationBrief, GeneratedProgramDraft } from "@/lib/program-generator/contracts";
+import type {
+  ProgramGenerationBrief,
+  GeneratedProgramDraft,
+  ProgramShell,
+  ModelWeekDraft,
+} from "@/lib/program-generator/contracts";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
 import type { TenantScope } from "@/lib/auth/guards";
 
@@ -109,6 +116,17 @@ export async function setDraftStatus(
       failureReason: extra?.failureReason ?? null,
       updatedAt: new Date(),
     })
+    .where(eq(programGenerationDrafts.id, draftId));
+}
+
+// Set once per draft (or once per shell regeneration on a full resume
+// that never got past the shell — see actions.ts) — the shell is held
+// fixed across every subsequent week-generation call.
+export async function saveProgramShell(draftId: string, shell: ProgramShell): Promise<void> {
+  const db = getDb();
+  await db
+    .update(programGenerationDrafts)
+    .set({ shellJson: shell, updatedAt: new Date() })
     .where(eq(programGenerationDrafts.id, draftId));
 }
 
@@ -233,6 +251,11 @@ export async function startRun(params: {
   scope: ProgramGenerationRunScope;
   dayRef?: string | null;
   requestedByUserId: string;
+  // Staged full_draft runs only — see program_generation_runs' own
+  // schema comment. completedWeeks reflects the draft's overall
+  // progress at the moment this run started (non-zero on a resume).
+  totalWeeks?: number;
+  completedWeeks?: number;
 }): Promise<ProgramGenerationRun> {
   const db = getDb();
   const [row] = await db
@@ -244,9 +267,38 @@ export async function startRun(params: {
       status: "running",
       requestedByUserId: params.requestedByUserId,
       startedAt: new Date(),
+      totalWeeks: params.totalWeeks ?? null,
+      completedWeeks: params.completedWeeks ?? null,
     })
     .returning();
   return row;
+}
+
+// Updates staged-generation progress on a run — polled by the review
+// page while status='running' to show "Generating Week N of M".
+export async function updateRunProgress(
+  runId: string,
+  progress: { currentWeek?: number; completedWeeks?: number },
+): Promise<void> {
+  const db = getDb();
+  await db
+    .update(programGenerationRuns)
+    .set({
+      ...(progress.currentWeek !== undefined ? { currentWeek: progress.currentWeek } : {}),
+      ...(progress.completedWeeks !== undefined ? { completedWeeks: progress.completedWeeks } : {}),
+    })
+    .where(eq(programGenerationRuns.id, runId));
+}
+
+export async function getLatestRun(draftId: string): Promise<ProgramGenerationRun | null> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(programGenerationRuns)
+    .where(eq(programGenerationRuns.draftId, draftId))
+    .orderBy(desc(programGenerationRuns.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function completeRun(
@@ -271,6 +323,44 @@ export async function failRun(runId: string, errorMessage: string): Promise<void
     .update(programGenerationRuns)
     .set({ status: "failed", errorMessage, completedAt: new Date() })
     .where(eq(programGenerationRuns.id, runId));
+}
+
+// ─────────────────────────────────────────────────────────────
+// STAGED GENERATION — per-week persistence
+//
+// One row per (draft, weekNumber), upserted — a retry that regenerates
+// a previously-failed week overwrites that row rather than appending a
+// new one, so program_generation_weeks always holds exactly the latest
+// outcome per week. See schema-program-generator.ts's table comment.
+// ─────────────────────────────────────────────────────────────
+
+export async function saveGenerationWeek(
+  draftId: string,
+  weekNumber: number,
+  data: { status: "completed"; weekJson: ModelWeekDraft } | { status: "failed"; errorMessage: string },
+): Promise<void> {
+  const db = getDb();
+  const values =
+    data.status === "completed"
+      ? { draftId, weekNumber, status: "completed" as const, weekJson: data.weekJson, errorMessage: null }
+      : { draftId, weekNumber, status: "failed" as const, weekJson: null, errorMessage: data.errorMessage };
+
+  await db
+    .insert(programGenerationWeeks)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [programGenerationWeeks.draftId, programGenerationWeeks.weekNumber],
+      set: { ...values, updatedAt: new Date() },
+    });
+}
+
+export async function listGenerationWeeks(draftId: string): Promise<ProgramGenerationWeek[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(programGenerationWeeks)
+    .where(eq(programGenerationWeeks.draftId, draftId))
+    .orderBy(asc(programGenerationWeeks.weekNumber));
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -4,8 +4,9 @@
 // Kynovant — AI-Assisted Program Generator: Server Actions
 //
 // This is the entry point for the entire feature's mutating surface —
-// generate, view is a plain page-level read (see page.tsx), every edit
-// operation, discard, rerun validation, acknowledge warnings, approve.
+// generate, resume/retry, view is a plain page-level read (see
+// page.tsx), every edit operation, discard, rerun validation,
+// acknowledge warnings, approve.
 //
 // Every action here follows the same shape already established by
 // app/hq/check-ins/[checkInId]/actions.ts: requireCoachOrAdmin() guard,
@@ -13,8 +14,19 @@
 // domain layer, then revalidatePath. Nothing here talks to the database
 // directly — that's lib/db/program-generation-service.ts's job — and
 // nothing here calls a model provider directly — that's
-// lib/program-generator/provider.ts's job, reached only through
-// generateProgramDraft()/regenerateDayDraft().
+// lib/program-generator/provider.ts's job, reached only through its
+// exported generate*()/regenerateDayDraft() functions.
+//
+// Staged generation orchestration (runStagedGeneration, below) is the
+// composition point the diagnosed 180s-timeout fix required: it drives
+// one generateProgramShell() call followed by one generateProgramWeek()
+// call per week, persisting each week as it completes, and only calls
+// resolveProgramDraftExercises()/validateGeneratedDraft() once, after
+// every week has succeeded. Both generateProgramDraftAction() (fresh)
+// and resumeGenerationAction() (retry after a failed week) call the
+// same function — a resume just supplies the weeks already completed
+// and the first weekNumber still missing, so completed weeks are never
+// regenerated.
 // ─────────────────────────────────────────────────────────────
 
 import { revalidatePath } from "next/cache";
@@ -28,11 +40,10 @@ import {
   createDraft,
   getOwnedDraft,
   saveDraftContent,
-  saveValidationResult,
-  saveValidationFailure,
   acknowledgeWarnings,
   discardDraft as discardDraftRow,
   setDraftStatus,
+  listGenerationWeeks,
   startRun,
   completeRun,
   failRun,
@@ -41,16 +52,20 @@ import {
 import {
   parseProgramGenerationBrief,
   parseGeneratedProgramDraft,
+  parseProgramShell,
+  ModelWeekDraftSchema,
   PrescriptionEditPatchSchema,
   type ProgramGenerationBrief,
   type GeneratedProgramDraft,
+  type ProgramShell,
+  type ModelWeekDraft,
 } from "@/lib/program-generator/contracts";
-import { generateProgramDraft, regenerateDayDraft } from "@/lib/program-generator/provider";
+import { regenerateDayDraft } from "@/lib/program-generator/provider";
 import { resolveProgramDraftExercises } from "@/lib/program-generator/exercise-resolution";
-import { buildClientContextSummary } from "@/lib/program-generator/client-context";
-import { validateGeneratedDraft } from "@/lib/program-generator/validation";
+import { buildClientContextSummary, type ClientContextSummary } from "@/lib/program-generator/client-context";
 import { updatePrescription, replaceExercise, reorderExercises, moveWorkoutDay } from "@/lib/program-generator/edit-ops";
 import { approveDraft } from "@/lib/program-generator/approval";
+import { runStagedGeneration, runAndSaveValidation } from "@/lib/program-generator/staged-generation";
 
 export interface ActionResult<T = undefined> {
   ok: boolean;
@@ -84,22 +99,15 @@ function revalidateDraft(draftId: string) {
   revalidatePath("/hq/programs");
 }
 
-// ─────────────────────────────────────────────────────────────
-// VALIDATION HELPER — shared by generation and "rerun validation"
-// ─────────────────────────────────────────────────────────────
-
-async function runAndSaveValidation(
-  draftId: string,
-  draft: GeneratedProgramDraft,
-  brief: ProgramGenerationBrief,
-  coachId: string,
-): Promise<void> {
-  try {
-    const result = await validateGeneratedDraft(draft, brief, coachId);
-    await saveValidationResult(draftId, result);
-  } catch (err) {
-    await saveValidationFailure(draftId, err instanceof Error ? err.message : "Validation failed unexpectedly.");
-  }
+async function resolveClientContext(clientId: string | null): Promise<ClientContextSummary | null> {
+  if (!clientId) return null;
+  const db = getDb();
+  const rows = await db
+    .select({ fullName: clientProfiles.fullName })
+    .from(clientProfiles)
+    .where(eq(clientProfiles.userId, clientId))
+    .limit(1);
+  return buildClientContextSummary(clientId, rows[0]?.fullName ?? null);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -126,53 +134,75 @@ export async function generateProgramDraftAction(input: {
     clientId: input.clientId,
     brief: parsedBrief.data,
   });
-
   await setDraftStatus(draftRow.id, "running");
-  const run = await startRun({ draftId: draftRow.id, scope: "full_draft", requestedByUserId: actor.coachId });
 
-  let clientDisplayName: string | null = null;
-  if (input.clientId) {
-    const db = getDb();
-    const rows = await db
-      .select({ fullName: clientProfiles.fullName })
-      .from(clientProfiles)
-      .where(eq(clientProfiles.userId, input.clientId))
-      .limit(1);
-    clientDisplayName = rows[0]?.fullName ?? null;
-  }
+  const clientContext = await resolveClientContext(input.clientId);
 
-  const clientContext = input.clientId
-    ? await buildClientContextSummary(input.clientId, clientDisplayName)
-    : null;
-
-  const outcome = await generateProgramDraft(parsedBrief.data, clientContext);
-
-  if (!outcome.ok) {
-    await failRun(run.id, outcome.errorMessage);
-    await setDraftStatus(draftRow.id, "failed", { failureReason: outcome.errorMessage });
-    revalidateDraft(draftRow.id);
-    return { ok: false, error: outcome.errorMessage, data: { draftId: draftRow.id } };
-  }
-
-  // Provider returns unresolved model output (exerciseName only, no
-  // exerciseId — see contracts.ts's Model*Schema tree). Resolution
-  // against the real Exercise Library happens exactly once, here, in
-  // the orchestration layer — never inside provider.ts.
-  const resolvedDraft = await resolveProgramDraftExercises(outcome.draft);
-  const reparsed = parseGeneratedProgramDraft(resolvedDraft);
-  if (!reparsed.ok) {
-    await failRun(run.id, reparsed.error);
-    await setDraftStatus(draftRow.id, "failed", { failureReason: reparsed.error });
-    revalidateDraft(draftRow.id);
-    return { ok: false, error: reparsed.error, data: { draftId: draftRow.id } };
-  }
-
-  await completeRun(run.id, { provider: outcome.provider, model: outcome.model });
-  await saveDraftContent(draftRow.id, reparsed.data, "ready_for_review");
-  await runAndSaveValidation(draftRow.id, reparsed.data, parsedBrief.data, actor.coachId);
+  const result = await runStagedGeneration({
+    draftId: draftRow.id,
+    coachId: actor.coachId,
+    brief: parsedBrief.data,
+    clientContext,
+    existingShell: null,
+    startFromWeek: 1,
+    existingCompletedWeeks: new Map(),
+  });
 
   revalidateDraft(draftRow.id);
-  return { ok: true, data: { draftId: draftRow.id } };
+  return result.ok
+    ? { ok: true, data: { draftId: draftRow.id } }
+    : { ok: false, error: result.error, data: { draftId: draftRow.id } };
+}
+
+// Resumes a failed staged generation: never regenerates a week already
+// persisted as 'completed', including the shell if it already
+// completed. Only reachable on a draft currently in status='failed'.
+export async function resumeGenerationAction(draftId: string): Promise<ActionResult> {
+  const auth = await requireOwnedDraft(draftId);
+  if (!auth.ok) return { ok: false, error: auth.error };
+
+  if (auth.draft.status !== "failed") {
+    return { ok: false, error: "Only a failed draft can be retried." };
+  }
+
+  const parsedBrief = parseProgramGenerationBrief(auth.draft.briefJson);
+  if (!parsedBrief.ok) return { ok: false, error: "Draft brief is not currently valid." };
+
+  let existingShell: ProgramShell | null = null;
+  if (auth.draft.shellJson) {
+    const parsedShell = parseProgramShell(auth.draft.shellJson);
+    if (parsedShell.ok) existingShell = parsedShell.data;
+  }
+
+  const existingWeekRows = await listGenerationWeeks(draftId);
+  const existingCompletedWeeks = new Map<number, ModelWeekDraft>();
+  for (const row of existingWeekRows) {
+    if (row.status !== "completed" || !row.weekJson) continue;
+    const parsedWeek = ModelWeekDraftSchema.safeParse(row.weekJson);
+    if (parsedWeek.success) existingCompletedWeeks.set(row.weekNumber, parsedWeek.data);
+  }
+
+  const totalWeeks = existingShell?.totalWeeks ?? parsedBrief.data.weeks;
+  let startFromWeek = 1;
+  while (startFromWeek <= totalWeeks && existingCompletedWeeks.has(startFromWeek)) {
+    startFromWeek++;
+  }
+
+  await setDraftStatus(draftId, "running");
+  const clientContext = await resolveClientContext(auth.draft.clientId);
+
+  const result = await runStagedGeneration({
+    draftId,
+    coachId: auth.coachId,
+    brief: parsedBrief.data,
+    clientContext,
+    existingShell,
+    startFromWeek,
+    existingCompletedWeeks,
+  });
+
+  revalidateDraft(draftId);
+  return result.ok ? { ok: true } : { ok: false, error: result.error };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -336,19 +366,7 @@ export async function regenerateDayAction(params: {
   const loaded = await loadEditableDraft(params.draftId);
   if (!loaded.ok) return { ok: false, error: loaded.error };
 
-  let clientDisplayName: string | null = null;
-  if (loaded.draftRow.clientId) {
-    const db = getDb();
-    const rows = await db
-      .select({ fullName: clientProfiles.fullName })
-      .from(clientProfiles)
-      .where(eq(clientProfiles.userId, loaded.draftRow.clientId))
-      .limit(1);
-    clientDisplayName = rows[0]?.fullName ?? null;
-  }
-  const clientContext = loaded.draftRow.clientId
-    ? await buildClientContextSummary(loaded.draftRow.clientId, clientDisplayName)
-    : null;
+  const clientContext = await resolveClientContext(loaded.draftRow.clientId);
 
   const run = await startRun({
     draftId: params.draftId,
@@ -361,15 +379,14 @@ export async function regenerateDayAction(params: {
 
   if (!outcome.ok) {
     await failRun(run.id, outcome.errorMessage);
-    return { ok: false, error: outcome.errorMessage };
+    return { ok: false, error: "Regeneration failed. Please try again." };
   }
 
-  // Same resolution path as full generation (requirement: regenerate-day
-  // must use the same resolver) — the provider's model-output draft
-  // still has no exerciseId anywhere, even for days it echoed back
-  // unchanged, so every prescription is resolved again here. Exact-name
-  // matches are deterministic, so unchanged exercises reliably resolve
-  // to the same real id they already had.
+  // Same resolution path as full generation — the provider's model-
+  // output draft still has no exerciseId anywhere, even for days it
+  // echoed back unchanged, so every prescription is resolved again
+  // here. Exact-name matches are deterministic, so unchanged exercises
+  // reliably resolve to the same real id they already had.
   const resolvedDraft = await resolveProgramDraftExercises(outcome.draft);
   const reparsed = parseGeneratedProgramDraft(resolvedDraft);
   if (!reparsed.ok) {

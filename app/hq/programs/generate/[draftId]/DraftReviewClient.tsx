@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { GeneratedProgramDraft, GeneratedPrescriptionDraft, ProgramGenerationBrief } from "@/lib/program-generator/contracts";
 import type { DraftValidationResult, ValidationFinding } from "@/lib/program-generator/validation";
@@ -10,11 +11,23 @@ import {
   reorderExercisesAction,
   moveWorkoutDayAction,
   regenerateDayAction,
+  resumeGenerationAction,
   rerunValidationAction,
   acknowledgeWarningsAction,
   discardDraftAction,
   approveDraftAction,
 } from "../actions";
+
+interface GenerationProgress {
+  totalWeeks: number | null;
+  completedWeeks: number | null;
+  currentWeek: number | null;
+}
+
+interface GenerationWeekSummary {
+  weekNumber: number;
+  status: "completed" | "failed";
+}
 
 interface Props {
   draftId: string;
@@ -28,6 +41,8 @@ interface Props {
   warningsAcknowledgedAt: string | null;
   approvedAt: string | null;
   createdProgramTemplateId: string | null;
+  progress: GenerationProgress | null;
+  generationWeeks: GenerationWeekSummary[];
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -48,6 +63,19 @@ const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export default function DraftReviewClient(props: Props) {
   const [pending, startTransition] = useTransition();
   const [notice, setNotice] = useState<{ tone: "error" | "success"; message: string } | null>(null);
+  const router = useRouter();
+
+  // Staged generation runs synchronously within one server action call —
+  // there's no push channel for live updates, so while status='running'
+  // this tab polls by re-fetching the page, which re-reads the current
+  // run/week rows another request (this one, or a coach's other tab)
+  // already committed to the DB. Stops as soon as status moves away
+  // from 'running'.
+  useEffect(() => {
+    if (props.status !== "running") return;
+    const interval = setInterval(() => router.refresh(), 3000);
+    return () => clearInterval(interval);
+  }, [props.status, router]);
 
   function runAction(fn: () => Promise<{ ok: boolean; error?: string }>, successMessage?: string) {
     startTransition(async () => {
@@ -80,6 +108,13 @@ export default function DraftReviewClient(props: Props) {
         <div>
           <p className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em] mb-1">Status</p>
           <p className="text-white font-semibold text-sm">{STATUS_LABEL[props.status] ?? props.status}</p>
+          {props.status === "running" && props.progress?.totalWeeks != null && (
+            <p className="text-[#C9A24D] text-xs mt-1">
+              {props.progress.currentWeek === 0
+                ? "Designing program structure…"
+                : `Generating Week ${props.progress.currentWeek ?? 1} of ${props.progress.totalWeeks}`}
+            </p>
+          )}
           {props.status === "failed" && props.failureReason && (
             <p className="text-red-400 text-xs mt-1">{props.failureReason}</p>
           )}
@@ -102,6 +137,15 @@ export default function DraftReviewClient(props: Props) {
                 className="border border-white/15 text-white/70 text-[10px] font-bold uppercase tracking-[0.25em] px-4 py-2.5 hover:border-white/30 hover:text-white transition-colors disabled:opacity-40"
               >
                 Rerun Validation
+              </button>
+            )}
+            {props.status === "failed" && (
+              <button
+                disabled={pending}
+                onClick={() => runAction(() => resumeGenerationAction(props.draftId), "Retrying generation…")}
+                className="bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.3em] uppercase px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-40"
+              >
+                Retry
               </button>
             )}
             {warningsNeedAck && (
@@ -151,6 +195,30 @@ export default function DraftReviewClient(props: Props) {
           }`}
         >
           {notice.message}
+        </div>
+      )}
+
+      {/* Week-by-week generation progress */}
+      {props.generationWeeks.length > 0 && (
+        <div className="bg-[#0d0e0f] border border-white/[0.08] p-5">
+          <p className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em] mb-3">
+            Generation Progress
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {props.generationWeeks.map((w) => (
+              <span
+                key={w.weekNumber}
+                title={w.status === "completed" ? `Week ${w.weekNumber} completed` : `Week ${w.weekNumber} failed`}
+                className={`text-[10px] font-semibold px-2 py-1 border ${
+                  w.status === "completed"
+                    ? "border-emerald-500/30 text-emerald-400"
+                    : "border-red-500/30 text-red-400"
+                }`}
+              >
+                W{w.weekNumber} {w.status === "completed" ? "✓" : "✗"}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 

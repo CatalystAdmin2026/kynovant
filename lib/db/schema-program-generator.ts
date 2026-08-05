@@ -6,10 +6,21 @@
 // Tables:
 //   program_generation_drafts            — one row per Program Brief → draft
 //   program_generation_runs              — one row per generation attempt
-//                                           (initial generate, regenerate-all,
-//                                           regenerate-one-day)
+//                                           (initial generate, resume/retry,
+//                                           regenerate-one-day), tracks
+//                                           staged week-by-week progress
+//   program_generation_weeks             — one row per week of a staged
+//                                           generation, latest attempt only
 //   program_generation_edit_events       — coach edit audit log
 //   program_generation_validation_events — Kynovant Insights run audit log
+//
+// Staged generation (see lib/program-generator/provider.ts's
+// generateProgramShell()/generateProgramWeek() and actions.ts's
+// orchestration): a full-program generation is a lightweight shell call
+// followed by one generateObject() call per week, never one call for the
+// entire multi-week program — see docs on program_generation_weeks below
+// for why. draftJson/draft_version are only ever written once, at final
+// assembly, from the concatenated completed weeks — never incrementally.
 //
 // This is the "temporary review object, not yet a real Program" storage
 // layer described in docs/ai-program-generator-ux-spec.md §16. Generated
@@ -41,6 +52,7 @@ import {
   jsonb,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { users, programTemplates } from "./schema";
 
@@ -92,6 +104,16 @@ export const programGenerationEditActionEnum = pgEnum("program_generation_edit_a
   "progression_updated",
 ]);
 
+// Only terminal states are persisted — a week row is written once its
+// generateProgramWeek() call has either succeeded or failed, never for
+// an in-flight attempt (staged generation runs synchronously within one
+// server action; "in progress" is represented by program_generation_runs.
+// current_week, not by a week row).
+export const programGenerationWeekStatusEnum = pgEnum("program_generation_week_status", [
+  "completed",
+  "failed",
+]);
+
 // ─────────────────────────────────────────────────────────────
 // TABLE — program_generation_drafts
 //
@@ -124,6 +146,13 @@ export const programGenerationDrafts = pgTable(
 
     briefJson: jsonb("brief_json").notNull(),
     briefVersion: integer("brief_version").notNull().default(1),
+
+    // Validated ProgramShell (contracts.ts) — title/description/day
+    // labels/phase-progression outline/global constraints. Generated
+    // once, before any week, and held fixed across every week-generation
+    // call and any later resume/retry so week N+1 is still building the
+    // same program as week 1. Null until the shell call completes.
+    shellJson: jsonb("shell_json"),
 
     draftJson: jsonb("draft_json"),
     draftVersion: integer("draft_version").notNull().default(0),
@@ -170,9 +199,20 @@ export const programGenerationDrafts = pgTable(
 // TABLE — program_generation_runs
 //
 // One row per generation attempt. A draft typically has one run (the
-// initial generation) plus zero or more additional runs from
-// "Regenerate Draft" (scope=full_draft) or "Regenerate Day"
-// (scope=single_day, dayRef identifies which day within draftJson).
+// initial generation) plus zero or more additional runs from a resume/
+// retry after a failed week, "Regenerate Draft" (scope=full_draft), or
+// "Regenerate Day" (scope=single_day, dayRef identifies which day
+// within draftJson).
+//
+// total_weeks/completed_weeks/current_week track staged full_draft
+// generation progress (null/unused for single_day runs). completed_weeks
+// and current_week reflect the DRAFT's overall progress (how many of
+// program_generation_weeks are status='completed', and which week this
+// run is currently generating) — not just this one run's own share of
+// the work — so a coach watching a resumed run still sees "7 of 10"
+// rather than the resume's own count starting back at zero. The review
+// page polls this row while status='running' for "Generating Week N of
+// M" (see app/hq/programs/generate/[draftId]).
 // ─────────────────────────────────────────────────────────────
 
 export const programGenerationRuns = pgTable(
@@ -188,6 +228,10 @@ export const programGenerationRuns = pgTable(
     // Stable synthetic day id within draftJson (see contracts.ts) —
     // null for scope=full_draft.
     dayRef: text("day_ref"),
+
+    totalWeeks: integer("total_weeks"),
+    completedWeeks: integer("completed_weeks"),
+    currentWeek: integer("current_week"),
 
     stage: text("stage"),
     provider: text("provider"),
@@ -206,6 +250,48 @@ export const programGenerationRuns = pgTable(
   (table) => [
     index("idx_program_generation_runs_draft_id").on(table.draftId),
     index("idx_program_generation_runs_status").on(table.status),
+  ],
+);
+
+// ─────────────────────────────────────────────────────────────
+// TABLE — program_generation_weeks
+//
+// One row per (draft, weekNumber), upserted — a retry that regenerates
+// a previously-failed week overwrites that week's row rather than
+// appending a new one, so this table always holds exactly the LATEST
+// outcome per week, never a full history of every attempt (that history
+// lives in program_generation_runs' errorMessage per attempt instead).
+//
+// week_json holds an unresolved ModelWeekDraft (contracts.ts) — no
+// exerciseId anywhere. Exercise resolution runs once, at final assembly
+// (see lib/program-generator/actions.ts), not per week — so a week row
+// never needs to be touched again once persisted, regardless of how
+// many later weeks succeed or fail. null when status='failed'.
+//
+// A resume/retry queries this table for already-'completed' weeks,
+// skips regenerating them, and continues from the first weekNumber
+// (1..totalWeeks) with no row or a 'failed' row.
+// ─────────────────────────────────────────────────────────────
+
+export const programGenerationWeeks = pgTable(
+  "program_generation_weeks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => programGenerationDrafts.id, { onDelete: "cascade" }),
+    weekNumber: integer("week_number").notNull(),
+
+    status: programGenerationWeekStatusEnum("status").notNull(),
+    weekJson: jsonb("week_json"),
+    errorMessage: text("error_message"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_program_generation_weeks_draft_id").on(table.draftId),
+    uniqueIndex("uq_program_generation_weeks_draft_week").on(table.draftId, table.weekNumber),
   ],
 );
 
@@ -289,6 +375,10 @@ export type ProgramGenerationRun = typeof programGenerationRuns.$inferSelect;
 export type NewProgramGenerationRun = typeof programGenerationRuns.$inferInsert;
 export type ProgramGenerationRunStatus = ProgramGenerationRun["status"];
 export type ProgramGenerationRunScope = ProgramGenerationRun["scope"];
+
+export type ProgramGenerationWeek = typeof programGenerationWeeks.$inferSelect;
+export type NewProgramGenerationWeek = typeof programGenerationWeeks.$inferInsert;
+export type ProgramGenerationWeekStatus = ProgramGenerationWeek["status"];
 
 export type ProgramGenerationEditEvent = typeof programGenerationEditEvents.$inferSelect;
 export type NewProgramGenerationEditEvent = typeof programGenerationEditEvents.$inferInsert;

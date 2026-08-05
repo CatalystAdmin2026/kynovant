@@ -26,13 +26,26 @@ import {
   getOwnedDraft,
   saveDraftContent,
   saveValidationResult,
+  saveProgramShell,
+  saveGenerationWeek,
+  listGenerationWeeks,
+  getLatestRun,
+  setDraftStatus,
+  acknowledgeWarnings,
 } from "../program-generation-service";
 import { validateGeneratedDraft } from "@/lib/program-generator/validation";
 import { approveDraft } from "@/lib/program-generator/approval";
 import { resolveProgramDraftExercises } from "@/lib/program-generator/exercise-resolution";
 import { coachOwnsProgramTemplate, coachOwnsWorkoutTemplate } from "@/lib/auth/guards";
-import { generateProgramDraft, regenerateDayDraft } from "@/lib/program-generator/provider";
-import type { GeneratedProgramDraft, ModelProgramDraft } from "@/lib/program-generator/contracts";
+import { generateProgramShell, regenerateDayDraft } from "@/lib/program-generator/provider";
+import { buildFixtureProgramShell, buildFixtureProgramWeek } from "@/lib/program-generator/fixture";
+import { runStagedGeneration } from "@/lib/program-generator/staged-generation";
+import { summarizeWeekForPrompt, buildWeekGenerationPrompt } from "@/lib/program-generator/prompt";
+import type {
+  GeneratedProgramDraft,
+  ModelProgramDraft,
+  ModelWeekDraft,
+} from "@/lib/program-generator/contracts";
 import type { ProgramGenerationBrief } from "@/lib/program-generator/contracts";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
 
@@ -247,7 +260,7 @@ afterAll(async () => {
     const adminClient = createAdminClient();
     await Promise.all(userIds.map((id) => adminClient.auth.admin.deleteUser(id)));
   }
-});
+}, 60_000);
 
 // ─────────────────────────────────────────────────────────────
 // Exercise existence + exclusion enforcement
@@ -536,7 +549,7 @@ describe("approveDraft", () => {
 // Provider — safe failure state
 // ─────────────────────────────────────────────────────────────
 
-describe("generateProgramDraft — provider configuration", () => {
+describe("provider configuration", () => {
   const originalModel = process.env.PROGRAM_GENERATOR_MODEL;
   const originalFixture = process.env.PROGRAM_GENERATOR_USE_FIXTURE;
 
@@ -551,52 +564,29 @@ describe("generateProgramDraft — provider configuration", () => {
     delete process.env.PROGRAM_GENERATOR_MODEL;
     delete process.env.PROGRAM_GENERATOR_USE_FIXTURE;
 
-    const outcome = await generateProgramDraft(VALID_BRIEF, null);
+    const outcome = await generateProgramShell(VALID_BRIEF, null);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.errorCode).toBe("not_configured");
   });
 
-  it("the dev fixture, when explicitly enabled, produces a schema-valid draft from real exercises", async () => {
+  it("regenerate-day resolves exercises through the same resolver as staged generation", async () => {
     process.env.PROGRAM_GENERATOR_USE_FIXTURE = "true";
     delete process.env.PROGRAM_GENERATOR_MODEL;
 
-    const outcome = await generateProgramDraft(VALID_BRIEF, null);
-    expect(outcome.ok).toBe(true);
-    if (outcome.ok) {
-      expect(outcome.provider).toBe("dev-fixture");
-      // Provider returns unresolved model output (name only) — resolve
-      // it exactly as the orchestration layer (actions.ts) would before
-      // validating. Every exercise the fixture referenced must resolve
-      // against the real library via the "exact" tier, since fixture.ts
-      // builds prescriptions from each row's own real canonical name —
-      // proves the fixture exercises the full resolve path rather than
-      // bypassing it.
-      const resolved = await resolveProgramDraftExercises(outcome.draft);
-      for (const week of resolved.weeks) {
-        for (const day of week.days) {
-          for (const section of day.workout?.sections ?? []) {
-            for (const prescription of section.prescriptions) {
-              expect(prescription.exerciseResolution?.outcome).toBe("exact");
-              expect(prescription.exerciseId).not.toBeNull();
-            }
-          }
-        }
-      }
+    const shell = buildFixtureProgramShell(VALID_BRIEF);
+    const week1 = await buildFixtureProgramWeek(1, shell);
+    if (!week1) throw new Error("fixture setup failed — not enough active exercises seeded.");
 
-      const validation = await validateGeneratedDraft(resolved, VALID_BRIEF, coachA.id);
-      expect(validation.unresolvedExerciseIds).toHaveLength(0);
-      expect(validation.blockers).toHaveLength(0);
-    }
-  });
-
-  it("regenerate-day resolves exercises through the same resolver as full generation", async () => {
-    process.env.PROGRAM_GENERATOR_USE_FIXTURE = "true";
-    delete process.env.PROGRAM_GENERATOR_MODEL;
-
-    const initial = await generateProgramDraft(VALID_BRIEF, null);
-    expect(initial.ok).toBe(true);
-    if (!initial.ok) return;
-    const resolvedInitial = await resolveProgramDraftExercises(initial.draft);
+    const initialModelDraft: ModelProgramDraft = {
+      name: shell.title,
+      description: shell.description,
+      category: VALID_BRIEF.goal,
+      experienceLevel: VALID_BRIEF.experienceLevel,
+      defaultDurationWeeks: 1,
+      recommendedDaysPerWeek: VALID_BRIEF.daysPerWeek,
+      weeks: [week1],
+    };
+    const resolvedInitial = await resolveProgramDraftExercises(initialModelDraft);
 
     const dayId = resolvedInitial.weeks[0].days[0].id;
     const regenOutcome = await regenerateDayDraft(VALID_BRIEF, null, resolvedInitial, dayId, undefined);
@@ -604,10 +594,10 @@ describe("generateProgramDraft — provider configuration", () => {
     if (!regenOutcome.ok) return;
 
     // Provider's regenerate-day output is the same unresolved
-    // ModelProgramDraft shape as full generation — no exerciseId
-    // anywhere, even for days it echoed back unchanged — proving both
-    // entry points require, and are compatible with, the identical
-    // resolveProgramDraftExercises() call.
+    // ModelProgramDraft shape as staged generation's assembled output —
+    // no exerciseId anywhere, even for days it echoed back unchanged —
+    // proving both entry points require, and are compatible with, the
+    // identical resolveProgramDraftExercises() call.
     const resolvedAfterRegen = await resolveProgramDraftExercises(regenOutcome.draft);
     let sawAtLeastOnePrescription = false;
     for (const week of resolvedAfterRegen.weeks) {
@@ -623,5 +613,223 @@ describe("generateProgramDraft — provider configuration", () => {
       }
     }
     expect(sawAtLeastOnePrescription).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Staged, week-by-week generation orchestration (replaces the single
+// giant generateObject() call that caused 180s timeouts on large
+// programs — see lib/program-generator/staged-generation.ts).
+// ─────────────────────────────────────────────────────────────
+
+describe("staged generation orchestration", () => {
+  const originalModel = process.env.PROGRAM_GENERATOR_MODEL;
+  const originalFixture = process.env.PROGRAM_GENERATOR_USE_FIXTURE;
+
+  beforeAll(() => {
+    process.env.PROGRAM_GENERATOR_USE_FIXTURE = "true";
+    delete process.env.PROGRAM_GENERATOR_MODEL;
+  });
+
+  afterAll(() => {
+    if (originalModel === undefined) delete process.env.PROGRAM_GENERATOR_MODEL;
+    else process.env.PROGRAM_GENERATOR_MODEL = originalModel;
+    if (originalFixture === undefined) delete process.env.PROGRAM_GENERATOR_USE_FIXTURE;
+    else process.env.PROGRAM_GENERATOR_USE_FIXTURE = originalFixture;
+  });
+
+  it("a 10-week program is generated as one shell call plus 10 week calls — never one giant call — and the assembled draft resolves and validates, with approval remaining atomic", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 10, daysPerWeek: 3 };
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    // 11 sequential fixture "provider" calls (1 shell + 10 weeks), each a
+    // real DB round-trip, plus resolution/validation/approval — comfortably
+    // exceeds vitest's default 5s per-test timeout even though each step
+    // individually is fast.
+    draftIds.push(row.id);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachA.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      startFromWeek: 1,
+      existingCompletedWeeks: new Map(),
+    });
+    expect(result.ok).toBe(true);
+
+    // Decomposed into 10 persisted week rows — proves the program was
+    // never generated as a single request sized to the whole draft.
+    const weekRows = await listGenerationWeeks(row.id);
+    expect(weekRows).toHaveLength(10);
+    expect(weekRows.every((w) => w.status === "completed")).toBe(true);
+
+    const latestRun = await getLatestRun(row.id);
+    expect(latestRun?.totalWeeks).toBe(10);
+    expect(latestRun?.completedWeeks).toBe(10);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.status).toBe("ready_for_review");
+    expect(draftRow.shellJson).toBeTruthy();
+
+    const parsedDraft = draftRow.draftJson as GeneratedProgramDraft;
+    expect(parsedDraft.weeks).toHaveLength(10);
+
+    // Exercise resolution applied once, at assembly — every prescription
+    // resolved to a real id, never the nil UUID.
+    let prescriptionCount = 0;
+    for (const week of parsedDraft.weeks) {
+      for (const day of week.days) {
+        for (const section of day.workout?.sections ?? []) {
+          for (const p of section.prescriptions) {
+            prescriptionCount++;
+            expect(p.exerciseId).not.toBeNull();
+            expect(p.exerciseId).not.toBe("00000000-0000-0000-0000-000000000000");
+          }
+        }
+      }
+    }
+    expect(prescriptionCount).toBeGreaterThan(0);
+
+    // Full validation ran against the assembled draft. No blockers
+    // expected (real, valid prescriptions against real exercises) —
+    // warnings are plausible (30 near-identical fixture days can trip
+    // Kynovant Insights' redundancy/fatigue heuristics) and, per locked
+    // rule #8, just need acknowledgement before approval, not a fix.
+    expect(draftRow.validationStatus).not.toBeNull();
+    expect(draftRow.validationStatus).not.toBe("failed");
+    expect(draftRow.validationStatus).not.toBe("blocked");
+    await acknowledgeWarnings(row.id);
+
+    // Approval remains atomic on a staged-generated draft.
+    const approval = await approveDraft(row.id, { coachId: coachA.id }, coachA.id);
+    expect(approval.ok).toBe(true);
+    if (!approval.ok) return;
+    programTemplateIds.push(approval.programTemplateId);
+    workoutTemplateIds.push(...approval.workoutTemplateIds);
+    expect(approval.workoutTemplateIds).toHaveLength(10 * 3);
+
+    const weekDbRows = await db.select().from(programWeeks).where(eq(programWeeks.programTemplateId, approval.programTemplateId));
+    expect(weekDbRows).toHaveLength(10);
+  }, 120_000);
+
+  it("completed weeks persist even when a later week fails", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 3, daysPerWeek: 2 };
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const shell = buildFixtureProgramShell(brief);
+    const week1 = await buildFixtureProgramWeek(1, shell);
+    const week2 = await buildFixtureProgramWeek(2, shell);
+    if (!week1 || !week2) throw new Error("fixture setup failed — not enough active exercises seeded.");
+
+    await saveGenerationWeek(row.id, 1, { status: "completed", weekJson: week1 });
+    await saveGenerationWeek(row.id, 2, { status: "completed", weekJson: week2 });
+    await saveGenerationWeek(row.id, 3, { status: "failed", errorMessage: "simulated failure" });
+
+    const weekRows = await listGenerationWeeks(row.id);
+    expect(weekRows).toHaveLength(3);
+    expect(weekRows.find((w) => w.weekNumber === 1)?.status).toBe("completed");
+    expect(weekRows.find((w) => w.weekNumber === 1)?.weekJson).toBeTruthy();
+    expect(weekRows.find((w) => w.weekNumber === 2)?.status).toBe("completed");
+    expect(weekRows.find((w) => w.weekNumber === 3)?.status).toBe("failed");
+    expect(weekRows.find((w) => w.weekNumber === 3)?.weekJson).toBeNull();
+  });
+
+  it("resuming a failed generation continues from the first incomplete week without regenerating completed weeks", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 4, daysPerWeek: 2 };
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const shell = buildFixtureProgramShell(brief);
+    await saveProgramShell(row.id, shell);
+
+    // Weeks 1-2 are pre-seeded with a marker no real generation (fixture
+    // or live model) would ever produce — proves a resume leaves them
+    // byte-for-byte untouched rather than regenerating them.
+    const markerWeek = (weekNumber: number): ModelWeekDraft => ({
+      id: randomUUID(),
+      weekNumber,
+      days: [
+        {
+          id: randomUUID(),
+          dayOfWeek: 1,
+          workout: {
+            id: randomUUID(),
+            name: "Marker Session",
+            sections: [
+              {
+                id: randomUUID(),
+                name: "Main",
+                sectionType: "main_lift",
+                orderIndex: 0,
+                prescriptions: [
+                  { id: randomUUID(), exerciseName: `PRESEEDED-MARKER-WEEK-${weekNumber}`, orderIndex: 0, isRequired: true },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const week1Marker = markerWeek(1);
+    const week2Marker = markerWeek(2);
+    await saveGenerationWeek(row.id, 1, { status: "completed", weekJson: week1Marker });
+    await saveGenerationWeek(row.id, 2, { status: "completed", weekJson: week2Marker });
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated failure for test" });
+
+    const existingCompletedWeeks = new Map<number, ModelWeekDraft>([
+      [1, week1Marker],
+      [2, week2Marker],
+    ]);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachA.id,
+      brief,
+      clientContext: null,
+      existingShell: shell,
+      startFromWeek: 3,
+      existingCompletedWeeks,
+    });
+    expect(result.ok).toBe(true);
+
+    const weekRows = await listGenerationWeeks(row.id);
+    expect(weekRows).toHaveLength(4);
+
+    const week1Row = weekRows.find((w) => w.weekNumber === 1)!;
+    const week2Row = weekRows.find((w) => w.weekNumber === 2)!;
+    expect((week1Row.weekJson as ModelWeekDraft).days[0].workout?.sections[0].prescriptions[0].exerciseName).toBe(
+      "PRESEEDED-MARKER-WEEK-1",
+    );
+    expect((week2Row.weekJson as ModelWeekDraft).days[0].workout?.sections[0].prescriptions[0].exerciseName).toBe(
+      "PRESEEDED-MARKER-WEEK-2",
+    );
+
+    const week3Row = weekRows.find((w) => w.weekNumber === 3)!;
+    expect(week3Row.status).toBe("completed");
+    expect((week3Row.weekJson as ModelWeekDraft).days[0].workout?.sections[0].prescriptions[0].exerciseName).not.toContain(
+      "PRESEEDED-MARKER",
+    );
+    const week4Row = weekRows.find((w) => w.weekNumber === 4)!;
+    expect(week4Row.status).toBe("completed");
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.status).toBe("ready_for_review");
+    expect((draftRow.draftJson as GeneratedProgramDraft).weeks).toHaveLength(4);
+  });
+
+  it("passes the prior week's compact summary forward into the next week's prompt", async () => {
+    const shell = buildFixtureProgramShell(VALID_BRIEF);
+    const week1 = await buildFixtureProgramWeek(1, shell);
+    if (!week1) throw new Error("fixture setup failed — not enough active exercises seeded.");
+
+    const summary = summarizeWeekForPrompt(week1);
+    expect(summary.length).toBeGreaterThan(0);
+
+    const prompt = buildWeekGenerationPrompt(VALID_BRIEF, null, shell, 2, summary);
+    expect(prompt).toContain(summary);
+    expect(prompt).toContain("This is NOT the first week");
   });
 });
