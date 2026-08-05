@@ -55,6 +55,7 @@ export const db = drizzle(sql);
 export type ExerciseDef = {
   slug: string;
   name: string;
+  alternateNames?: readonly string[];
   movementPattern: MovementPattern;
   classification: ExerciseClassification;
   resistanceType?: ResistanceType;
