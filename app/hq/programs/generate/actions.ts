@@ -41,6 +41,7 @@ import {
   getOwnedDraft,
   saveDraftContent,
   acknowledgeWarnings,
+  acknowledgeFindingKeys,
   discardDraft as discardDraftRow,
   setDraftStatus,
   listGenerationWeeks,
@@ -61,11 +62,18 @@ import {
   type ModelWeekDraft,
 } from "@/lib/program-generator/contracts";
 import { regenerateDayDraft } from "@/lib/program-generator/provider";
-import { resolveProgramDraftExercises } from "@/lib/program-generator/exercise-resolution";
+import { resolveProgramDraftExercises, normalizeExerciseName } from "@/lib/program-generator/exercise-resolution";
 import { buildClientContextSummary, type ClientContextSummary } from "@/lib/program-generator/client-context";
-import { updatePrescription, replaceExercise, reorderExercises, moveWorkoutDay } from "@/lib/program-generator/edit-ops";
+import {
+  updatePrescription,
+  replaceExercise,
+  replaceExerciseByName,
+  reorderExercises,
+  moveWorkoutDay,
+} from "@/lib/program-generator/edit-ops";
 import { approveDraft } from "@/lib/program-generator/approval";
 import { runStagedGeneration, runAndSaveValidation } from "@/lib/program-generator/staged-generation";
+import type { DraftValidationResult } from "@/lib/program-generator/validation";
 
 export interface ActionResult<T = undefined> {
   ok: boolean;
@@ -213,6 +221,16 @@ async function loadEditableDraft(draftId: string) {
   const auth = await requireOwnedDraft(draftId);
   if (!auth.ok) return { ok: false as const, error: auth.error };
 
+  // Locked rule (review triage requirement #2): an approved draft has
+  // already become a real Program/Blueprint — editing draftJson after
+  // that point would silently diverge from what was actually created. A
+  // discarded draft is deliberately dead. Neither should accept edits,
+  // including the bulk replace-all path below, which is exactly the
+  // scenario that surfaced this gap wasn't previously enforced anywhere.
+  if (auth.draft.status === "approved" || auth.draft.status === "discarded") {
+    return { ok: false as const, error: `This draft is ${auth.draft.status} and can no longer be edited.` };
+  }
+
   const parsedDraft = parseGeneratedProgramDraft(auth.draft.draftJson);
   if (!parsedDraft.ok) return { ok: false as const, error: "Draft content is not currently valid." };
   const parsedBrief = parseProgramGenerationBrief(auth.draft.briefJson);
@@ -295,6 +313,9 @@ export async function replaceExerciseAction(params: {
   // an immediate, specific error instead of a generic blocker later.
   const exercise = await getExerciseById(params.exerciseId);
   if (!exercise) return { ok: false, error: "That exercise does not exist in the library." };
+  if (exercise.status !== "active") {
+    return { ok: false, error: "That exercise is not currently active and cannot be used." };
+  }
 
   const result = replaceExercise(loaded.draft, {
     dayId: params.dayId,
@@ -310,6 +331,57 @@ export async function replaceExerciseAction(params: {
     entityId: params.prescriptionId,
     summary: `Coach replaced an exercise with "${exercise.name}".`,
   });
+}
+
+// Server-authoritative "Replace All Occurrences" — review triage
+// requirement #2. Reuses the exact same loadEditableDraft (ownership +
+// approved/discarded status gate) and applyEditAndSave (save + rerun
+// validation + one audit event) pipeline every other edit action goes
+// through; the only new piece is the pure edit-op below, which walks
+// every week/day/section instead of a single addressed prescription.
+//
+// normalizedName must be exercise-resolution.ts's own
+// normalizeExerciseName() output — the caller (the review triage UI)
+// gets this directly from the grouped finding it's acting on, never
+// free text, so there's no risk of it drifting from how prescriptions
+// were actually grouped.
+export async function replaceAllOccurrencesAction(params: {
+  draftId: string;
+  normalizedName: string;
+  exerciseId: string;
+}): Promise<ActionResult<{ replacedCount: number }>> {
+  const loaded = await loadEditableDraft(params.draftId);
+  if (!loaded.ok) return { ok: false, error: loaded.error };
+
+  const exercise = await getExerciseById(params.exerciseId);
+  if (!exercise) return { ok: false, error: "That exercise does not exist in the library." };
+  if (exercise.status !== "active") {
+    return { ok: false, error: "That exercise is not currently active and cannot be used." };
+  }
+
+  // Re-normalize server-side rather than trusting the client's string
+  // verbatim — cheap, and keeps this action's own authority over what
+  // "the same name" means independent of whatever the caller sent.
+  const normalizedName = normalizeExerciseName(params.normalizedName);
+
+  const result = replaceExerciseByName(loaded.draft, {
+    normalizedName,
+    exerciseId: exercise.id,
+    exerciseName: exercise.name,
+  });
+
+  if (!result.ok) return { ok: false, error: result.error };
+  const replacedCount = (result.after as { replacedCount: number }).replacedCount;
+
+  const saveResult = await applyEditAndSave(params.draftId, loaded.coachId, loaded.brief, result, {
+    action: "exercise_replaced",
+    entityType: "bulk_exercise_replace",
+    entityId: normalizedName,
+    summary: `Coach replaced all ${replacedCount} occurrence(s) of an unresolved exercise with "${exercise.name}".`,
+  });
+
+  if (!saveResult.ok) return { ok: false, error: saveResult.error };
+  return { ok: true, data: { replacedCount } };
 }
 
 export async function reorderExercisesAction(params: {
@@ -430,6 +502,38 @@ export async function acknowledgeWarningsAction(draftId: string): Promise<Action
   await acknowledgeWarnings(draftId);
   revalidateDraft(draftId);
   return { ok: true };
+}
+
+// Review triage requirement #6 — one action, three granularities, all
+// driven by which keys the caller passes:
+//   - one occurrence:      [occurrenceAckKey(findingId)]
+//   - one grouped issue:   [groupAckKey(groupKey)]
+//   - all visible warnings: groupAckKey(...) for every current warning group
+// The UI always derives these keys from the SAME grouped structure it
+// rendered (lib/program-generator/findings-grouping.ts), never free
+// text — but this action still re-derives "is this actually a blocker"
+// server-side from the draft's own current insightsJson rather than
+// trusting the caller's classification of what it's acknowledging.
+export async function acknowledgeFindingsAction(
+  draftId: string,
+  keys: string[],
+): Promise<ActionResult<{ fullyAcknowledged: boolean }>> {
+  const auth = await requireOwnedDraft(draftId);
+  if (!auth.ok) return { ok: false, error: auth.error };
+
+  if (auth.draft.status === "approved" || auth.draft.status === "discarded") {
+    return { ok: false, error: `This draft is ${auth.draft.status} and can no longer be edited.` };
+  }
+  if (keys.length === 0) return { ok: false, error: "No findings selected to acknowledge." };
+
+  const insights = auth.draft.insightsJson as DraftValidationResult | null;
+  if (!insights) return { ok: false, error: "This draft has not been validated yet." };
+
+  const result = await acknowledgeFindingKeys(draftId, keys, insights);
+  if (!result.ok) return { ok: false, error: result.error };
+
+  revalidateDraft(draftId);
+  return { ok: true, data: { fullyAcknowledged: result.fullyAcknowledged } };
 }
 
 export async function discardDraftAction(draftId: string): Promise<ActionResult> {

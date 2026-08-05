@@ -170,6 +170,18 @@ export const programGenerationDrafts = pgTable(
     // acknowledgeWarnings().
     warningsAcknowledgedAt: timestamp("warnings_acknowledged_at", { withTimezone: true }),
 
+    // Granular acknowledgement tracking for the review triage UI —
+    // stores a mix of "finding:<findingId>" (one occurrence) and
+    // "group:<groupKey>" (a whole grouped issue, see
+    // lib/program-generator/findings-grouping.ts) entries. Coverage of
+    // every current warning's key (directly or via its group) is what
+    // sets warningsAcknowledgedAt above — see acknowledgeFindingKeys()
+    // in lib/db/program-generation-service.ts. Reset to [] on every
+    // revalidation, same invalidation rule as warningsAcknowledgedAt
+    // (finding ids are randomUUID() per run and stop meaning anything
+    // once a new run has happened anyway).
+    acknowledgedFindingKeys: jsonb("acknowledged_finding_keys").notNull().default([]),
+
     failureReason: text("failure_reason"),
 
     // Set only on approval — see lib/program-generator/approval.ts. Null

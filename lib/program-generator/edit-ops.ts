@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
+import { normalizeExerciseName } from "./exercise-resolution";
 import type { GeneratedProgramDraft, PrescriptionEditPatch } from "./contracts";
 
 export type EditOpResult =
@@ -69,6 +70,70 @@ export function replaceExercise(
     exerciseResolution: undefined,
   };
   return { ok: true, draft: next, before, after: located.section.prescriptions[idx] };
+}
+
+// Bulk equivalent of replaceExercise() — walks the ENTIRE draft and
+// replaces every prescription whose exerciseId is still null AND whose
+// exerciseName normalizes to the given name (exercise-resolution.ts's
+// own normalizeExerciseName, so this matches exactly the set of
+// prescriptions that resolver treated as "the same unresolved name").
+// Only ever touches exerciseId/exerciseName/exerciseResolution — every
+// other field (sets/reps/rest/tempo/orderIndex/groupId/...) is left
+// untouched, which is what "preserves placement" means here: a
+// prescription's position in its section, and every prescribed
+// parameter, survives a bulk replace exactly as-is.
+//
+// Deliberately narrower than "every prescription named X" — a
+// prescription the coach already resolved (exerciseId set, whether by
+// the original resolver or a prior manual Replace Exercise) is never
+// touched by this, even if its exerciseName text happens to match. That
+// would silently overwrite a coach's own prior decision, which this
+// feature must never do.
+export function replaceExerciseByName(
+  draft: GeneratedProgramDraft,
+  params: { normalizedName: string; exerciseId: string; exerciseName: string },
+): EditOpResult {
+  const next = deepClone(draft);
+  const affected: { prescriptionId: string; previousExerciseName: string }[] = [];
+
+  for (const week of next.weeks) {
+    for (const day of week.days) {
+      if (!day.workout) continue;
+      for (const section of day.workout.sections) {
+        for (const prescription of section.prescriptions) {
+          if (
+            prescription.exerciseId === null &&
+            normalizeExerciseName(prescription.exerciseName) === params.normalizedName
+          ) {
+            affected.push({ prescriptionId: prescription.id, previousExerciseName: prescription.exerciseName });
+            prescription.exerciseId = params.exerciseId;
+            prescription.exerciseName = params.exerciseName;
+            prescription.exerciseResolution = undefined;
+          }
+        }
+      }
+    }
+  }
+
+  if (affected.length === 0) {
+    return {
+      ok: false,
+      error: `No unresolved prescriptions currently match "${params.normalizedName}" — they may have already been replaced.`,
+    };
+  }
+
+  return {
+    ok: true,
+    draft: next,
+    before: { normalizedName: params.normalizedName, affected },
+    after: {
+      normalizedName: params.normalizedName,
+      exerciseId: params.exerciseId,
+      exerciseName: params.exerciseName,
+      replacedCount: affected.length,
+      replacedPrescriptionIds: affected.map((a) => a.prescriptionId),
+    },
+  };
 }
 
 // Reorders a section's prescriptions to match the given id order exactly

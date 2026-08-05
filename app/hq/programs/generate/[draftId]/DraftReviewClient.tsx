@@ -1,19 +1,21 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { GeneratedProgramDraft, GeneratedPrescriptionDraft, ProgramGenerationBrief } from "@/lib/program-generator/contracts";
-import type { DraftValidationResult, ValidationFinding } from "@/lib/program-generator/validation";
+import type { DraftValidationResult } from "@/lib/program-generator/validation";
+import type { FindingGroup, GroupedDraftFindings } from "@/lib/program-generator/findings-grouping";
 import {
   updatePrescriptionAction,
   replaceExerciseAction,
+  replaceAllOccurrencesAction,
   reorderExercisesAction,
   moveWorkoutDayAction,
   regenerateDayAction,
   resumeGenerationAction,
   rerunValidationAction,
-  acknowledgeWarningsAction,
+  acknowledgeFindingsAction,
   discardDraftAction,
   approveDraftAction,
 } from "../actions";
@@ -37,6 +39,8 @@ interface Props {
   draftContentInvalid: boolean;
   brief: ProgramGenerationBrief | null;
   insights: DraftValidationResult | null;
+  grouped: GroupedDraftFindings;
+  acknowledgedFindingKeys: string[];
   lastValidatedAt: string | null;
   warningsAcknowledgedAt: string | null;
   approvedAt: string | null;
@@ -60,17 +64,35 @@ function fmtLabel(s: string) {
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+// Mirrors lib/program-generator/findings-grouping.ts's occurrenceAckKey/
+// groupAckKey exactly (same string format — must stay in lockstep with
+// the server-side versions the acknowledgement service actually checks
+// against). Duplicated here, not imported, because that module
+// transitively imports exercise-resolution.ts (server-only, pulls in
+// the Postgres driver) — importing any runtime symbol from it, even an
+// unrelated one-line helper, breaks the client bundle. The exported
+// TYPES from that module (FindingGroup, GroupedDraftFindings above) are
+// erased at build time and carry no such risk.
+function occurrenceAckKey(findingId: string): string {
+  return `finding:${findingId}`;
+}
+function groupAckKey(groupKey: string): string {
+  return `group:${groupKey}`;
+}
+
+function scrollToPrescription(prescriptionId: string) {
+  const el = document.getElementById(`prescription-${prescriptionId}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("ring-1", "ring-[#C9A24D]/60");
+  setTimeout(() => el.classList.remove("ring-1", "ring-[#C9A24D]/60"), 1600);
+}
+
 export default function DraftReviewClient(props: Props) {
   const [pending, startTransition] = useTransition();
   const [notice, setNotice] = useState<{ tone: "error" | "success"; message: string } | null>(null);
   const router = useRouter();
 
-  // Staged generation runs synchronously within one server action call —
-  // there's no push channel for live updates, so while status='running'
-  // this tab polls by re-fetching the page, which re-reads the current
-  // run/week rows another request (this one, or a coach's other tab)
-  // already committed to the DB. Stops as soon as status moves away
-  // from 'running'.
   useEffect(() => {
     if (props.status !== "running") return;
     const interval = setInterval(() => router.refresh(), 3000);
@@ -91,6 +113,9 @@ export default function DraftReviewClient(props: Props) {
   }
 
   const insights = props.insights;
+  const { hierarchy, summary } = props.grouped;
+  const ackedKeys = useMemo(() => new Set(props.acknowledgedFindingKeys), [props.acknowledgedFindingKeys]);
+
   const warningsNeedAck =
     !!insights &&
     insights.warnings.length > 0 &&
@@ -100,6 +125,9 @@ export default function DraftReviewClient(props: Props) {
   const hasBlockers = !!insights && insights.blockers.length > 0;
   const canApprove =
     props.status === "ready_for_review" && !!insights && !hasBlockers && !warningsNeedAck;
+
+  const allWarningGroupKeys = hierarchy.warnings.map((g) => groupAckKey(g.groupKey));
+  const allWarningsAlreadyAcked = allWarningGroupKeys.length > 0 && allWarningGroupKeys.every((k) => ackedKeys.has(k));
 
   return (
     <div className="space-y-6 pb-16">
@@ -146,15 +174,6 @@ export default function DraftReviewClient(props: Props) {
                 className="bg-[#C9A24D] text-black font-bold text-[10px] tracking-[0.3em] uppercase px-5 py-2.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-40"
               >
                 Retry
-              </button>
-            )}
-            {warningsNeedAck && (
-              <button
-                disabled={pending}
-                onClick={() => runAction(() => acknowledgeWarningsAction(props.draftId), "Warnings acknowledged.")}
-                className="border border-yellow-500/40 text-yellow-400 text-[10px] font-bold uppercase tracking-[0.25em] px-4 py-2.5 hover:bg-yellow-500/10 transition-colors disabled:opacity-40"
-              >
-                Acknowledge Warnings
               </button>
             )}
             <button
@@ -222,22 +241,61 @@ export default function DraftReviewClient(props: Props) {
         </div>
       )}
 
-      {/* Kynovant Insights summary */}
+      {/* Review Summary — requirement #7 */}
       {insights && (
-        <div className="bg-[#0d0e0f] border border-white/[0.08] p-5">
-          <p className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em] mb-3">
-            Kynovant Insights — {fmtLabel(insights.status)}
-          </p>
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            <SummaryStat label="Blockers" count={insights.blockers.length} tone="error" />
-            <SummaryStat label="Warnings" count={insights.warnings.length} tone="warning" />
-            <SummaryStat label="Info" count={insights.info.length} tone="neutral" />
-          </div>
-          <div className="space-y-2">
-            {[...insights.blockers, ...insights.warnings].map((f) => (
-              <FindingRow key={f.id} finding={f} />
-            ))}
-          </div>
+        <ReviewSummaryPanel summary={summary} status={insights.status} canApprove={canApprove} />
+      )}
+
+      {/* Findings hierarchy — requirement #4 */}
+      {insights && (
+        <div className="space-y-4">
+          {hierarchy.blockers.length > 0 && (
+            <FindingSection
+              title="Approval Blockers"
+              subtitle="Must be resolved — approval is not possible until every group here is gone."
+              tone="blocker"
+              groups={hierarchy.blockers}
+              draftId={props.draftId}
+              editable={props.status === "ready_for_review"}
+              pending={pending}
+              ackedKeys={ackedKeys}
+              onRun={runAction}
+            />
+          )}
+
+          {hierarchy.warnings.length > 0 && (
+            <FindingSection
+              title="Warnings Requiring Acknowledgement"
+              subtitle="Can be approved once acknowledged — nothing here blocks approval on its own."
+              tone="warning"
+              groups={hierarchy.warnings}
+              draftId={props.draftId}
+              editable={props.status === "ready_for_review"}
+              pending={pending}
+              ackedKeys={ackedKeys}
+              onRun={runAction}
+              headerAction={
+                hierarchy.warnings.length > 1 && (
+                  <button
+                    disabled={pending || allWarningsAlreadyAcked}
+                    onClick={() =>
+                      runAction(
+                        () => acknowledgeFindingsAction(props.draftId, allWarningGroupKeys),
+                        "All visible warnings acknowledged.",
+                      )
+                    }
+                    className="border border-yellow-500/40 text-yellow-400 text-[9px] font-bold uppercase tracking-[0.2em] px-3 py-1.5 hover:bg-yellow-500/10 transition-colors disabled:opacity-30"
+                  >
+                    {allWarningsAlreadyAcked ? "All Acknowledged" : "Acknowledge All Visible"}
+                  </button>
+                )
+              }
+            />
+          )}
+
+          {hierarchy.info.length > 0 && (
+            <InfoSection groups={hierarchy.info} />
+          )}
         </div>
       )}
 
@@ -336,6 +394,46 @@ export default function DraftReviewClient(props: Props) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+// REVIEW SUMMARY — requirement #7
+// ─────────────────────────────────────────────────────────────
+
+function ReviewSummaryPanel({
+  summary,
+  status,
+  canApprove,
+}: {
+  summary: GroupedDraftFindings["summary"];
+  status: DraftValidationResult["status"];
+  canApprove: boolean;
+}) {
+  return (
+    <div className="bg-[#0d0e0f] border border-white/[0.08] p-5">
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.25em]">
+          Kynovant Insights — {fmtLabel(status)}
+        </p>
+        <span
+          className={`text-[9px] font-bold uppercase tracking-[0.2em] px-2.5 py-1 border ${
+            canApprove
+              ? "border-emerald-500/40 text-emerald-400"
+              : "border-white/15 text-white/40"
+          }`}
+        >
+          {canApprove ? "Approval Available" : "Approval Not Yet Available"}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <SummaryStat label="Unresolved Names" count={summary.unresolvedExerciseNameCount} tone="error" />
+        <SummaryStat label="Ambiguous Names" count={summary.ambiguousExerciseNameCount} tone="error" />
+        <SummaryStat label="Affected Prescriptions" count={summary.totalAffectedPrescriptions} tone="neutral" />
+        <SummaryStat label="Structural Blockers" count={summary.blockingStructuralIssueCount} tone="error" />
+        <SummaryStat label="Warning Categories" count={summary.warningCategoryCount} tone="warning" />
+      </div>
+    </div>
+  );
+}
+
 function SummaryStat({ label, count, tone }: { label: string; count: number; tone: "error" | "warning" | "neutral" }) {
   const color = count === 0 ? "text-white/30" : tone === "error" ? "text-red-400" : tone === "warning" ? "text-yellow-400" : "text-white/60";
   return (
@@ -346,12 +444,247 @@ function SummaryStat({ label, count, tone }: { label: string; count: number; ton
   );
 }
 
-function FindingRow({ finding }: { finding: ValidationFinding }) {
-  const color = finding.severity === "blocker" ? "border-red-500/30" : finding.severity === "warning" ? "border-yellow-500/30" : "border-white/10";
+// ─────────────────────────────────────────────────────────────
+// FINDINGS HIERARCHY — requirement #4
+// ─────────────────────────────────────────────────────────────
+
+function FindingSection({
+  title,
+  subtitle,
+  tone,
+  groups,
+  draftId,
+  editable,
+  pending,
+  ackedKeys,
+  onRun,
+  headerAction,
+}: {
+  title: string;
+  subtitle: string;
+  tone: "blocker" | "warning";
+  groups: FindingGroup[];
+  draftId: string;
+  editable: boolean;
+  pending: boolean;
+  ackedKeys: Set<string>;
+  onRun: (fn: () => Promise<{ ok: boolean; error?: string }>, successMessage?: string) => void;
+  headerAction?: React.ReactNode;
+}) {
+  const borderColor = tone === "blocker" ? "border-red-500/20" : "border-yellow-500/20";
   return (
-    <div className={`border ${color} px-3 py-2`}>
-      <p className="text-white text-xs font-semibold">{finding.title}</p>
-      <p className="text-white/40 text-[11px] mt-0.5">{finding.explanation}</p>
+    <div className={`bg-[#0d0e0f] border ${borderColor} p-5`}>
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+        <p className="text-white font-semibold text-sm">
+          {title} <span className="text-white/30 font-normal">({groups.length})</span>
+        </p>
+        {headerAction}
+      </div>
+      <p className="text-white/30 text-[11px] mb-3">{subtitle}</p>
+      <div className="space-y-2">
+        {groups.map((group) => (
+          <FindingGroupCard
+            key={group.groupKey}
+            group={group}
+            tone={tone}
+            draftId={draftId}
+            editable={editable}
+            pending={pending}
+            acknowledged={ackedKeys.has(groupAckKey(group.groupKey))}
+            onRun={onRun}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InfoSection({ groups }: { groups: FindingGroup[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="bg-[#0d0e0f] border border-white/[0.06] p-5">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center justify-between w-full text-left"
+      >
+        <p className="text-white/50 font-semibold text-sm">
+          Informational Observations <span className="text-white/25 font-normal">({groups.length})</span>
+        </p>
+        <span className="text-white/30 text-[10px] uppercase tracking-[0.2em]">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div className="space-y-2 mt-3">
+          {groups.map((group) => (
+            <div key={group.groupKey} className="border border-white/[0.06] px-3 py-2">
+              <p className="text-white/70 text-xs font-semibold">
+                {group.title}
+                {group.occurrenceCount > 1 && (
+                  <span className="text-white/30 font-normal"> — {group.occurrenceCount} occurrences</span>
+                )}
+              </p>
+              <p className="text-white/30 text-[11px] mt-0.5">{group.explanation}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FindingGroupCard({
+  group,
+  tone,
+  draftId,
+  editable,
+  pending,
+  acknowledged,
+  onRun,
+}: {
+  group: FindingGroup;
+  tone: "blocker" | "warning";
+  draftId: string;
+  editable: boolean;
+  pending: boolean;
+  acknowledged: boolean;
+  onRun: (fn: () => Promise<{ ok: boolean; error?: string }>, successMessage?: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [replaceExerciseId, setReplaceExerciseId] = useState("");
+  const color = tone === "blocker" ? "border-red-500/30" : "border-yellow-500/30";
+
+  return (
+    <div className={`border ${color} px-3 py-2.5`}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-white text-xs font-semibold">
+            {group.title}
+            {group.occurrenceCount > 1 && (
+              <span className="text-white/35 font-normal"> — {group.occurrenceCount} occurrences</span>
+            )}
+            {acknowledged && (
+              <span className="ml-2 text-[9px] font-bold uppercase tracking-[0.15em] text-emerald-400">Acknowledged</span>
+            )}
+          </p>
+          <p className="text-white/40 text-[11px] mt-0.5">{group.explanation}</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[10px] text-white/40 hover:text-white uppercase tracking-[0.15em]"
+          >
+            {expanded ? "Hide Occurrences" : "Review Occurrences Individually"}
+          </button>
+          {tone === "warning" && (
+            <button
+              disabled={pending || acknowledged}
+              onClick={() =>
+                onRun(
+                  () => acknowledgeFindingsAction(draftId, [groupAckKey(group.groupKey)]),
+                  "Issue acknowledged.",
+                )
+              }
+              className="text-[10px] text-yellow-400 hover:text-yellow-300 uppercase tracking-[0.15em] disabled:opacity-30"
+            >
+              Acknowledge
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Used-in occurrence list — requirement #5 navigation */}
+      {expanded && (
+        <div className="mt-2.5 space-y-1">
+          {group.occurrences.map((occ) => (
+            <div key={occ.findingId} className="flex items-center justify-between gap-2 bg-[#080909] px-2.5 py-1.5">
+              <span className="text-white/50 text-[11px]">
+                {occ.weekNumber != null ? `Week ${occ.weekNumber}` : "Program-wide"}
+                {occ.weekLabel ? ` — ${occ.weekLabel}` : ""}
+                {occ.dayLabel ? `, ${occ.dayLabel}` : ""}
+              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                {tone === "warning" && (
+                  <button
+                    disabled={pending}
+                    onClick={() =>
+                      onRun(
+                        () => acknowledgeFindingsAction(draftId, [occurrenceAckKey(occ.findingId)]),
+                        "Occurrence acknowledged.",
+                      )
+                    }
+                    className="text-[9px] text-yellow-400/80 hover:text-yellow-300 uppercase tracking-[0.15em]"
+                  >
+                    Ack
+                  </button>
+                )}
+                {occ.prescriptionId && (
+                  <button
+                    onClick={() => scrollToPrescription(occ.prescriptionId!)}
+                    className="text-[9px] text-[#C9A24D] hover:text-[#D4B56A] uppercase tracking-[0.15em]"
+                  >
+                    View →
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Replace All Occurrences — only for unresolved/ambiguous exercise groups */}
+      {editable && group.isReplaceableExerciseGroup && group.exerciseName && (
+        <div className="mt-2.5 pt-2.5 border-t border-white/[0.06]">
+          {group.candidates.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {group.candidates.map((c) => (
+                <button
+                  key={c.id}
+                  disabled={pending}
+                  onClick={() =>
+                    onRun(
+                      () =>
+                        replaceAllOccurrencesAction({
+                          draftId,
+                          normalizedName: group.exerciseName!,
+                          exerciseId: c.id,
+                        }),
+                      `Replaced all ${group.occurrenceCount} occurrence(s) with "${c.name}".`,
+                    )
+                  }
+                  className="text-[10px] text-white/70 hover:text-black hover:bg-[#C9A24D] border border-white/15 hover:border-[#C9A24D] px-2 py-1 transition-colors disabled:opacity-40"
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              value={replaceExerciseId}
+              onChange={(e) => setReplaceExerciseId(e.target.value)}
+              placeholder="Replacement exercise ID"
+              className="bg-[#080909] border border-white/[0.08] text-white text-[10px] px-2 py-1.5 flex-1"
+            />
+            <button
+              disabled={pending || !replaceExerciseId}
+              onClick={() => {
+                onRun(
+                  () =>
+                    replaceAllOccurrencesAction({
+                      draftId,
+                      normalizedName: group.exerciseName!,
+                      exerciseId: replaceExerciseId,
+                    }),
+                  `Replaced all ${group.occurrenceCount} occurrence(s).`,
+                );
+                setReplaceExerciseId("");
+              }}
+              className="text-[10px] text-[#C9A24D] uppercase tracking-[0.2em] disabled:opacity-40 shrink-0"
+            >
+              Replace All Occurrences
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -453,8 +786,15 @@ function PrescriptionRow({
     onRun(() => reorderExercisesAction({ draftId, dayId, sectionId, orderedPrescriptionIds: next }));
   }
 
+  const needsResolution = prescription.exerciseId === null;
+
   return (
-    <div className="bg-[#080909] border border-white/[0.05] px-3 py-2">
+    <div
+      id={`prescription-${prescription.id}`}
+      className={`bg-[#080909] border px-3 py-2 transition-shadow ${
+        needsResolution ? "border-red-500/20" : "border-white/[0.05]"
+      }`}
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="text-white text-xs">
           {prescription.exerciseName}

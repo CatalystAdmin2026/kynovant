@@ -8,6 +8,7 @@ import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getOwnedDraft, getLatestRun, listGenerationWeeks } from "@/lib/db/program-generation-service";
 import { parseGeneratedProgramDraft, parseProgramGenerationBrief } from "@/lib/program-generator/contracts";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
+import { groupDraftFindings } from "@/lib/program-generator/findings-grouping";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import DraftReviewClient from "./DraftReviewClient";
 
@@ -37,6 +38,13 @@ export default async function DraftReviewPage({
     listGenerationWeeks(draftId),
   ]);
 
+  // Grouping is a pure, deterministic, in-memory transform over the same
+  // insightsJson/draftJson this page already fetched — computed once
+  // server-side per request, never per-finding, per review triage
+  // requirement #8. See lib/program-generator/findings-grouping.ts.
+  const insights = (draft.insightsJson as DraftValidationResult | null) ?? null;
+  const grouped = groupDraftFindings(insights, parsedDraft?.ok ? parsedDraft.data : null);
+
   return (
     <div className="max-w-5xl">
       <HQBreadcrumbs
@@ -54,7 +62,9 @@ export default async function DraftReviewPage({
         draft={parsedDraft?.ok ? parsedDraft.data : null}
         draftContentInvalid={parsedDraft != null && !parsedDraft.ok}
         brief={parsedBrief.ok ? parsedBrief.data : null}
-        insights={(draft.insightsJson as DraftValidationResult | null) ?? null}
+        insights={insights}
+        grouped={grouped}
+        acknowledgedFindingKeys={Array.isArray(draft.acknowledgedFindingKeys) ? (draft.acknowledgedFindingKeys as string[]) : []}
         lastValidatedAt={draft.lastValidatedAt ? draft.lastValidatedAt.toISOString() : null}
         warningsAcknowledgedAt={draft.warningsAcknowledgedAt ? draft.warningsAcknowledgedAt.toISOString() : null}
         approvedAt={draft.approvedAt ? draft.approvedAt.toISOString() : null}

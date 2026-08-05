@@ -47,7 +47,7 @@ import { getDb } from "@/lib/db/client";
 import { exercises, exerciseMuscles, exerciseCoachOverrides } from "@/lib/db/schema-exercise";
 import { assembleBlueprint, type RawBlueprintData } from "@/lib/pil/enrichment";
 import { orchestrateBlueprint } from "@/lib/pil/blueprint-audit";
-import type { BlueprintAuditResult, PilFinding, PilSeverity } from "@/lib/pil/types";
+import type { BlueprintAuditResult, PilAffectedEntity, PilFinding, PilSeverity } from "@/lib/pil/types";
 import type {
   GeneratedProgramDraft,
   GeneratedBlueprintDraft,
@@ -75,9 +75,23 @@ export interface ValidationFinding {
   sectionId?: string;
   prescriptionId?: string;
   exerciseId?: string;
+  /** Populated for exercise-name findings (ambiguous/unresolved/equipment
+   *  mismatch) — the raw, as-generated name, since these findings have
+   *  no stable exerciseId to key off of. Used by findings-grouping.ts to
+   *  group repeated occurrences of the same unresolved name across every
+   *  week/day they appear in, without re-deriving the name from
+   *  `explanation` text. */
+  exerciseName?: string;
   /** Populated for PROGRAM_GEN_EXERCISE_AMBIGUOUS — the real candidate
    *  rows the coach can choose from via Replace Exercise. */
   candidates?: ExerciseResolutionCandidate[];
+  /** Full PIL locator set (muscle/joint/exercise/section/day/week) for
+   *  findings sourced from orchestrateBlueprint() — carried through
+   *  wholesale (not just the single exerciseId above) so
+   *  findings-grouping.ts can group "high shoulder load" separately from
+   *  "high knee load" under the same finding code, by the actual
+   *  muscle/joint identity rather than by code alone. */
+  affectedEntities?: PilAffectedEntity[];
 }
 
 export interface BlueprintValidationEntry {
@@ -117,6 +131,7 @@ function fromPilFinding(
     dayId: context.dayId,
     blueprintId: context.blueprintId,
     exerciseId: f.affectedEntities.find((e) => e.type === "exercise")?.id,
+    affectedEntities: f.affectedEntities,
   };
 }
 
@@ -268,6 +283,7 @@ export async function validateGeneratedDraft(
         blueprintId: ref.blueprintId,
         sectionId: ref.sectionId,
         prescriptionId: ref.prescriptionId,
+        exerciseName: ref.exerciseName,
         candidates: resolution.candidates,
       });
     } else {
@@ -285,6 +301,7 @@ export async function validateGeneratedDraft(
         blueprintId: ref.blueprintId,
         sectionId: ref.sectionId,
         prescriptionId: ref.prescriptionId,
+        exerciseName: ref.exerciseName,
       });
     }
   }
@@ -329,6 +346,7 @@ export async function validateGeneratedDraft(
           sectionId: ref.sectionId,
           prescriptionId: ref.prescriptionId,
           exerciseId: row.id,
+          exerciseName: row.name,
         });
       }
     }

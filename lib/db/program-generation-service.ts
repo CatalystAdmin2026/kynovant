@@ -36,7 +36,8 @@ import type {
   ProgramShell,
   ModelWeekDraft,
 } from "@/lib/program-generator/contracts";
-import type { DraftValidationResult } from "@/lib/program-generator/validation";
+import type { DraftValidationResult, ValidationFinding } from "@/lib/program-generator/validation";
+import { groupKeyForFinding, occurrenceAckKey, groupAckKey } from "@/lib/program-generator/findings-grouping";
 import type { TenantScope } from "@/lib/auth/guards";
 
 export type { TenantScope };
@@ -169,6 +170,15 @@ export async function saveValidationResult(
         insightsJson: result,
         validationStatus: result.status,
         lastValidatedAt: now,
+        // A new validation run always invalidates any prior
+        // acknowledgement — same rule warningsAcknowledgedAt already
+        // enforces via the >= lastValidatedAt comparison in approval.ts,
+        // extended to the granular key set. Finding ids are randomUUID()
+        // per run, so a stale entry couldn't match anything going
+        // forward anyway; clearing it explicitly keeps the stored state
+        // from silently drifting into meaninglessness.
+        warningsAcknowledgedAt: null,
+        acknowledgedFindingKeys: [],
         updatedAt: now,
       })
       .where(eq(programGenerationDrafts.id, draftId));
@@ -192,6 +202,8 @@ export async function saveValidationFailure(draftId: string, reason: string): Pr
       .set({
         validationStatus: "failed",
         lastValidatedAt: now,
+        warningsAcknowledgedAt: null,
+        acknowledgedFindingKeys: [],
         updatedAt: now,
       })
       .where(eq(programGenerationDrafts.id, draftId));
@@ -209,13 +221,81 @@ export async function saveValidationFailure(draftId: string, reason: string): Pr
 // Locked rule #8: warnings require explicit coach acknowledgement.
 // Valid only for the CURRENT validation run — see the timestamp
 // comparison in approval.ts, which requires
-// warningsAcknowledgedAt >= lastValidatedAt.
+// warningsAcknowledgedAt >= lastValidatedAt. Whole-draft, blunt
+// acknowledgement — kept for backward compatibility with existing
+// callers; acknowledgeFindingKeys() below is the granular equivalent
+// the review triage UI actually uses.
 export async function acknowledgeWarnings(draftId: string): Promise<void> {
   const db = getDb();
   await db
     .update(programGenerationDrafts)
     .set({ warningsAcknowledgedAt: new Date(), updatedAt: new Date() })
     .where(eq(programGenerationDrafts.id, draftId));
+}
+
+export type AcknowledgeFindingsResult =
+  | { ok: true; fullyAcknowledged: boolean }
+  | { ok: false; error: string };
+
+// Granular acknowledgement — one occurrence, one grouped issue, or every
+// currently-visible warning group in one call (the caller computes
+// which keys to pass; see acknowledgeFindingsAction in
+// app/hq/programs/generate/actions.ts, which derives them from the
+// draft's OWN current insightsJson, never trusting client-supplied
+// finding data). Rejects the whole call if any key resolves to a
+// BLOCKER — blockers can never be acknowledged away (locked rule #7).
+// Reaching full coverage of every current warning also sets
+// warningsAcknowledgedAt, which is the actual gate approval.ts checks —
+// this function never needs to touch approval.ts itself.
+export async function acknowledgeFindingKeys(
+  draftId: string,
+  keys: string[],
+  currentInsights: DraftValidationResult,
+): Promise<AcknowledgeFindingsResult> {
+  const blockerKeys = new Set<string>();
+  for (const f of currentInsights.blockers) {
+    blockerKeys.add(occurrenceAckKey(f.id));
+    blockerKeys.add(groupAckKey(groupKeyForFinding(f)));
+  }
+  for (const key of keys) {
+    if (blockerKeys.has(key)) {
+      return { ok: false, error: "Blocking issues cannot be acknowledged — they must be resolved." };
+    }
+  }
+
+  const db = getDb();
+  const [row] = await db
+    .select({ acknowledgedFindingKeys: programGenerationDrafts.acknowledgedFindingKeys })
+    .from(programGenerationDrafts)
+    .where(eq(programGenerationDrafts.id, draftId))
+    .limit(1);
+
+  const existing = Array.isArray(row?.acknowledgedFindingKeys)
+    ? (row!.acknowledgedFindingKeys as string[])
+    : [];
+  const merged = [...new Set([...existing, ...keys])];
+
+  const fullyAcknowledged = isFullyAcknowledged(currentInsights.warnings, merged);
+  const now = new Date();
+
+  await db
+    .update(programGenerationDrafts)
+    .set({
+      acknowledgedFindingKeys: merged,
+      warningsAcknowledgedAt: fullyAcknowledged ? now : null,
+      updatedAt: now,
+    })
+    .where(eq(programGenerationDrafts.id, draftId));
+
+  return { ok: true, fullyAcknowledged };
+}
+
+function isFullyAcknowledged(warnings: ValidationFinding[], ackedKeys: string[]): boolean {
+  if (warnings.length === 0) return true;
+  const acked = new Set(ackedKeys);
+  return warnings.every(
+    (w) => acked.has(occurrenceAckKey(w.id)) || acked.has(groupAckKey(groupKeyForFinding(w))),
+  );
 }
 
 export async function discardDraft(draftId: string): Promise<void> {
