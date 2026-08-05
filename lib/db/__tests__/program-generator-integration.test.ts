@@ -589,15 +589,21 @@ describe("provider configuration", () => {
     const resolvedInitial = await resolveProgramDraftExercises(initialModelDraft);
 
     const dayId = resolvedInitial.weeks[0].days[0].id;
-    const regenOutcome = await regenerateDayDraft(VALID_BRIEF, null, resolvedInitial, dayId, undefined);
+    // Fixture mode ignores the candidates param entirely (it builds
+    // directly from real rows, bypassing catalog selection) — [] is
+    // fine here; this test is about resolver-fallback behavior, not
+    // catalog verification (see the dedicated catalog tests below).
+    const regenOutcome = await regenerateDayDraft(VALID_BRIEF, null, resolvedInitial, dayId, undefined, []);
     expect(regenOutcome.ok).toBe(true);
     if (!regenOutcome.ok) return;
 
-    // Provider's regenerate-day output is the same unresolved
-    // ModelProgramDraft shape as staged generation's assembled output —
-    // no exerciseId anywhere, even for days it echoed back unchanged —
-    // proving both entry points require, and are compatible with, the
-    // identical resolveProgramDraftExercises() call.
+    // Provider's regenerate-day output is the same ModelProgramDraft
+    // shape as staged generation's assembled output — the fixture
+    // populates a real exerciseId from the same rows it queried, and
+    // resolveProgramDraftExercises() independently re-verifies it
+    // against the real library (outcome "catalog_selected") rather than
+    // trusting it outright — proving both entry points require, and are
+    // compatible with, the identical resolveProgramDraftExercises() call.
     const resolvedAfterRegen = await resolveProgramDraftExercises(regenOutcome.draft);
     let sawAtLeastOnePrescription = false;
     for (const week of resolvedAfterRegen.weeks) {
@@ -607,7 +613,7 @@ describe("provider configuration", () => {
             sawAtLeastOnePrescription = true;
             expect(prescription.exerciseId).not.toBeNull();
             expect(prescription.exerciseId).not.toBe("00000000-0000-0000-0000-000000000000");
-            expect(prescription.exerciseResolution?.outcome).toBe("exact");
+            expect(prescription.exerciseResolution?.outcome).toBe("catalog_selected");
           }
         }
       }
@@ -676,8 +682,18 @@ describe("staged generation orchestration", () => {
     expect(parsedDraft.weeks).toHaveLength(10);
 
     // Exercise resolution applied once, at assembly — every prescription
-    // resolved to a real id, never the nil UUID.
+    // resolved to a real id, never the nil UUID, and — the point of this
+    // whole feature — never via a guess. Every prescription must have
+    // been either verified straight off the supplied candidate catalog
+    // ("catalog_selected") or, for any fixture row that happened to fall
+    // outside that brief's equipment/difficulty candidate filters,
+    // resolved to the exact same real row by canonical name ("exact").
+    // Never "ambiguous"/"unresolved"/"alternate_name"/"strong_match" —
+    // those tiers exist for real model output with imperfect names, and
+    // the fixture always supplies an exact canonical name. Zero
+    // fabricated ids across an entire 10-week, 30-day assembled program.
     let prescriptionCount = 0;
+    let catalogSelectedCount = 0;
     for (const week of parsedDraft.weeks) {
       for (const day of week.days) {
         for (const section of day.workout?.sections ?? []) {
@@ -685,11 +701,18 @@ describe("staged generation orchestration", () => {
             prescriptionCount++;
             expect(p.exerciseId).not.toBeNull();
             expect(p.exerciseId).not.toBe("00000000-0000-0000-0000-000000000000");
+            expect(["catalog_selected", "exact"]).toContain(p.exerciseResolution?.outcome);
+            if (p.exerciseResolution?.outcome === "catalog_selected") catalogSelectedCount++;
           }
         }
       }
     }
     expect(prescriptionCount).toBeGreaterThan(0);
+    // Proves the new catalog-constrained path is actually exercised
+    // end-to-end across a full multi-week run, not merely reachable in
+    // isolation — not every prescription needs to land here (the resolver
+    // fallback is legitimate too), but some must.
+    expect(catalogSelectedCount).toBeGreaterThan(0);
 
     // Full validation ran against the assembled draft. No blockers
     // expected (real, valid prescriptions against real exercises) —
@@ -820,16 +843,24 @@ describe("staged generation orchestration", () => {
     expect((draftRow.draftJson as GeneratedProgramDraft).weeks).toHaveLength(4);
   });
 
-  it("passes the prior week's compact summary forward into the next week's prompt", async () => {
+  it("passes the prior week's compact summary — including its selected exercise ids — forward into the next week's prompt", async () => {
     const shell = buildFixtureProgramShell(VALID_BRIEF);
     const week1 = await buildFixtureProgramWeek(1, shell);
     if (!week1) throw new Error("fixture setup failed — not enough active exercises seeded.");
 
+    const firstPrescriptionId = week1.days[0].workout?.sections[0].prescriptions[0].exerciseId;
+    expect(firstPrescriptionId).toBeTruthy();
+
     const summary = summarizeWeekForPrompt(week1);
     expect(summary.length).toBeGreaterThan(0);
+    // Requirement: pass prior-week SELECTED IDS forward, not just names —
+    // lets the model copy the exact id forward for continuity instead of
+    // re-selecting by name and risking a different-but-similar exercise.
+    expect(summary).toContain(`[id:${firstPrescriptionId}]`);
 
-    const prompt = buildWeekGenerationPrompt(VALID_BRIEF, null, shell, 2, summary);
+    const prompt = buildWeekGenerationPrompt(VALID_BRIEF, null, shell, 2, summary, []);
     expect(prompt).toContain(summary);
+    expect(prompt).toContain(`[id:${firstPrescriptionId}]`);
     expect(prompt).toContain("This is NOT the first week");
   });
 });

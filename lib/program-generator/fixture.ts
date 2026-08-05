@@ -27,7 +27,8 @@
 
 import "server-only";
 import { randomUUID } from "crypto";
-import { searchExercises, type ExerciseListRow } from "@/lib/db/exercise-service";
+import { searchExercises } from "@/lib/db/exercise-service";
+import type { ExerciseCandidate } from "./exercise-candidates";
 import {
   ModelProgramDraftSchema,
   ModelWeekDraftSchema,
@@ -44,9 +45,24 @@ import {
 
 const MIN_EXERCISES_REQUIRED = 4;
 
-function buildPrescription(row: ExerciseListRow, orderIndex: number): ModelPrescription {
+// Minimal shape shared by ExerciseListRow (the unscoped searchExercises()
+// fallback below) and ExerciseCandidate (the tenant-scoped, brief-aware
+// candidate set staged generation actually computes) — buildPrescription
+// only ever needs id/name, so either can drive it.
+type FixtureSourceRow = { id: string; name: string };
+
+function buildPrescription(row: FixtureSourceRow, orderIndex: number): ModelPrescription {
   return {
     id: randomUUID(),
+    // Populated from the same real row the fixture already queried —
+    // simulates a model that correctly followed the catalog-selection
+    // instructions (see exercise-candidates.ts). Verification against
+    // the actual computed candidate set for a given brief may still
+    // reject this id (e.g. if the fixture's arbitrary row selection
+    // fell outside that brief's equipment/difficulty filters), in which
+    // case it's stripped and falls back to name resolution exactly as
+    // it always has — both are legitimate, exercised paths.
+    exerciseId: row.id,
     exerciseName: row.name,
     orderIndex,
     sets: 3,
@@ -58,7 +74,7 @@ function buildPrescription(row: ExerciseListRow, orderIndex: number): ModelPresc
   };
 }
 
-function buildBlueprint(label: string, rows: ExerciseListRow[]): ModelBlueprint {
+function buildBlueprint(label: string, rows: FixtureSourceRow[]): ModelBlueprint {
   return {
     id: randomUUID(),
     name: `${label} — Fixture Session`,
@@ -75,12 +91,28 @@ function buildBlueprint(label: string, rows: ExerciseListRow[]): ModelBlueprint 
   };
 }
 
-// Queries real, currently-active exercises and assembles a two-day,
-// one-week model-output draft from their real names. Returns null
-// (never throws, never fabricates) if the seeded library can't support
-// a minimal draft.
-export async function buildFixtureProgramDraft(): Promise<ModelProgramDraft | null> {
-  const active = await searchExercises({ statuses: ["active"], limit: 20 });
+// Prefers the tenant-scoped, brief-aware candidate set staged generation
+// already computed (see exercise-candidates.ts) over an unscoped active-
+// exercise query — this simulates "a model that correctly followed the
+// catalog-selection instructions" and keeps dev-fixture output subject to
+// the same tenant-visibility rules the real provider is constrained by,
+// rather than fixture mode being a silent backdoor around them. Falls
+// back to querying active exercises directly only when no usable
+// candidate set is supplied (legacy call sites / tests exercising the
+// name-resolver fallback path in isolation, where scope is irrelevant).
+async function resolveFixtureSourceRows(
+  candidates: ExerciseCandidate[],
+  limit: number,
+): Promise<FixtureSourceRow[]> {
+  if (candidates.length >= MIN_EXERCISES_REQUIRED) return candidates.slice(0, limit);
+  return searchExercises({ statuses: ["active"], limit });
+}
+
+// Assembles a two-day, one-week model-output draft from real exercise
+// rows. Returns null (never throws, never fabricates) if the seeded
+// library can't support a minimal draft.
+export async function buildFixtureProgramDraft(candidates: ExerciseCandidate[] = []): Promise<ModelProgramDraft | null> {
+  const active = await resolveFixtureSourceRows(candidates, 20);
   if (active.length < MIN_EXERCISES_REQUIRED) return null;
 
   const half = Math.min(4, Math.floor(active.length / 2));
@@ -171,15 +203,16 @@ export function buildFixtureProgramShell(brief: ProgramGenerationBrief): Program
   };
 }
 
-// Queries real, currently-active exercises and assembles one week's
-// content (one blueprint per shell day) from their real names. Returns
-// null (never throws, never fabricates) if the seeded library can't
-// support a minimal week.
+// Assembles one week's content (one blueprint per shell day) from real
+// exercise rows — preferring the supplied candidate set (see
+// resolveFixtureSourceRows above). Returns null (never throws, never
+// fabricates) if the seeded library can't support a minimal week.
 export async function buildFixtureProgramWeek(
   weekNumber: number,
   shell: ProgramShell,
+  candidates: ExerciseCandidate[] = [],
 ): Promise<ModelWeekDraft | null> {
-  const active = await searchExercises({ statuses: ["active"], limit: 8 });
+  const active = await resolveFixtureSourceRows(candidates, 8);
   if (active.length < MIN_EXERCISES_REQUIRED) return null;
 
   const days: ModelDayDraft[] = shell.days.map((shellDay) => ({

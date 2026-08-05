@@ -71,6 +71,7 @@ import {
 } from "./prompt";
 import type { ClientContextSummary } from "./client-context";
 import { buildFixtureProgramDraft, buildFixtureProgramShell, buildFixtureProgramWeek } from "./fixture";
+import type { ExerciseCandidate, ExerciseCandidateSet } from "./exercise-candidates";
 
 export type GenerationErrorCode =
   | "not_configured"
@@ -236,8 +237,9 @@ async function callFixtureShellProvider(brief: ProgramGenerationBrief): Promise<
 async function callFixtureWeekProvider(
   weekNumber: number,
   shell: ProgramShell,
+  candidates: ExerciseCandidate[],
 ): Promise<WeekGenerationOutcome> {
-  const week = await buildFixtureProgramWeek(weekNumber, shell);
+  const week = await buildFixtureProgramWeek(weekNumber, shell, candidates);
   if (!week) {
     return {
       ok: false,
@@ -252,8 +254,8 @@ async function callFixtureWeekProvider(
   return { ok: true, week, provider: "dev-fixture", model: "dev-fixture" };
 }
 
-async function callFixtureProvider(): Promise<GenerationOutcome> {
-  const draft = await buildFixtureProgramDraft();
+async function callFixtureProvider(candidates: ExerciseCandidate[]): Promise<GenerationOutcome> {
+  const draft = await buildFixtureProgramDraft(candidates);
   if (!draft) {
     return {
       ok: false,
@@ -275,10 +277,11 @@ async function callFixtureProvider(): Promise<GenerationOutcome> {
 export async function generateProgramShell(
   brief: ProgramGenerationBrief,
   clientContext: ClientContextSummary | null,
+  candidateSet?: ExerciseCandidateSet,
 ): Promise<ShellGenerationOutcome> {
   if (isFixtureModeEnabled()) return callFixtureShellProvider(brief);
 
-  const prompt = buildShellGenerationPrompt(brief, clientContext);
+  const prompt = buildShellGenerationPrompt(brief, clientContext, candidateSet);
   const result = await callProvider({
     prompt,
     schema: ProgramShellSchema,
@@ -295,8 +298,9 @@ export async function generateProgramWeek(params: {
   shell: ProgramShell;
   weekNumber: number;
   priorWeekSummary: string | null;
+  candidates: ExerciseCandidate[];
 }): Promise<WeekGenerationOutcome> {
-  if (isFixtureModeEnabled()) return callFixtureWeekProvider(params.weekNumber, params.shell);
+  if (isFixtureModeEnabled()) return callFixtureWeekProvider(params.weekNumber, params.shell, params.candidates);
 
   const prompt = buildWeekGenerationPrompt(
     params.brief,
@@ -304,6 +308,7 @@ export async function generateProgramWeek(params: {
     params.shell,
     params.weekNumber,
     params.priorWeekSummary,
+    params.candidates,
   );
   const result = await callProvider({
     prompt,
@@ -332,10 +337,11 @@ export async function regenerateDayDraft(
   existingDraft: GeneratedProgramDraft,
   dayId: string,
   instruction: string | undefined,
+  candidates: ExerciseCandidate[],
 ): Promise<GenerationOutcome> {
-  if (isFixtureModeEnabled()) return callFixtureProvider();
+  if (isFixtureModeEnabled()) return callFixtureProvider(candidates);
 
-  const prompt = buildDayRegenerationPrompt(brief, clientContext, existingDraft, dayId, instruction);
+  const prompt = buildDayRegenerationPrompt(brief, clientContext, existingDraft, dayId, instruction, candidates);
   const result = await callProvider({
     prompt,
     schema: ModelProgramDraftSchema,

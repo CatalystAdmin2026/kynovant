@@ -63,6 +63,8 @@ import {
 } from "@/lib/program-generator/contracts";
 import { regenerateDayDraft } from "@/lib/program-generator/provider";
 import { resolveProgramDraftExercises, normalizeExerciseName } from "@/lib/program-generator/exercise-resolution";
+import { buildExerciseCandidateSet, verifyProgramDraftAgainstCandidates } from "@/lib/program-generator/exercise-candidates";
+import { catalogGapFindings } from "@/lib/program-generator/validation";
 import { buildClientContextSummary, type ClientContextSummary } from "@/lib/program-generator/client-context";
 import {
   updatePrescription,
@@ -447,19 +449,36 @@ export async function regenerateDayAction(params: {
     requestedByUserId: loaded.coachId,
   });
 
-  const outcome = await regenerateDayDraft(loaded.brief, clientContext, loaded.draft, params.dayId, params.instruction);
+  // Same curated-catalog rules as staged generation (requirement:
+  // regenerate-day must use the same catalog constraints) — recomputed
+  // here since regenerate-day is a standalone action, not part of a
+  // runStagedGeneration() call.
+  const candidateSet = await buildExerciseCandidateSet(loaded.brief, loaded.coachId);
+
+  const outcome = await regenerateDayDraft(
+    loaded.brief,
+    clientContext,
+    loaded.draft,
+    params.dayId,
+    params.instruction,
+    candidateSet.candidates,
+  );
 
   if (!outcome.ok) {
     await failRun(run.id, outcome.errorMessage);
     return { ok: false, error: "Regeneration failed. Please try again." };
   }
 
-  // Same resolution path as full generation — the provider's model-
-  // output draft still has no exerciseId anywhere, even for days it
-  // echoed back unchanged, so every prescription is resolved again
-  // here. Exact-name matches are deterministic, so unchanged exercises
-  // reliably resolve to the same real id they already had.
-  const resolvedDraft = await resolveProgramDraftExercises(outcome.draft);
+  // Never trust a returned exerciseId merely because the model supplied
+  // one — verify against the exact candidate set offered for this call
+  // before it's persisted (same rule as every week in staged generation).
+  const { result: verifiedDraft } = verifyProgramDraftAgainstCandidates(outcome.draft, candidateSet.candidates);
+
+  // Same resolution path as full generation — anything that didn't
+  // verify above (including days echoed back unchanged, which may not
+  // have carried a verifiable id at all) falls back to name-based
+  // resolution here, exactly as staged generation's assembly step does.
+  const resolvedDraft = await resolveProgramDraftExercises(verifiedDraft);
   const reparsed = parseGeneratedProgramDraft(resolvedDraft);
   if (!reparsed.ok) {
     await failRun(run.id, reparsed.error);
@@ -468,7 +487,13 @@ export async function regenerateDayAction(params: {
 
   await completeRun(run.id, { provider: outcome.provider, model: outcome.model });
   await saveDraftContent(params.draftId, reparsed.data, "ready_for_review");
-  await runAndSaveValidation(params.draftId, reparsed.data, loaded.brief, loaded.coachId);
+  await runAndSaveValidation(
+    params.draftId,
+    reparsed.data,
+    loaded.brief,
+    loaded.coachId,
+    catalogGapFindings(candidateSet.gaps),
+  );
   await recordEditEvent({
     draftId: params.draftId,
     actorUserId: loaded.coachId,

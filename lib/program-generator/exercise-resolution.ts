@@ -1,12 +1,15 @@
 // ─────────────────────────────────────────────────────────────
 // Kynovant — AI-Assisted Program Generator: Exercise Name Resolution
 //
-// SERVER-ONLY. The ONLY place a model-supplied exercise name is ever
-// turned into a real Exercise Library id. Nothing upstream (prompt.ts,
-// provider.ts) ever asks the model for an id — see contracts.ts's
-// Model*Schema tree, which has no exerciseId field at all. Nothing
-// downstream (validation.ts, edit-ops.ts, approval.ts) ever invents
-// one either. This is the single seam.
+// SERVER-ONLY. The final seam a model-supplied exercise selection
+// passes through before it's trusted. The model IS now given a bounded
+// candidate catalog and asked to select an id from it (see
+// exercise-candidates.ts) — but this module never trusts a returned id
+// merely because it's present; it independently re-verifies existence
+// and name match against the real, active library, and falls back to
+// the name-based resolution this file has always done for anything
+// that doesn't check out. Nothing downstream (validation.ts,
+// edit-ops.ts, approval.ts) ever invents an id either.
 //
 // Locked rules #4/#5 ("use only existing canonical Exercise Library
 // IDs", "never invent exercise IDs") are enforced here structurally:
@@ -253,37 +256,89 @@ export async function resolveExerciseNames(
 // DRAFT-LEVEL COMPOSITION — the orchestration/action layer's single
 // entry point. Walks a ModelProgramDraft (whatever the provider just
 // produced — full generation or regenerate-day, both use the same
-// Model*Schema shape and the same function here), resolves every
-// exercise name exactly once regardless of how many times it repeats
-// across weeks/days, and returns the fully-typed GeneratedProgramDraft
-// that validation.ts/edit-ops.ts/approval.ts already expect.
+// Model*Schema shape and the same function here) and returns the
+// fully-typed GeneratedProgramDraft that validation.ts/edit-ops.ts/
+// approval.ts already expect.
 //
-// A resolution that isn't exact/alternate_name/strong_match leaves
-// exerciseId null and attaches the outcome + candidates so
-// validation.ts can turn it into an actionable, approval-blocking
-// finding (PROGRAM_GEN_EXERCISE_AMBIGUOUS / PROGRAM_GEN_EXERCISE_UNRESOLVED)
+// Two paths, in priority order:
+//   1. Catalog-verified: prescription.exerciseId is present. This
+//      function re-verifies it independently against the real, active
+//      library (existence + name match) — it does NOT simply trust an
+//      id merely because it's present, regardless of whether an
+//      upstream candidate-set check (exercise-candidates.ts, run per
+//      week during staged generation) already verified it. That
+//      upstream check is the fast, common-case path; this is the
+//      backstop that makes resolveProgramDraftExercises() safe to call
+//      on its own. A verified id resolves with outcome "catalog_selected".
+//   2. Name-based fallback (pre-existing resolver, unchanged): anything
+//      with no exerciseId, or whose exerciseId didn't verify, falls
+//      through to the same exact/alternate-name/search-based resolution
+//      this module has always done — this is the defensive fallback,
+//      not the primary architecture.
+//
+// A resolution that isn't catalog_selected/exact/alternate_name/
+// strong_match leaves exerciseId null and attaches the outcome +
+// candidates so validation.ts can turn it into an actionable, approval-
+// blocking finding (PROGRAM_GEN_EXERCISE_AMBIGUOUS / PROGRAM_GEN_EXERCISE_UNRESOLVED)
 // — the coach resolves it with the existing Replace Exercise edit
 // action, which always writes a real id.
 // ─────────────────────────────────────────────────────────────
 
+function realRowNameMatches(row: { name: string; alternateNames: unknown }, claimedName: string): boolean {
+  const normalizedClaim = normalizeExerciseName(claimedName);
+  if (normalizeExerciseName(row.name) === normalizedClaim) return true;
+  const alt = Array.isArray(row.alternateNames) ? (row.alternateNames as unknown[]) : [];
+  return alt.some((a) => typeof a === "string" && normalizeExerciseName(a) === normalizedClaim);
+}
+
 export async function resolveProgramDraftExercises(
   modelDraft: ModelProgramDraft,
 ): Promise<GeneratedProgramDraft> {
+  const claimedIds = new Set<string>();
   const allNames: string[] = [];
   for (const week of modelDraft.weeks) {
     for (const day of week.days) {
       if (!day.workout) continue;
       for (const section of day.workout.sections) {
         for (const prescription of section.prescriptions) {
+          if (prescription.exerciseId) claimedIds.add(prescription.exerciseId);
           allNames.push(prescription.exerciseName);
         }
       }
     }
   }
 
+  // Independently re-verify every claimed id against the real, active
+  // library — see this function's header comment on why this can't
+  // just trust an already-present id.
+  const claimedIdList = [...claimedIds];
+  const realRows =
+    claimedIdList.length > 0
+      ? await getDb()
+          .select({ id: exercises.id, name: exercises.name, alternateNames: exercises.alternateNames })
+          .from(exercises)
+          .where(and(inArray(exercises.id, claimedIdList), eq(exercises.status, "active")))
+      : [];
+  const realById = new Map(realRows.map((r) => [r.id, r]));
+
   const resolutions = await resolveExerciseNames(allNames);
 
   function resolvePrescription(p: ModelPrescription): GeneratedPrescriptionDraft {
+    if (p.exerciseId) {
+      const real = realById.get(p.exerciseId);
+      if (real && realRowNameMatches(real, p.exerciseName)) {
+        return {
+          ...p,
+          exerciseId: real.id,
+          exerciseName: real.name,
+          exerciseResolution: { outcome: "catalog_selected", candidates: [] },
+        };
+      }
+      // Present but didn't verify (unknown id, or an id/name pair that
+      // doesn't match) — fall through to name resolution exactly as if
+      // no id had been supplied at all.
+    }
+
     const resolution = resolutions.get(normalizeExerciseName(p.exerciseName));
     // Every name pushed into allNames above was included in the
     // resolveExerciseNames() call, so every normalized name has an

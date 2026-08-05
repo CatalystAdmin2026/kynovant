@@ -15,10 +15,18 @@
 //     generation starts.
 //   Model*Schema (ModelProgramDraftSchema etc.) — exactly what the LLM
 //     is asked to produce via generateObject(). Prescriptions carry
-//     exerciseName only — never exerciseId. The model is never asked
-//     to know, invent, or infer a database UUID; see
-//     lib/program-generator/exercise-resolution.ts, the only place a
-//     name is ever turned into a real Exercise Library id.
+//     exerciseName (required) and exerciseId (optional, UNTRUSTED). The
+//     model is given a bounded, curated candidate catalog in the prompt
+//     (see lib/program-generator/exercise-candidates.ts) and instructed
+//     to select exerciseId only from it — but a returned id is never
+//     treated as real merely because it's present and UUID-shaped.
+//     exercise-candidates.ts's verify*AgainstCandidates() checks every
+//     returned id against the EXACT candidate set supplied for that
+//     call and strips anything that doesn't verify (unknown id, or an
+//     id/name pair that doesn't match); lib/program-generator/
+//     exercise-resolution.ts's pre-existing name-based resolver then
+//     covers whatever's left as a defensive fallback, not the primary
+//     path.
 //   Generated*Schema (GeneratedProgramDraftSchema etc.) — the resolved,
 //     persisted draft. Structurally the same tree, but each
 //     prescription's exerciseId is nullable: non-null only once
@@ -96,6 +104,13 @@ const uuidSchema = z.string().uuid();
 // ─────────────────────────────────────────────────────────────
 
 export const ExerciseResolutionOutcomeSchema = z.enum([
+  // The model selected this id directly from the supplied candidate
+  // catalog and its returned name matched that candidate — the primary,
+  // expected path once generation is catalog-constrained (see
+  // exercise-candidates.ts). Everything else below is the pre-existing
+  // name-based resolver, preserved as a defensive fallback for whatever
+  // doesn't verify against the catalog.
+  "catalog_selected",
   "exact",
   "alternate_name",
   "strong_match",
@@ -415,10 +430,20 @@ export function parseProgramShell(input: unknown): ParseResult<ProgramShell> {
 // ModelProgramDraft is turned into a GeneratedProgramDraft.
 // ─────────────────────────────────────────────────────────────
 
-export const ModelPrescriptionObjectSchema = GeneratedPrescriptionDraftObjectSchema.omit({
-  exerciseId: true,
-  exerciseResolution: true,
-});
+// exerciseId here is the model's CLAIM, chosen from the candidate
+// catalog supplied in the prompt (see exercise-candidates.ts) — never
+// trusted merely because it's present and UUID-shaped. Optional (not
+// required) because the model may occasionally omit it despite prompt
+// instructions; exercise-candidates.ts's verifyWeekAgainstCandidates()/
+// verifyProgramDraftAgainstCandidates() checks any present id against
+// the exact candidate set for that call BEFORE anything downstream may
+// treat it as real, and strips it back to absent on any mismatch —
+// exercise-resolution.ts's pre-existing name-based resolver then covers
+// it as a defensive fallback, exactly as it did before candidate
+// selection existed.
+export const ModelPrescriptionObjectSchema = GeneratedPrescriptionDraftObjectSchema
+  .omit({ exerciseId: true, exerciseResolution: true })
+  .extend({ exerciseId: uuidSchema.optional() });
 
 export const ModelPrescriptionSchema = ModelPrescriptionObjectSchema.refine(
   (p) => p.repsMin == null || p.repsMax == null || p.repsMin <= p.repsMax,

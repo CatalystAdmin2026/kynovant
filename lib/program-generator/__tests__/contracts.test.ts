@@ -248,16 +248,19 @@ describe("ModelWeekDraftSchema — per-week generation contract", () => {
         },
       ],
     };
+    // exerciseId is optional on the model-output contract — a week with
+    // no exerciseId anywhere is still valid (e.g. a model response that,
+    // despite prompt instructions, omitted it for some prescriptions).
+    // Downstream, an absent id always falls to the name-based resolver.
     const result = ModelWeekDraftSchema.safeParse(week);
     expect(result.success).toBe(true);
     if (result.success) {
-      // The model-output contract has no exerciseId field at all — not
-      // merely optional/null. Structurally impossible to fabricate one.
-      expect("exerciseId" in result.data.days[0].workout!.sections[0].prescriptions[0]).toBe(false);
+      expect(result.data.days[0].workout!.sections[0].prescriptions[0].exerciseId).toBeUndefined();
     }
   });
 
-  it("rejects an exerciseId field on a prescription (the model must never supply one)", () => {
+  it("accepts an exerciseId on a prescription — the model selects it from the supplied candidate catalog", () => {
+    const claimedId = randomUUID();
     const weekWithId = {
       id: "w1",
       weekNumber: 1,
@@ -277,7 +280,7 @@ describe("ModelWeekDraftSchema — per-week generation contract", () => {
                 prescriptions: [
                   {
                     id: "p1",
-                    exerciseId: randomUUID(),
+                    exerciseId: claimedId,
                     exerciseName: "Barbell Bench Press",
                     orderIndex: 0,
                   },
@@ -288,13 +291,45 @@ describe("ModelWeekDraftSchema — per-week generation contract", () => {
         },
       ],
     };
-    // zod strips unknown keys by default rather than rejecting them, so
-    // this proves the field is dropped, not merely ignored-but-present —
-    // parse succeeds, but the offending key never survives.
+    // Schema-level acceptance only — this is NOT trust. Whether a
+    // present exerciseId is actually honored depends entirely on
+    // exercise-candidates.ts's verification against the real candidate
+    // set supplied for that call (see exercise-candidates.test.ts and
+    // the resolver-fallback integration tests) — contracts.ts has no
+    // way to check that at parse time.
     const result = ModelWeekDraftSchema.safeParse(weekWithId);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect("exerciseId" in result.data.days[0].workout!.sections[0].prescriptions[0]).toBe(false);
+      expect(result.data.days[0].workout!.sections[0].prescriptions[0].exerciseId).toBe(claimedId);
     }
+  });
+
+  it("rejects a non-uuid exerciseId on a model-output prescription", () => {
+    const week = {
+      id: "w1",
+      weekNumber: 1,
+      days: [
+        {
+          id: "d1",
+          dayOfWeek: 1,
+          workout: {
+            id: "bp1",
+            name: "Day A",
+            sections: [
+              {
+                id: "s1",
+                name: "Main",
+                sectionType: "main_lift",
+                orderIndex: 0,
+                prescriptions: [
+                  { id: "p1", exerciseId: "not-a-uuid", exerciseName: "Barbell Bench Press", orderIndex: 0 },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    expect(ModelWeekDraftSchema.safeParse(week).success).toBe(false);
   });
 });

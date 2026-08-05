@@ -55,6 +55,7 @@ import type {
   ExerciseResolutionCandidate,
   ExerciseResolutionRecord,
 } from "./contracts";
+import { EQUIPMENT_ACCESS_ALLOWED_RESISTANCE, type CandidateCoverageGap } from "./exercise-candidates";
 
 // ─────────────────────────────────────────────────────────────
 // FINDING MODEL
@@ -185,23 +186,36 @@ function collectPrescriptionRefs(draft: GeneratedProgramDraft): PrescriptionRef[
 // enough to justify blocking approval on its own.
 // ─────────────────────────────────────────────────────────────
 
-const EQUIPMENT_ACCESS_ALLOWED_RESISTANCE: Partial<Record<ProgramGenerationBrief["equipmentAccess"], Set<string>>> = {
-  bodyweight: new Set(["bodyweight"]),
-  bands_only: new Set(["bodyweight", "band"]),
-  dumbbells_only: new Set(["bodyweight", "dumbbell"]),
-  home_gym: new Set([
-    "bodyweight",
-    "dumbbell",
-    "kettlebell",
-    "band",
-    "barbell",
-    "suspension",
-    "medicine_ball",
-    "sandbag",
-  ]),
-  // commercial_gym and custom are intentionally absent — treated as
-  // "cannot deterministically restrict," so no equipment finding fires.
-};
+// EQUIPMENT_ACCESS_ALLOWED_RESISTANCE now lives in exercise-candidates.ts
+// (imported above) — it's the same map used there as a hard candidate-
+// selection filter, so this warning-level check and that hard filter
+// can never drift apart. In the catalog-constrained architecture this
+// almost never fires (equipment-incompatible exercises are filtered out
+// before the model ever sees them); it remains as defense in depth for
+// anything that reaches this draft via the name-based resolver fallback
+// or a manual coach edit.
+
+// ─────────────────────────────────────────────────────────────
+// CATALOG COVERAGE GAPS — turns exercise-candidates.ts's coverage gaps
+// (computed once per generation attempt, before any shell/week call —
+// see staged-generation.ts) into the same ValidationFinding shape as
+// every other finding in this file, so the existing coach-facing
+// findings UI (and the existing warning-acknowledgement workflow)
+// surfaces them with no new UI required. Always a warning, never a
+// blocker — a coverage gap means the model had less to choose from for
+// that category, not that the draft is unsafe; the coach reviews and
+// fills the gap manually if needed.
+// ─────────────────────────────────────────────────────────────
+
+export function catalogGapFindings(gaps: CandidateCoverageGap[]): ValidationFinding[] {
+  return gaps.map((gap) => ({
+    id: randomUUID(),
+    code: "PROGRAM_GEN_CATALOG_COVERAGE_GAP",
+    severity: "warning",
+    title: `Limited exercise library coverage for ${gap.category.replace(/_/g, " ")}`,
+    explanation: gap.reason,
+  }));
+}
 
 // ─────────────────────────────────────────────────────────────
 // MAIN ENTRY POINT

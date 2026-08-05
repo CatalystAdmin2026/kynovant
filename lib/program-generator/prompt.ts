@@ -1,22 +1,20 @@
 // ─────────────────────────────────────────────────────────────
 // Kynovant — AI-Assisted Program Generator: Prompt Construction
 //
-// SERVER-ONLY. Deterministic — the same brief + client context always
-// produces the same prompt string. Randomness, if any, belongs to the
-// model's own sampling, never to this function.
+// SERVER-ONLY. Deterministic — the same brief + client context +
+// candidate catalog always produces the same prompt string. Randomness,
+// if any, belongs to the model's own sampling, never to this function.
 //
-// This prompt asks the model to choose exercises by NAME/description
-// and describe intent — it does NOT ask the model to invent exerciseIds.
-// Locked rule #4/#5 ("use only existing canonical Exercise Library IDs",
-// "never invent exercise IDs") is enforced downstream in validation.ts,
-// which resolves every exercise the model names against the real
-// library and rejects anything that doesn't match — see
-// lib/program-generator/validation.ts's exercise-resolution pass. The
-// GeneratedProgramDraftSchema (contracts.ts) still requires a real
-// exerciseId field on every prescription; the resolution step is what
-// fills it in correctly before the schema is even checked, so a model
-// that "helpfully" fabricates a uuid-shaped string is caught by
-// existence validation regardless.
+// Week/day-regeneration prompts include a bounded, curated Exercise
+// Catalog (see exercise-candidates.ts) and instruct the model to select
+// every exercise's id and name from it — never to invent or infer one.
+// That instruction alone is not the enforcement mechanism: nothing
+// downstream trusts a returned id merely because the model followed
+// instructions. exercise-candidates.ts's verify*AgainstCandidates()
+// independently checks every returned id against the exact candidate
+// set supplied for that call, and exercise-resolution.ts's name-based
+// resolver remains a defensive fallback for anything that doesn't
+// verify. See contracts.ts's header comment for the full picture.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
@@ -28,6 +26,7 @@ import type {
   ModelWeekDraft,
 } from "./contracts";
 import type { ClientContextSummary } from "./client-context";
+import { formatCandidatesForPrompt, type ExerciseCandidate, type ExerciseCandidateSet } from "./exercise-candidates";
 
 function formatBriefSection(brief: ProgramGenerationBrief): string {
   const lines: string[] = [
@@ -95,13 +94,33 @@ function formatClientContextSection(context: ClientContextSummary | null): strin
 
 const OUTPUT_CONTRACT_NOTES = `
 Output requirements:
-- Choose exercises by describing them clearly (name, primary muscle, equipment) — you are not expected to know internal database IDs. A separate system will resolve your exercise choices against the real exercise library and reject anything it cannot match, so prefer common, unambiguous exercise names.
+- Every exercise you include MUST be selected from the "Exercise Catalog" section by its exact id and name. Never invent, infer, or guess an exerciseId. Never select an exercise that is not present in the supplied catalog. Copy the id and name exactly as given — do not alter, abbreviate, translate, or paraphrase either one.
+- This applies to EVERY exercise in every section, including warmup, activation, mobility, and cardio/conditioning work. Do not invent generic stretches, unnamed activation drills, or any warmup movement absent from the catalog — select warmups from the catalog exactly like any other exercise.
+- If nothing in the catalog is a good fit for a specific need, choose the closest reasonable match that IS in the catalog rather than inventing something. Catalog gaps are handled separately by the system — it is never your job to fill one by fabricating an exercise.
 - Every set/rep/rest/tempo/RPE/RIR value must be realistic for the stated experience level and goal.
-- Do not include any exercise described in the excluded list above, under any name or variation.
+- Do not include any exercise described in the excluded list above, under any name or variation — excluded exercises have already been removed from the catalog, so if you only select from the catalog this is automatic.
 - Every training day must have at least one section with at least one exercise. Do not leave a training day empty.
 - Keep each session within the target session length.
 - Do not fabricate scientific claims or guarantee outcomes.
 `.trim();
+
+function formatCatalogSection(candidates: ExerciseCandidate[]): string {
+  return [
+    "## Exercise Catalog (SELECT ONLY FROM THIS LIST)",
+    "Each line: id | name | alt names | muscle (+secondary) | movement pattern | classification | equipment | level | flags | high-stress joints.",
+    "You MUST use only ids and names from this list — see Output Contract below for the full rule.",
+    "",
+    formatCandidatesForPrompt(candidates),
+  ].join("\n");
+}
+
+function summarizeCandidateCoverage(candidateSet: ExerciseCandidateSet): string {
+  if (candidateSet.gaps.length === 0) {
+    return `${candidateSet.candidates.length} candidate exercises are available across the requested muscle groups, with warmup/mobility and cardio coverage.`;
+  }
+  const gapList = candidateSet.gaps.map((g) => `${g.category.replace(/_/g, " ")}`).join(", ");
+  return `${candidateSet.candidates.length} candidate exercises are available. Note: limited library coverage for: ${gapList} — plan around this rather than assuming full coverage in those areas.`;
+}
 
 function formatDayLabels(shell: ProgramShell): string {
   return shell.days
@@ -127,14 +146,18 @@ function formatPhase(phase: ProgramShellPhase | null, weekNumber: number): strin
 // week" context for the next week's generation. Deliberately NOT the
 // full JSON (that would reintroduce the large-payload problem staged
 // generation exists to avoid) — just enough for the model to continue
-// coherently: which exercises were used, per day.
+// coherently: which exercises were used, per day, WITH their catalog
+// ids (requirement: pass prior-week selected ids forward) so the model
+// can copy the exact same id forward for continuity instead of
+// re-selecting by name and risking a different-but-similar exercise.
 export function summarizeWeekForPrompt(week: ModelWeekDraft): string {
   const dayLines = week.days.map((day) => {
     if (!day.workout) return `${day.label ?? `Day ${day.dayOfWeek}`}: rest day`;
-    const exerciseNames = day.workout.sections
-      .flatMap((s) => s.prescriptions.map((p) => p.exerciseName))
+    const exercises = day.workout.sections
+      .flatMap((s) => s.prescriptions)
+      .map((p) => (p.exerciseId ? `${p.exerciseName} [id:${p.exerciseId}]` : p.exerciseName))
       .join(", ");
-    return `${day.label ?? day.workout.name}${day.workout.primaryFocus ? ` (${day.workout.primaryFocus})` : ""}: ${exerciseNames}`;
+    return `${day.label ?? day.workout.name}${day.workout.primaryFocus ? ` (${day.workout.primaryFocus})` : ""}: ${exercises}`;
   });
   return dayLines.join("\n");
 }
@@ -142,6 +165,7 @@ export function summarizeWeekForPrompt(week: ModelWeekDraft): string {
 export function buildShellGenerationPrompt(
   brief: ProgramGenerationBrief,
   clientContext: ClientContextSummary | null,
+  candidateSet?: ExerciseCandidateSet,
 ): string {
   return [
     "You are designing the STRUCTURE of a multi-week strength training Program for a professional coach's review — not the workout content itself. A separate step will generate each week's actual exercises using the structure you define here, so this structure must be specific enough to keep every week consistent with it.",
@@ -151,6 +175,9 @@ export function buildShellGenerationPrompt(
     "",
     "## Client Context",
     formatClientContextSection(clientContext),
+    ...(candidateSet
+      ? ["", "## Exercise Library Availability", summarizeCandidateCoverage(candidateSet)]
+      : []),
     "",
     "## What to produce",
     `- totalWeeks must be exactly ${brief.weeks}.`,
@@ -167,6 +194,7 @@ export function buildWeekGenerationPrompt(
   shell: ProgramShell,
   weekNumber: number,
   priorWeekSummary: string | null,
+  candidates: ExerciseCandidate[],
 ): string {
   const phase = findPhaseForWeek(shell, weekNumber);
 
@@ -178,6 +206,8 @@ export function buildWeekGenerationPrompt(
     "",
     "## Client Context",
     formatClientContextSection(clientContext),
+    "",
+    formatCatalogSection(candidates),
     "",
     "## Program Shell (fixed for the whole Program — do not deviate)",
     `Title: ${shell.title}`,
@@ -213,6 +243,7 @@ export function buildDayRegenerationPrompt(
   existingDraft: GeneratedProgramDraft,
   dayId: string,
   instruction: string | undefined,
+  candidates: ExerciseCandidate[],
 ): string {
   const targetDay = existingDraft.weeks
     .flatMap((w) => w.days.map((d) => ({ week: w, day: d })))
@@ -230,6 +261,8 @@ export function buildDayRegenerationPrompt(
     "",
     "## Client Context",
     formatClientContextSection(clientContext),
+    "",
+    formatCatalogSection(candidates),
     "",
     "## Day Being Regenerated",
     dayDescription,

@@ -36,7 +36,8 @@ import {
 import { generateProgramShell, generateProgramWeek } from "./provider";
 import { summarizeWeekForPrompt } from "./prompt";
 import { resolveProgramDraftExercises } from "./exercise-resolution";
-import { validateGeneratedDraft } from "./validation";
+import { validateGeneratedDraft, catalogGapFindings, type ValidationFinding } from "./validation";
+import { buildExerciseCandidateSet, verifyWeekAgainstCandidates } from "./exercise-candidates";
 import {
   parseGeneratedProgramDraft,
   type ProgramGenerationBrief,
@@ -50,15 +51,28 @@ import type { ClientContextSummary } from "./client-context";
 // Shared by every code path that needs "validate the current draft
 // content and persist the result, without letting an unexpected
 // validation-layer exception surface as an unhandled action failure."
+// extraWarnings is how catalog coverage gaps (computed once per
+// generation attempt, before any shell/week call) ride along into the
+// same findings the coach already sees and acknowledges — see
+// runStagedGeneration()'s finalization step.
 export async function runAndSaveValidation(
   draftId: string,
   draft: GeneratedProgramDraft,
   brief: ProgramGenerationBrief,
   coachId: string,
+  extraWarnings: ValidationFinding[] = [],
 ): Promise<void> {
   try {
     const result = await validateGeneratedDraft(draft, brief, coachId);
-    await saveValidationResult(draftId, result);
+    const merged =
+      extraWarnings.length > 0
+        ? {
+            ...result,
+            warnings: [...result.warnings, ...extraWarnings],
+            status: result.status === "blocked" ? ("blocked" as const) : ("warnings" as const),
+          }
+        : result;
+    await saveValidationResult(draftId, merged);
   } catch (err) {
     await saveValidationFailure(draftId, err instanceof Error ? err.message : "Validation failed unexpectedly.");
   }
@@ -90,6 +104,14 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     completedWeeks: params.existingCompletedWeeks.size,
   });
 
+  // Computed once per attempt (fresh or resume — deterministic given
+  // the same brief/coach/library state, so recomputing it on a resume
+  // is safe and never itself a reason to regenerate an already-
+  // completed week) and reused across shell planning, every week call,
+  // and — separately, in actions.ts — regenerate-day. See
+  // exercise-candidates.ts for the selection algorithm and its bounds.
+  const candidateSet = await buildExerciseCandidateSet(params.brief, params.coachId);
+
   let lastProvider = "vercel-ai-gateway";
   let lastModel = "unknown";
 
@@ -97,7 +119,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   let shell = params.existingShell;
   if (!shell) {
     await updateRunProgress(run.id, { currentWeek: 0 });
-    const shellOutcome = await generateProgramShell(params.brief, params.clientContext);
+    const shellOutcome = await generateProgramShell(params.brief, params.clientContext, candidateSet);
     if (!shellOutcome.ok) {
       await failRun(run.id, shellOutcome.errorMessage);
       const failureReason = "Generation failed while designing the program structure. You can retry.";
@@ -134,6 +156,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
       shell,
       weekNumber,
       priorWeekSummary,
+      candidates: candidateSet.candidates,
     });
 
     if (!weekOutcome.ok) {
@@ -144,8 +167,15 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
       return { ok: false, error: failureReason };
     }
 
-    await saveGenerationWeek(params.draftId, weekNumber, { status: "completed", weekJson: weekOutcome.week });
-    allWeeks.set(weekNumber, weekOutcome.week);
+    // Never trust a returned exerciseId merely because the model
+    // supplied one — verify every prescription's id against the exact
+    // candidate set offered for this call before persisting. Anything
+    // that doesn't verify has its id stripped back to name-only, which
+    // exercise-resolution.ts's fallback resolver covers at assembly time.
+    const { result: verifiedWeek } = verifyWeekAgainstCandidates(weekOutcome.week, candidateSet.candidates);
+
+    await saveGenerationWeek(params.draftId, weekNumber, { status: "completed", weekJson: verifiedWeek });
+    allWeeks.set(weekNumber, verifiedWeek);
     lastProvider = weekOutcome.provider;
     lastModel = weekOutcome.model;
 
@@ -196,7 +226,13 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
 
   await completeRun(run.id, { provider: lastProvider, model: lastModel });
   await saveDraftContent(params.draftId, reparsed.data, "ready_for_review");
-  await runAndSaveValidation(params.draftId, reparsed.data, params.brief, params.coachId);
+  await runAndSaveValidation(
+    params.draftId,
+    reparsed.data,
+    params.brief,
+    params.coachId,
+    catalogGapFindings(candidateSet.gaps),
+  );
 
   return { ok: true };
 }
