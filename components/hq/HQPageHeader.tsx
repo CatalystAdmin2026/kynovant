@@ -6,20 +6,20 @@ interface Props {
 
 export default function HQPageHeader({ title, subtitle, action }: Props) {
   return (
-    <div className="flex items-start justify-between gap-6 mb-10">
-      <div>
-        {/* Matches the established page-title treatment (see
-            app/account/page.tsx) rather than the eyebrow-label style this
-            used previously, which made every HQ page's title render
-            smaller and fainter than its own subtitle. */}
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 mb-8 sm:mb-10">
+      <div className="min-w-0">
         <h1 className="font-headline text-2xl uppercase tracking-[0.06em] text-white mb-2">
           {title}
         </h1>
+
         {subtitle && (
-          <p className="text-white/40 text-sm leading-relaxed max-w-xl">{subtitle}</p>
+          <p className="text-white/40 text-sm leading-relaxed max-w-xl">
+            {subtitle}
+          </p>
         )}
       </div>
-      {action && <div className="shrink-0 pt-1">{action}</div>}
+
+      {action && <div className="shrink-0 sm:pt-1">{action}</div>}
     </div>
   );
 }

@@ -4,36 +4,11 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
-  Users,
-  BookOpen,
-  FileText,
-  ClipboardCheck,
-  Calendar,
-  Folder,
-  Dumbbell,
-  Rocket,
-} from "lucide-react";
-
-interface NavItem {
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  label: string;
-  href: string;
-  exact?: boolean;
-  comingSoon?: boolean;
-}
-
-const NAV: NavItem[] = [
-  { icon: LayoutDashboard, label: "Overview",        href: "/hq",            exact: true },
-  { icon: Rocket,          label: "Get Started",     href: "/hq/get-started"             },
-  { icon: Users,           label: "Clients",         href: "/hq/clients"                 },
-  { icon: BookOpen,        label: "Programs",        href: "/hq/programs"                },
-  { icon: FileText,        label: "Blueprints",      href: "/hq/blueprints"              },
-  { icon: Dumbbell,        label: "Exercise Library", href: "/hq/exercises"              },
-  { icon: ClipboardCheck,  label: "Check-Ins",       href: "/hq/check-ins"               },
-  { icon: Calendar,        label: "Schedule",        href: "/hq/schedule",   comingSoon: true },
-  { icon: Folder,          label: "Documents",       href: "/hq/documents",  comingSoon: true },
-];
+  comingSoonHQNavItems,
+  setupHQNavItems,
+  visibleHQNavItems,
+  type HQNavItem,
+} from "./HQNavItems";
 
 export default function HQSidebar({
   coachName,
@@ -43,12 +18,11 @@ export default function HQSidebar({
   onboardingComplete: boolean;
 }) {
   const pathname = usePathname();
-  const mainNav = NAV.filter((i) => !i.comingSoon && (!onboardingComplete || i.href !== "/hq/get-started"));
-  const setupNav = onboardingComplete
-    ? NAV.filter((i) => !i.comingSoon && i.href === "/hq/get-started")
-    : [];
+  const mainNav = visibleHQNavItems(onboardingComplete);
+  const setupNav = setupHQNavItems(onboardingComplete);
+  const comingSoonNav = comingSoonHQNavItems();
 
-  function isActive(item: NavItem): boolean {
+  function isActive(item: HQNavItem): boolean {
     if (item.comingSoon) return false;
     if (item.exact) return pathname === item.href;
     return pathname === item.href || pathname.startsWith(item.href + "/");
@@ -96,7 +70,8 @@ export default function HQSidebar({
             <Link
               key={item.label}
               href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 text-xs font-medium tracking-wide transition-colors ${
+              aria-current={active ? "page" : undefined}
+              className={`flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium tracking-wide transition-colors ${
                 active
                   ? "bg-[#C9A24D]/10 text-[#C9A24D] border border-[#C9A24D]/15"
                   : "text-white/45 hover:text-white/70 hover:bg-white/[0.04] border border-transparent"
@@ -120,13 +95,14 @@ export default function HQSidebar({
               const active = isActive(item);
               const Icon = item.icon;
               return (
-                <Link
-                  key={item.label}
-                  href={item.href}
-                  className={`flex items-center gap-3 px-3 py-2.5 text-xs font-medium tracking-wide transition-colors ${
-                    active
-                      ? "bg-white/[0.04] text-white/55 border border-white/[0.08]"
-                      : "text-white/25 hover:text-white/45 hover:bg-white/[0.03] border border-transparent"
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    className={`flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium tracking-wide transition-colors ${
+                      active
+                        ? "bg-white/[0.04] text-white/55 border border-white/[0.08]"
+                        : "text-white/25 hover:text-white/45 hover:bg-white/[0.03] border border-transparent"
                   }`}
                 >
                   <Icon size={13} className={active ? "text-white/45" : "text-white/30"} />
@@ -143,12 +119,12 @@ export default function HQSidebar({
           Coming Soon
         </p>
 
-        {NAV.filter((i) => i.comingSoon).map((item) => {
+        {comingSoonNav.map((item) => {
           const Icon = item.icon;
           return (
             <div
               key={item.label}
-              className="flex items-center gap-3 px-3 py-2.5 text-xs font-medium tracking-wide text-white/30 cursor-default select-none border border-transparent"
+              className="flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium tracking-wide text-white/30 cursor-default select-none border border-transparent"
             >
               <Icon size={13} className="text-white/25" />
               {item.label}

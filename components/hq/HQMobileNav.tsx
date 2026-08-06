@@ -4,18 +4,13 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
-import { Menu, X, LayoutDashboard, Users, BookOpen, FileText, ClipboardCheck, Dumbbell, Rocket } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import HQSignOutButton from "./HQSignOutButton";
-
-const MAIN_NAV = [
-  { icon: LayoutDashboard, label: "Overview",         href: "/hq",             exact: true },
-  { icon: Rocket,          label: "Get Started",      href: "/hq/get-started"              },
-  { icon: Users,           label: "Clients",          href: "/hq/clients"                  },
-  { icon: BookOpen,        label: "Programs",         href: "/hq/programs"                 },
-  { icon: FileText,        label: "Blueprints",       href: "/hq/blueprints"               },
-  { icon: Dumbbell,        label: "Exercise Library", href: "/hq/exercises"                },
-  { icon: ClipboardCheck,  label: "Check-Ins",        href: "/hq/check-ins"                },
-];
+import {
+  comingSoonHQNavItems,
+  setupHQNavItems,
+  visibleHQNavItems,
+} from "./HQNavItems";
 
 export default function HQMobileNav({
   coachName,
@@ -26,10 +21,9 @@ export default function HQMobileNav({
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
-  const mainNav = MAIN_NAV.filter((item) => !onboardingComplete || item.href !== "/hq/get-started");
-  const setupNav = onboardingComplete
-    ? MAIN_NAV.filter((item) => item.href === "/hq/get-started")
-    : [];
+  const mainNav = visibleHQNavItems(onboardingComplete);
+  const setupNav = setupHQNavItems(onboardingComplete);
+  const comingSoonNav = comingSoonHQNavItems();
 
   function isActive(href: string, exact = false): boolean {
     if (exact) return pathname === href;
@@ -57,7 +51,7 @@ export default function HQMobileNav({
       {open && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
-          <div className="relative w-64 bg-[#0b0c0d] border-r border-white/[0.08] flex flex-col h-full">
+          <div className="relative w-[18rem] max-w-[86vw] bg-[#0b0c0d] border-r border-white/[0.08] shadow-2xl flex flex-col h-full">
             <div className="flex items-center gap-2.5 px-5 h-12 border-b border-white/[0.06]">
               <Image src="/logos/kynovant-mark.png" alt="" width={14} height={14} className="opacity-80" />
               <span className="text-[9px] font-bold tracking-[0.3em] text-[#C9A24D]/80 uppercase flex-1">
@@ -76,10 +70,11 @@ export default function HQMobileNav({
                     key={label}
                     href={href}
                     onClick={() => setOpen(false)}
-                    className={`flex items-center gap-3 px-3 py-3 text-sm font-medium transition-colors ${
+                    aria-current={active ? "page" : undefined}
+                    className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm font-medium transition-colors ${
                       active
-                        ? "bg-[#C9A24D]/10 text-[#C9A24D]"
-                        : "text-white/50 hover:text-white/80 hover:bg-white/[0.04]"
+                        ? "bg-[#C9A24D]/10 text-[#C9A24D] border border-[#C9A24D]/15"
+                        : "text-white/50 hover:text-white/80 hover:bg-white/[0.04] border border-transparent"
                     }`}
                   >
                     <Icon size={15} className={active ? "text-[#C9A24D]" : "text-white/30"} />
@@ -103,10 +98,11 @@ export default function HQMobileNav({
                         key={label}
                         href={href}
                         onClick={() => setOpen(false)}
-                        className={`flex items-center gap-3 px-3 py-3 text-sm font-medium transition-colors ${
+                        aria-current={active ? "page" : undefined}
+                        className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm font-medium transition-colors ${
                           active
-                            ? "bg-white/[0.04] text-white/55"
-                            : "text-white/30 hover:text-white/55 hover:bg-white/[0.03]"
+                            ? "bg-white/[0.04] text-white/55 border border-white/[0.08]"
+                            : "text-white/30 hover:text-white/55 hover:bg-white/[0.03] border border-transparent"
                         }`}
                       >
                         <Icon size={15} className={active ? "text-white/45" : "text-white/20"} />
@@ -120,8 +116,9 @@ export default function HQMobileNav({
               <div className="h-px bg-white/[0.05] my-3" />
 
               <div className="px-3 py-2 text-xs text-white/20 space-y-2">
-                {["Schedule", "Documents"].map((label) => (
+                {comingSoonNav.map(({ icon: Icon, label }) => (
                   <div key={label} className="flex items-center gap-2">
+                    <Icon size={13} className="text-white/15" />
                     <span>{label}</span>
                     <span className="text-[9px] border border-white/10 px-1 text-white/15">Soon</span>
                   </div>
