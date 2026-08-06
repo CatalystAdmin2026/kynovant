@@ -112,6 +112,25 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   // exercise-candidates.ts for the selection algorithm and its bounds.
   const candidateSet = await buildExerciseCandidateSet(params.brief, params.coachId);
 
+  // Fail fast on total candidate exhaustion — an empty candidate set
+  // means the model has literally nothing valid to select from for
+  // every muscle group and warmup/cardio category (this brief's
+  // equipment/experience-level combination excludes the entire visible
+  // library). Continuing would still spend a shell call plus one call
+  // per week only to produce a draft where every single prescription is
+  // an unresolved/rejected blocker — wasted latency and provider cost
+  // for a result that was never going to be usable. The per-category
+  // gaps (candidateSet.gaps) already handle the common "some categories
+  // are thin" case as a warning; this is the total-exhaustion case,
+  // which gets a clear, actionable failure instead.
+  if (candidateSet.candidates.length === 0) {
+    const failureReason =
+      "No exercises in the Exercise Library are compatible with this brief's equipment and experience-level combination. Adjust the brief (equipment access, experience level, or muscle priorities) or add matching exercises to the library before generating.";
+    await failRun(run.id, failureReason);
+    await setDraftStatus(params.draftId, "failed", { failureReason });
+    return { ok: false, error: failureReason };
+  }
+
   let lastProvider = "vercel-ai-gateway";
   let lastModel = "unknown";
 
@@ -215,7 +234,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   // Provider returns unresolved model output (exerciseName only, no
   // exerciseId — see contracts.ts's Model*Schema tree). Resolution
   // against the real Exercise Library happens exactly once, here.
-  const resolvedDraft = await resolveProgramDraftExercises(assembledModelDraft);
+  const resolvedDraft = await resolveProgramDraftExercises(assembledModelDraft, params.coachId);
   const reparsed = parseGeneratedProgramDraft(resolvedDraft);
   if (!reparsed.ok) {
     await failRun(run.id, reparsed.error);

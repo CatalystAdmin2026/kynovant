@@ -78,15 +78,27 @@ function dedupeCandidatesById(rows: { id: string; name: string }[]): ExerciseRes
   return [...byId.values()];
 }
 
+// Same tenant-visibility rule as exercise-candidates.ts's hard
+// candidate-selection filter (system/organization scope is the shared
+// library; coach scope is visible only to the coach who created it).
+// Duplicated locally rather than imported — see realRowNameMatches
+// below for why this file never imports from exercise-candidates.ts.
+function visibleToCoach(row: { scope: string; createdBy: string | null }, coachId: string): boolean {
+  return row.scope === "system" || row.scope === "organization" || row.createdBy === coachId;
+}
+
 // Resolves a batch of raw, model-generated exercise names against the
-// real, active Exercise Library. Returns a map keyed by NORMALIZED name
-// (see normalizeExerciseName) — callers look up a prescription's
-// resolution via the normalized form of its own exerciseName, which is
-// how the same result is transparently reused for every repeat of the
-// same exercise across the whole draft (requirement: resolve each
-// unique name only once).
+// real, active Exercise Library — scoped to exactly what the requesting
+// coach may see (system/organization-wide exercises, plus their own
+// coach-scoped ones), never another coach's private exercises. Returns a
+// map keyed by NORMALIZED name (see normalizeExerciseName) — callers
+// look up a prescription's resolution via the normalized form of its own
+// exerciseName, which is how the same result is transparently reused for
+// every repeat of the same exercise across the whole draft (requirement:
+// resolve each unique name only once).
 export async function resolveExerciseNames(
   rawNames: string[],
+  coachId: string,
 ): Promise<Map<string, ExerciseResolution>> {
   const results = new Map<string, ExerciseResolution>();
 
@@ -127,6 +139,11 @@ export async function resolveExerciseNames(
     .where(
       and(
         eq(exercises.status, "active"),
+        or(
+          eq(exercises.scope, "system"),
+          eq(exercises.scope, "organization"),
+          and(eq(exercises.scope, "coach"), eq(exercises.createdBy, coachId)),
+        )!,
         or(
           inArray(sql`lower(${exercises.name})`, uniqueNormalized),
           sql`EXISTS (
@@ -214,13 +231,19 @@ export async function resolveExerciseNames(
 
   // ── Tier c: existing full-text search, only for names tiers a/b
   // couldn't place — bounded by the residual, not by prescription count.
+  // searchExercises() itself has no tenant-visibility filter (it serves
+  // the coach-facing library browser, which passes its own scope filter
+  // explicitly when needed) — post-filtered here so this resolver can
+  // never surface another coach's private exercise, same rule as tiers
+  // a+b above.
   for (const normalized of needsSearchTier) {
     const requestedName = firstSeenByNormalized.get(normalized)!;
-    const searchResults = await searchExercises({
+    const rawSearchResults = await searchExercises({
       name: requestedName,
       statuses: ["active"],
       limit: MAX_CANDIDATES,
     });
+    const searchResults = rawSearchResults.filter((r) => visibleToCoach(r, coachId));
 
     if (searchResults.length === 1) {
       results.set(normalized, {
@@ -293,6 +316,7 @@ function realRowNameMatches(row: { name: string; alternateNames: unknown }, clai
 
 export async function resolveProgramDraftExercises(
   modelDraft: ModelProgramDraft,
+  coachId: string,
 ): Promise<GeneratedProgramDraft> {
   const claimedIds = new Set<string>();
   const allNames: string[] = [];
@@ -308,20 +332,33 @@ export async function resolveProgramDraftExercises(
     }
   }
 
-  // Independently re-verify every claimed id against the real, active
-  // library — see this function's header comment on why this can't
-  // just trust an already-present id.
+  // Independently re-verify every claimed id against the real, active,
+  // tenant-visible library — see this function's header comment on why
+  // this can't just trust an already-present id. Scoped identically to
+  // exercise-candidates.ts's hard filter: a claimed id pointing at
+  // another coach's private exercise must never verify here either,
+  // even if it happens to be a real, active row.
   const claimedIdList = [...claimedIds];
   const realRows =
     claimedIdList.length > 0
       ? await getDb()
-          .select({ id: exercises.id, name: exercises.name, alternateNames: exercises.alternateNames })
+          .select({ id: exercises.id, name: exercises.name, alternateNames: exercises.alternateNames, scope: exercises.scope, createdBy: exercises.createdBy })
           .from(exercises)
-          .where(and(inArray(exercises.id, claimedIdList), eq(exercises.status, "active")))
+          .where(
+            and(
+              inArray(exercises.id, claimedIdList),
+              eq(exercises.status, "active"),
+              or(
+                eq(exercises.scope, "system"),
+                eq(exercises.scope, "organization"),
+                and(eq(exercises.scope, "coach"), eq(exercises.createdBy, coachId)),
+              )!,
+            ),
+          )
       : [];
   const realById = new Map(realRows.map((r) => [r.id, r]));
 
-  const resolutions = await resolveExerciseNames(allNames);
+  const resolutions = await resolveExerciseNames(allNames, coachId);
 
   function resolvePrescription(p: ModelPrescription): GeneratedPrescriptionDraft {
     if (p.exerciseId) {

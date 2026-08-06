@@ -31,6 +31,7 @@ import {
   listGenerationWeeks,
   getLatestRun,
   setDraftStatus,
+  claimFailedDraftForResume,
   acknowledgeWarnings,
 } from "../program-generation-service";
 import { validateGeneratedDraft } from "@/lib/program-generator/validation";
@@ -40,6 +41,7 @@ import { coachOwnsProgramTemplate, coachOwnsWorkoutTemplate } from "@/lib/auth/g
 import { generateProgramShell, regenerateDayDraft } from "@/lib/program-generator/provider";
 import { buildFixtureProgramShell, buildFixtureProgramWeek } from "@/lib/program-generator/fixture";
 import { runStagedGeneration } from "@/lib/program-generator/staged-generation";
+import { buildExerciseCandidateSet } from "@/lib/program-generator/exercise-candidates";
 import { summarizeWeekForPrompt, buildWeekGenerationPrompt } from "@/lib/program-generator/prompt";
 import type {
   GeneratedProgramDraft,
@@ -316,6 +318,10 @@ describe("exercise resolution — ambiguous/unresolved block approval", () => {
         classification: "compound",
         difficulty: "beginner",
         status: "active",
+        // coachA must be able to see both fixture rows — tenant-scoped
+        // resolution (exercise-resolution.ts) otherwise excludes a
+        // coach-scoped row with no matching owner.
+        createdBy: coachA.id,
       })
       .returning({ id: exercises.id });
     const [dupeB] = await db
@@ -327,12 +333,13 @@ describe("exercise resolution — ambiguous/unresolved block approval", () => {
         classification: "compound",
         difficulty: "beginner",
         status: "active",
+        createdBy: coachA.id,
       })
       .returning({ id: exercises.id });
     exerciseFixtureIds.push(dupeA.id, dupeB.id);
 
     const modelDraft = buildModelDraft(duplicateName);
-    const resolved = await resolveProgramDraftExercises(modelDraft);
+    const resolved = await resolveProgramDraftExercises(modelDraft, coachA.id);
     const prescription = resolved.weeks[0].days[0].workout!.sections[0].prescriptions[0];
     expect(prescription.exerciseId).toBeNull();
     expect(prescription.exerciseResolution?.outcome).toBe("ambiguous");
@@ -355,7 +362,7 @@ describe("exercise resolution — ambiguous/unresolved block approval", () => {
   it("an unresolved exercise name blocks validation and approval", async () => {
     const nonsenseName = `Zzyzx Nonexistent Movement ${randomUUID().slice(0, 8)}`;
     const modelDraft = buildModelDraft(nonsenseName);
-    const resolved = await resolveProgramDraftExercises(modelDraft);
+    const resolved = await resolveProgramDraftExercises(modelDraft, coachA.id);
     const prescription = resolved.weeks[0].days[0].workout!.sections[0].prescriptions[0];
     expect(prescription.exerciseId).toBeNull();
     expect(prescription.exerciseResolution?.outcome).toBe("unresolved");
@@ -368,6 +375,38 @@ describe("exercise resolution — ambiguous/unresolved block approval", () => {
     const outcome = await approveDraft(draftId, { coachId: coachA.id }, coachA.id);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.errorCode).toBe("has_blockers");
+  });
+
+  it("never resolves a name to another coach's private exercise — the fallback resolver is tenant-scoped like candidate selection", async () => {
+    const privateName = `Resolution Test Private Exercise ${randomUUID().slice(0, 8)}`;
+    const [privateExercise] = await db
+      .insert(exercises)
+      .values({
+        slug: `resolution-test-private-${randomUUID()}`,
+        name: privateName,
+        movementPattern: "push_horizontal",
+        classification: "compound",
+        difficulty: "beginner",
+        status: "active",
+        createdBy: coachB.id, // private to coachB only
+      })
+      .returning({ id: exercises.id });
+    exerciseFixtureIds.push(privateExercise.id);
+
+    // coachA generates content that happens to name coachB's private
+    // exercise exactly — resolveProgramDraftExercises must never resolve
+    // this to coachB's real id on coachA's behalf, even though the row
+    // is real, active, and an exact name match.
+    const asCoachA = await resolveProgramDraftExercises(buildModelDraft(privateName), coachA.id);
+    const prescriptionA = asCoachA.weeks[0].days[0].workout!.sections[0].prescriptions[0];
+    expect(prescriptionA.exerciseId).toBeNull();
+    expect(prescriptionA.exerciseResolution?.outcome).toBe("unresolved");
+
+    // The owning coach, by contrast, must still resolve it normally.
+    const asCoachB = await resolveProgramDraftExercises(buildModelDraft(privateName), coachB.id);
+    const prescriptionB = asCoachB.weeks[0].days[0].workout!.sections[0].prescriptions[0];
+    expect(prescriptionB.exerciseId).toBe(privateExercise.id);
+    expect(prescriptionB.exerciseResolution?.outcome).toBe("exact");
   });
 });
 
@@ -586,7 +625,7 @@ describe("provider configuration", () => {
       recommendedDaysPerWeek: VALID_BRIEF.daysPerWeek,
       weeks: [week1],
     };
-    const resolvedInitial = await resolveProgramDraftExercises(initialModelDraft);
+    const resolvedInitial = await resolveProgramDraftExercises(initialModelDraft, coachA.id);
 
     const dayId = resolvedInitial.weeks[0].days[0].id;
     // Fixture mode ignores the candidates param entirely (it builds
@@ -604,7 +643,7 @@ describe("provider configuration", () => {
     // against the real library (outcome "catalog_selected") rather than
     // trusting it outright — proving both entry points require, and are
     // compatible with, the identical resolveProgramDraftExercises() call.
-    const resolvedAfterRegen = await resolveProgramDraftExercises(regenOutcome.draft);
+    const resolvedAfterRegen = await resolveProgramDraftExercises(regenOutcome.draft, coachA.id);
     let sawAtLeastOnePrescription = false;
     for (const week of resolvedAfterRegen.weeks) {
       for (const day of week.days) {
@@ -841,6 +880,78 @@ describe("staged generation orchestration", () => {
     const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
     expect(draftRow.status).toBe("ready_for_review");
     expect((draftRow.draftJson as GeneratedProgramDraft).weeks).toHaveLength(4);
+  });
+
+  it("claimFailedDraftForResume closes the double-click resume race — only one concurrent caller wins the claim", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 1, daysPerWeek: 1 };
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(row.id);
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated failure for test" });
+
+    // Two concurrent resume attempts (double-click, a client retry) both
+    // racing the same atomic "failed -> running" transition — exactly
+    // one must succeed regardless of ordering.
+    const [first, second] = await Promise.all([
+      claimFailedDraftForResume(row.id),
+      claimFailedDraftForResume(row.id),
+    ]);
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.status).toBe("running");
+
+    // A third call against the now-"running" (not "failed") draft must
+    // also fail to claim it.
+    expect(await claimFailedDraftForResume(row.id)).toBe(false);
+  });
+
+  it("fails fast with a clear error when the candidate set is totally exhausted, instead of spending a shell + week call on a guaranteed-unusable draft", async () => {
+    const narrowBrief: ProgramGenerationBrief = {
+      ...VALID_BRIEF,
+      weeks: 1,
+      daysPerWeek: 1,
+      equipmentAccess: "bodyweight",
+      experienceLevel: "beginner",
+    };
+
+    // Determine exactly which candidates a bodyweight+beginner brief
+    // would otherwise see, then exclude every single one — the only way
+    // to deterministically drive the real candidate set to zero without
+    // mutating shared seed data other tests depend on.
+    const baseline = await buildExerciseCandidateSet(narrowBrief, coachA.id);
+    expect(baseline.candidates.length).toBeGreaterThan(0);
+    expect(baseline.candidates.length).toBeLessThanOrEqual(100); // brief.excludedExerciseIds cap
+
+    const exhaustedBrief: ProgramGenerationBrief = {
+      ...narrowBrief,
+      excludedExerciseIds: baseline.candidates.map((c) => c.id),
+    };
+    const confirmedEmpty = await buildExerciseCandidateSet(exhaustedBrief, coachA.id);
+    expect(confirmedEmpty.candidates).toHaveLength(0);
+
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief: exhaustedBrief });
+    draftIds.push(row.id);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachA.id,
+      brief: exhaustedBrief,
+      clientContext: null,
+      existingShell: null,
+      startFromWeek: 1,
+      existingCompletedWeeks: new Map(),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("equipment and experience-level");
+
+    // No week rows persisted — proves generation failed before spending
+    // any shell/week model call, not partway through.
+    const weekRows = await listGenerationWeeks(row.id);
+    expect(weekRows).toHaveLength(0);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.status).toBe("failed");
   });
 
   it("passes the prior week's compact summary — including its selected exercise ids — forward into the next week's prompt", async () => {

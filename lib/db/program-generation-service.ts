@@ -104,6 +104,26 @@ export async function listDrafts(scope: TenantScope, clientId?: string): Promise
 // STATUS / CONTENT MUTATION
 // ─────────────────────────────────────────────────────────────
 
+// Atomic "failed → running" claim, closing a real double-submit race: two
+// near-simultaneous resume calls (double-click, a client retry after a
+// slow response) could otherwise both read status="failed" before either
+// had written "running", both proceed into runStagedGeneration(), and
+// race to persist/overwrite each other's output at the end — no
+// corruption (each run's own in-memory weeks stay internally
+// consistent), but a wasted duplicate generation and an unpredictable
+// "which attempt's draft survives" outcome. A single conditional UPDATE
+// guarantees only one caller ever observes success. Returns false if
+// another caller already claimed it (or the draft isn't "failed").
+export async function claimFailedDraftForResume(draftId: string): Promise<boolean> {
+  const db = getDb();
+  const rows = await db
+    .update(programGenerationDrafts)
+    .set({ status: "running", failureReason: null, updatedAt: new Date() })
+    .where(and(eq(programGenerationDrafts.id, draftId), eq(programGenerationDrafts.status, "failed")))
+    .returning({ id: programGenerationDrafts.id });
+  return rows.length > 0;
+}
+
 export async function setDraftStatus(
   draftId: string,
   status: ProgramGenerationStatus,

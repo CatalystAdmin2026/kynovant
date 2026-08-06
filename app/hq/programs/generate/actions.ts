@@ -44,6 +44,7 @@ import {
   acknowledgeFindingKeys,
   discardDraft as discardDraftRow,
   setDraftStatus,
+  claimFailedDraftForResume,
   listGenerationWeeks,
   startRun,
   completeRun,
@@ -175,8 +176,26 @@ export async function resumeGenerationAction(draftId: string): Promise<ActionRes
     return { ok: false, error: "Only a failed draft can be retried." };
   }
 
+  // Atomic claim — closes the double-click/retry race where two
+  // concurrent calls both observe status="failed" above before either
+  // has transitioned it. Only one caller ever wins; the other sees
+  // false here rather than kicking off a duplicate, wasted generation
+  // run racing to overwrite the same draft. See claimFailedDraftForResume's
+  // own comment.
+  const claimed = await claimFailedDraftForResume(draftId);
+  if (!claimed) {
+    return { ok: false, error: "This draft is already being retried." };
+  }
+
+  // The claim above already moved status to "running" — every exit from
+  // here on must leave the draft in a real terminal state rather than
+  // stuck "running" forever, so each early return below restores
+  // status="failed" with a reason before returning.
   const parsedBrief = parseProgramGenerationBrief(auth.draft.briefJson);
-  if (!parsedBrief.ok) return { ok: false, error: "Draft brief is not currently valid." };
+  if (!parsedBrief.ok) {
+    await setDraftStatus(draftId, "failed", { failureReason: "Draft brief is not currently valid." });
+    return { ok: false, error: "Draft brief is not currently valid." };
+  }
 
   let existingShell: ProgramShell | null = null;
   if (auth.draft.shellJson) {
@@ -198,7 +217,6 @@ export async function resumeGenerationAction(draftId: string): Promise<ActionRes
     startFromWeek++;
   }
 
-  await setDraftStatus(draftId, "running");
   const clientContext = await resolveClientContext(auth.draft.clientId);
 
   const result = await runStagedGeneration({
@@ -455,6 +473,23 @@ export async function regenerateDayAction(params: {
   // runStagedGeneration() call.
   const candidateSet = await buildExerciseCandidateSet(loaded.brief, loaded.coachId);
 
+  // Same fail-fast rationale as staged generation (see
+  // runStagedGeneration's own comment) — total candidate exhaustion
+  // means the model has nothing valid to select from at all; fail with a
+  // clear, actionable message instead of spending a model call on a day
+  // that's guaranteed to come back entirely unresolved.
+  if (candidateSet.candidates.length === 0) {
+    await failRun(
+      run.id,
+      "No exercises in the Exercise Library are compatible with this brief's equipment and experience-level combination.",
+    );
+    return {
+      ok: false,
+      error:
+        "No exercises in the Exercise Library are compatible with this brief's equipment and experience-level combination. Adjust the brief or add matching exercises to the library.",
+    };
+  }
+
   const outcome = await regenerateDayDraft(
     loaded.brief,
     clientContext,
@@ -478,7 +513,7 @@ export async function regenerateDayAction(params: {
   // verify above (including days echoed back unchanged, which may not
   // have carried a verifiable id at all) falls back to name-based
   // resolution here, exactly as staged generation's assembly step does.
-  const resolvedDraft = await resolveProgramDraftExercises(verifiedDraft);
+  const resolvedDraft = await resolveProgramDraftExercises(verifiedDraft, loaded.coachId);
   const reparsed = parseGeneratedProgramDraft(resolvedDraft);
   if (!reparsed.ok) {
     await failRun(run.id, reparsed.error);

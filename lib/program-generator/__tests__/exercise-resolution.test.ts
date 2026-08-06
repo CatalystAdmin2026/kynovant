@@ -23,6 +23,15 @@ import type { ModelProgramDraft } from "../contracts";
 
 const db = getDb();
 
+// A resolver call now requires a coachId (tenant-scoping — see
+// exercise-resolution.ts). This suite never creates coach-owned
+// exercises, so any id works here: every row it reads is system/
+// organization-scope (visible to everyone) by construction of the
+// seeded library, and this id exists purely to exercise that the
+// parameter is threaded through, not to gate visibility of anything
+// in this file.
+const TEST_COACH_ID = randomUUID();
+
 let sampleExerciseId: string;
 let sampleExerciseName: string;
 let secondSampleExerciseName: string;
@@ -95,7 +104,7 @@ function buildModelDraft(exerciseNames: string[]): ModelProgramDraft {
 
 describe("resolveExerciseNames — matching tiers", () => {
   it("resolves an exact canonical-name match, case/whitespace-insensitively", async () => {
-    const results = await resolveExerciseNames([`  ${sampleExerciseName.toUpperCase()}  `]);
+    const results = await resolveExerciseNames([`  ${sampleExerciseName.toUpperCase()}  `], TEST_COACH_ID);
     const resolution = results.get(normalizeExerciseName(sampleExerciseName));
     expect(resolution?.outcome).toBe("exact");
     expect(resolution?.exerciseId).toBe(sampleExerciseId);
@@ -109,7 +118,7 @@ describe("resolveExerciseNames — matching tiers", () => {
       console.warn("No active exercise with alternateNames found in seed data — alternate-name tier not exercised.");
       return;
     }
-    const results = await resolveExerciseNames([alternateNameFixture.alternateName]);
+    const results = await resolveExerciseNames([alternateNameFixture.alternateName], TEST_COACH_ID);
     const resolution = results.get(normalizeExerciseName(alternateNameFixture.alternateName));
     expect(resolution?.outcome).toBe("alternate_name");
     expect(resolution?.exerciseId).toBe(alternateNameFixture.canonicalId);
@@ -118,7 +127,7 @@ describe("resolveExerciseNames — matching tiers", () => {
 
   it("returns unresolved for a name matching nothing in the library, and never fabricates an id", async () => {
     const nonsenseName = `Zzyzx Nonexistent Movement ${randomUUID().slice(0, 8)}`;
-    const results = await resolveExerciseNames([nonsenseName]);
+    const results = await resolveExerciseNames([nonsenseName], TEST_COACH_ID);
     const resolution = results.get(normalizeExerciseName(nonsenseName));
     expect(resolution?.outcome).toBe("unresolved");
     expect(resolution?.exerciseId).toBeNull();
@@ -133,7 +142,7 @@ describe("resolveExerciseNames — matching tiers", () => {
       `  ${sampleExerciseName}  `,
       sampleExerciseName,
     ];
-    const results = await resolveExerciseNames(repeated);
+    const results = await resolveExerciseNames(repeated, TEST_COACH_ID);
     // One Map entry regardless of how many times the name (in any
     // casing/whitespace variant) appeared in the input.
     expect(results.size).toBe(1);
@@ -148,7 +157,7 @@ describe("resolveExerciseNames — matching tiers", () => {
       sampleExerciseName, // repeat, different week
       sampleExerciseName, // repeat again
     ]);
-    const resolved = await resolveProgramDraftExercises(draft);
+    const resolved = await resolveProgramDraftExercises(draft, TEST_COACH_ID);
 
     const ids = resolved.weeks.flatMap((w) =>
       w.days.flatMap((d) => d.workout?.sections.flatMap((s) => s.prescriptions.map((p) => p.exerciseId)) ?? []),
@@ -177,7 +186,7 @@ describe("resolveExerciseNames — matching tiers", () => {
       return;
     }
 
-    const results = await resolveExerciseNames(applicable);
+    const results = await resolveExerciseNames(applicable, TEST_COACH_ID);
     for (const name of applicable) {
       const resolution = results.get(normalizeExerciseName(name));
       expect(resolution?.outcome).toBe("exact");
