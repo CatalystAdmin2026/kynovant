@@ -182,8 +182,17 @@ export default function HQProgramsPage() {
 
   async function handleDelete(id: string, name: string) {
     if (!confirm(`Delete program "${name}"? This cannot be undone.`)) return;
-    await fetch(`/api/internal/programs/${id}`, { method: "DELETE" });
-    setPrograms((prev) => prev.filter((p) => p.id !== id));
+    try {
+      const res = await fetch(`/api/internal/programs/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setError(data.error ?? "Failed to delete program.");
+        return;
+      }
+      setPrograms((prev) => prev.filter((p) => p.id !== id));
+    } catch {
+      setError("Network error — the program was not deleted.");
+    }
   }
 
   const handleClone = useCallback(async (id: string) => {

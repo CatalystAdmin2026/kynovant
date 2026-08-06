@@ -13,7 +13,7 @@ export default function HQBreadcrumbs({ crumbs }: { crumbs: Crumb[] }) {
         return (
           <span key={i} className="flex items-center gap-1.5">
             {i > 0 && (
-              <span className="text-white/15 text-[10px]">/</span>
+              <span className="text-white/15 text-[10px]" aria-hidden="true">/</span>
             )}
             {crumb.href && !isLast ? (
               <Link

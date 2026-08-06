@@ -17,7 +17,6 @@ import {
   Layers,
   Plus,
   Radio,
-  Target,
   Users,
 } from "lucide-react";
 import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
@@ -315,22 +314,15 @@ export default async function MissionControlPage() {
                 icon={<Radio size={16} />}
                 label="Inactive 7+ days"
                 value={data.noWorkoutLast7dCount}
-                detail={data.noWorkoutLast7dCount > 0 ? "Clients with active programs and no completed workout in 7+ days." : "No active-program clients are stale by this rule."}
+                detail={data.noWorkoutLast7dCount > 0 ? "Clients with active programs and no completed workout in 7+ days." : "Everyone with an active program has trained recently."}
                 href={highClients[0] ? `/hq/clients/${highClients[0].userId}` : "/hq/clients"}
                 severity={data.noWorkoutLast7dCount > 0 ? "high" : "ok"}
-              />
-              <QueueRow
-                icon={<Target size={16} />}
-                label="Nutrition drafts"
-                value="--"
-                detail="Draft publication state is not tracked in HQ yet."
-                severity="unknown"
               />
               {allQueueClear && (
                 <div className="border border-dashed border-white/[0.06] px-4 py-5 text-center">
                   <CheckCircle2 size={18} className="mx-auto mb-2 text-white/30" />
-                  <p className="text-sm font-medium text-white/55">No open queue items from current data.</p>
-                  <p className="mt-1 text-xs text-white/35">Recent activity below is the best source for what changed.</p>
+                  <p className="text-sm font-medium text-white/55">You&apos;re all caught up.</p>
+                  <p className="mt-1 text-xs text-white/35">Check recent activity below for what&apos;s changed.</p>
                 </div>
               )}
             </div>
@@ -339,26 +331,14 @@ export default async function MissionControlPage() {
 
         <section aria-label="Quick actions">
           <SectionHeader eyebrow="Next" title="Quick Actions" />
-          <div className="space-y-3">
-            <DashboardCard className="p-4">
-              <AddClientButton />
-              <div className="mt-3 grid grid-cols-1 gap-2">
-                <QuickAction href="/hq/programs" icon={<Plus size={14} />} label="Create Program" />
-                <QuickAction href="/hq/blueprints" icon={<FileText size={14} />} label="Create Blueprint" />
-                <QuickAction href="/hq/check-ins" icon={<ClipboardCheck size={14} />} label="Review Check-Ins" />
-              </div>
-            </DashboardCard>
-
-            <DashboardCard className="p-5">
-              <p className="mb-4 text-[9px] font-semibold uppercase tracking-[0.35em] text-white/30">
-                Operational Note
-              </p>
-              <p className="text-sm leading-relaxed text-white/55">
-                Upcoming actions and last-login deltas need event or task tracking.
-                This dashboard only shows signals currently backed by HQ data.
-              </p>
-            </DashboardCard>
-          </div>
+          <DashboardCard className="p-4">
+            <AddClientButton />
+            <div className="mt-3 grid grid-cols-1 gap-2">
+              <QuickAction href="/hq/programs" icon={<Plus size={14} />} label="Create Program" />
+              <QuickAction href="/hq/blueprints" icon={<FileText size={14} />} label="Create Blueprint" />
+              <QuickAction href="/hq/check-ins" icon={<ClipboardCheck size={14} />} label="Review Check-Ins" />
+            </div>
+          </DashboardCard>
         </section>
       </div>
 
@@ -388,9 +368,6 @@ export default async function MissionControlPage() {
                 </div>
               ))}
             </div>
-            <p className="mt-4 text-xs leading-relaxed text-white/35">
-              Distribution uses the same deterministic attention rules as the client workspace.
-            </p>
           </DashboardCard>
         </section>
 
@@ -506,7 +483,7 @@ function BriefStat({
   return (
     <div className="border border-white/[0.05] bg-[#101213] p-4">
       <p className={`text-3xl font-bold tabular-nums leading-none ${color}`}>{value}</p>
-      <p className="mt-2 text-[9px] font-semibold uppercase tracking-[0.24em] text-white/[0.32]">
+      <p className="mt-2 text-[9px] font-semibold uppercase tracking-[0.24em] text-white/45">
         {label}
       </p>
     </div>

@@ -105,8 +105,10 @@ export default function GenerateBriefForm({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label className={labelClass}>Goal *</label>
+          <label className={labelClass} htmlFor="brief-goal">Goal *</label>
           <select
+            id="brief-goal"
+            required
             value={form.goal}
             onChange={(e) => setForm((f) => ({ ...f, goal: e.target.value as typeof form.goal }))}
             className={inputClass}
@@ -115,8 +117,10 @@ export default function GenerateBriefForm({
           </select>
         </div>
         <div>
-          <label className={labelClass}>Experience Level *</label>
+          <label className={labelClass} htmlFor="brief-experience-level">Experience Level *</label>
           <select
+            id="brief-experience-level"
+            required
             value={form.experienceLevel}
             onChange={(e) => setForm((f) => ({ ...f, experienceLevel: e.target.value as typeof form.experienceLevel }))}
             className={inputClass}
@@ -125,8 +129,10 @@ export default function GenerateBriefForm({
           </select>
         </div>
         <div>
-          <label className={labelClass}>Weeks *</label>
+          <label className={labelClass} htmlFor="brief-weeks">Weeks *</label>
           <input
+            id="brief-weeks"
+            required
             type="number" min={1} max={16}
             value={form.weeks}
             onChange={(e) => setForm((f) => ({ ...f, weeks: e.target.value }))}
@@ -134,8 +140,10 @@ export default function GenerateBriefForm({
           />
         </div>
         <div>
-          <label className={labelClass}>Days / Week *</label>
+          <label className={labelClass} htmlFor="brief-days-per-week">Days / Week *</label>
           <input
+            id="brief-days-per-week"
+            required
             type="number" min={1} max={7}
             value={form.daysPerWeek}
             onChange={(e) => setForm((f) => ({ ...f, daysPerWeek: e.target.value }))}
@@ -143,8 +151,10 @@ export default function GenerateBriefForm({
           />
         </div>
         <div>
-          <label className={labelClass}>Preferred Split *</label>
+          <label className={labelClass} htmlFor="brief-preferred-split">Preferred Split *</label>
           <select
+            id="brief-preferred-split"
+            required
             value={form.preferredSplit}
             onChange={(e) => setForm((f) => ({ ...f, preferredSplit: e.target.value as typeof form.preferredSplit }))}
             className={inputClass}
@@ -153,8 +163,10 @@ export default function GenerateBriefForm({
           </select>
         </div>
         <div>
-          <label className={labelClass}>Equipment Access *</label>
+          <label className={labelClass} htmlFor="brief-equipment-access">Equipment Access *</label>
           <select
+            id="brief-equipment-access"
+            required
             value={form.equipmentAccess}
             onChange={(e) => setForm((f) => ({ ...f, equipmentAccess: e.target.value as typeof form.equipmentAccess }))}
             className={inputClass}
@@ -163,8 +175,10 @@ export default function GenerateBriefForm({
           </select>
         </div>
         <div>
-          <label className={labelClass}>Target Session Length (minutes) *</label>
+          <label className={labelClass} htmlFor="brief-target-session-minutes">Target Session Length (minutes) *</label>
           <input
+            id="brief-target-session-minutes"
+            required
             type="number" min={10} max={240}
             value={form.targetSessionMinutes}
             onChange={(e) => setForm((f) => ({ ...f, targetSessionMinutes: e.target.value }))}
@@ -174,8 +188,9 @@ export default function GenerateBriefForm({
       </div>
 
       <div>
-        <label className={labelClass}>Limitations (honored exactly, not diagnosed)</label>
+        <label className={labelClass} htmlFor="brief-limitations">Limitations (honored exactly, not diagnosed)</label>
         <textarea
+          id="brief-limitations"
           rows={2}
           value={form.limitations}
           onChange={(e) => setForm((f) => ({ ...f, limitations: e.target.value }))}
@@ -185,8 +200,9 @@ export default function GenerateBriefForm({
       </div>
 
       <div>
-        <label className={labelClass}>Freeform Instructions</label>
+        <label className={labelClass} htmlFor="brief-freeform-instructions">Freeform Instructions</label>
         <textarea
+          id="brief-freeform-instructions"
           rows={3}
           value={form.freeformInstructions}
           onChange={(e) => setForm((f) => ({ ...f, freeformInstructions: e.target.value }))}
@@ -206,7 +222,9 @@ export default function GenerateBriefForm({
           {submitting ? "Generating…" : "Generate Draft"}
         </button>
         <p className="text-white/25 text-[11px]">
-          This creates a draft only — nothing is published or assigned until you approve it.
+          {submitting
+            ? "This can take a minute or two — please don't close this tab."
+            : "This creates a draft only — nothing is published or assigned until you approve it."}
         </p>
       </div>
     </form>

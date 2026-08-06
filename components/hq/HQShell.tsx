@@ -27,7 +27,7 @@ export default function HQShell({ children, coachName, onboardingComplete }: Pro
           Mobile:  offset by mobile nav bar (h-12 = 48px).
           px-6 sm:px-8 lg:px-10 keeps gutters consistent at all breakpoints.
         */}
-        <div className="pt-12 lg:pt-20 px-6 sm:px-8 lg:px-10 pb-16 max-w-[1280px]">
+        <div className="pt-12 lg:pt-20 px-6 sm:px-8 lg:px-10 pb-16 max-w-[1280px] mx-auto">
           {children}
         </div>
       </main>

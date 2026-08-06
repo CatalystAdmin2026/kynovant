@@ -555,6 +555,8 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
     "This exercise may have been removed, or you may not have access to it.",
   );
   const [starring, setStarring] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [statusActionError, setStatusActionError] = useState<string | null>(null);
   const [bioOpen, setBioOpen] = useState(true); // desktop default
 
   // Identity form (coach exercises only)
@@ -694,13 +696,25 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
   }
 
   async function handleStatusAction(action: "publish" | "archive" | "restore") {
-    const res = await fetch(`/api/internal/exercises/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action }),
-    });
-    const data = await res.json() as { ok: boolean; exercise?: Exercise };
-    if (data.ok && data.exercise) setExercise((ex) => ex ? { ...ex, status: data.exercise!.status } : ex);
+    setStatusBusy(true);
+    setStatusActionError(null);
+    try {
+      const res = await fetch(`/api/internal/exercises/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json() as { ok: boolean; exercise?: Exercise; error?: string };
+      if (data.ok && data.exercise) {
+        setExercise((ex) => ex ? { ...ex, status: data.exercise!.status } : ex);
+      } else {
+        setStatusActionError(data.error ?? `Failed to ${action} this exercise.`);
+      }
+    } catch {
+      setStatusActionError("Network error — please try again.");
+    } finally {
+      setStatusBusy(false);
+    }
   }
 
   async function handleIdentitySave() {
@@ -869,20 +883,40 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
 
             {exercise.status === "draft" && (
               <>
-                <Button variant="primary" tone="dark" size="sm" onClick={() => handleStatusAction("publish")}>
-                  Publish
+                <Button
+                  variant="primary"
+                  tone="dark"
+                  size="sm"
+                  loading={statusBusy}
+                  disabled={statusBusy}
+                  onClick={() => handleStatusAction("publish")}
+                >
+                  {statusBusy ? "Publishing…" : "Publish"}
                 </Button>
                 <Button
                   variant="outline"
                   tone="dark"
                   size="sm"
+                  disabled={statusBusy}
                   className="hover:!text-red-400 hover:!border-red-500/30"
                   onClick={() => {
-                    if (confirm(`Delete exercise "${exercise.name}"?`)) {
-                      fetch(`/api/internal/exercises/${id}`, { method: "DELETE" }).then(() => {
+                    if (!confirm(`Delete exercise "${exercise.name}"?`)) return;
+                    setStatusBusy(true);
+                    setStatusActionError(null);
+                    fetch(`/api/internal/exercises/${id}`, { method: "DELETE" })
+                      .then(async (res) => {
+                        if (!res.ok) {
+                          const data = await res.json().catch(() => ({})) as { error?: string };
+                          setStatusActionError(data.error ?? "Failed to delete this exercise.");
+                          setStatusBusy(false);
+                          return;
+                        }
                         window.location.href = "/hq/exercises";
+                      })
+                      .catch(() => {
+                        setStatusActionError("Network error — the exercise was not deleted.");
+                        setStatusBusy(false);
                       });
-                    }
                   }}
                 >
                   Delete
@@ -890,17 +924,35 @@ export default function HQExerciseDetailPage({ params }: { params: Promise<{ id:
               </>
             )}
             {exercise.status === "active" && !isSystem && (
-              <Button variant="outline" tone="dark" size="sm" onClick={() => handleStatusAction("archive")}>
-                Archive
+              <Button
+                variant="outline"
+                tone="dark"
+                size="sm"
+                loading={statusBusy}
+                disabled={statusBusy}
+                onClick={() => handleStatusAction("archive")}
+              >
+                {statusBusy ? "Archiving…" : "Archive"}
               </Button>
             )}
             {exercise.status === "archived" && (
-              <Button variant="outline" tone="dark" size="sm" onClick={() => handleStatusAction("restore")}>
-                Restore to Draft
+              <Button
+                variant="outline"
+                tone="dark"
+                size="sm"
+                loading={statusBusy}
+                disabled={statusBusy}
+                onClick={() => handleStatusAction("restore")}
+              >
+                {statusBusy ? "Restoring…" : "Restore to Draft"}
               </Button>
             )}
           </div>
         </div>
+
+        {statusActionError && (
+          <p className="text-red-400 text-xs">{statusActionError}</p>
+        )}
 
         {/* Classification chips */}
         <div className="flex flex-wrap gap-1.5">

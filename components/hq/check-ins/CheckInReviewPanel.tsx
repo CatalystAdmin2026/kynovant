@@ -82,6 +82,27 @@ export default function CheckInReviewPanel({
     });
   }
 
+  // "Update Response" on an already-reviewed check-in must NOT call
+  // markReviewedAction — that hard-rejects anything not currently
+  // "in_review" (see lib/db/coach-check-in-service.ts's
+  // markCheckInReviewed), so wiring it there guaranteed the button
+  // failed on every click with "This check-in has already been
+  // reviewed." saveDraftResponseAction is the one already documented
+  // as valid for both in_review and reviewed — it just doesn't
+  // transition status, which is exactly right here (the check-in stays
+  // "reviewed", only the response text changes).
+  function handleUpdateResponse() {
+    clearError();
+    startSaveDraftTx(async () => {
+      const result = await saveDraftResponseAction(checkInId, response);
+      if (result.ok) {
+        setSavedAt(new Date());
+      } else {
+        setActionError(result.error ?? "Failed to update response.");
+      }
+    });
+  }
+
   function handleReopen() {
     clearError();
     startReopenTx(async () => {
@@ -201,9 +222,9 @@ export default function CheckInReviewPanel({
                   type="button"
                   variant="outline"
                   tone="dark"
-                  onClick={handleMarkReviewed}
+                  onClick={handleUpdateResponse}
                   disabled={isAnyPending}
-                  loading={isPendingMarkReviewed}
+                  loading={isPendingSaveDraft}
                 >
                   Update Response
                 </Button>

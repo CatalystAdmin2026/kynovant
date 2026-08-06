@@ -89,7 +89,7 @@ function statusBadge(status: string) {
         cls,
       )}
     >
-      {status}
+      {status.replace(/_/g, " ")}
     </span>
   );
 }
@@ -246,7 +246,7 @@ export default async function CoachSessionReviewPage({
       <HQBreadcrumbs crumbs={[
         { label: "Overview", href: "/hq" },
         { label: "Clients",         href: "/hq/clients" },
-        { label: "Client",          href: `/hq/clients/${clientId}` },
+        { label: detail.clientName, href: `/hq/clients/${clientId}` },
         { label: "Workout Review" },
       ]} />
 

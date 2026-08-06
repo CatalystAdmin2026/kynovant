@@ -105,11 +105,11 @@ export default function OnboardingWizard({ initialHasClients, initialHasPrograms
               href={lastProgram ? `/hq/programs/${lastProgram.id}` : "/hq/programs"}
               className="text-[11px] text-white/70 hover:text-white uppercase tracking-[0.1em] border border-white/10 hover:border-white/25 px-4 py-2 transition-colors"
             >
-              {lastProgram ? `Go assign ${lastProgram.name} →` : "Go to Programs →"}
+              {lastProgram ? `Open ${lastProgram.name} →` : "Go to Programs →"}
             </Link>
           </div>
         ) : programSkipped ? (
-          <p className="text-gray-600 text-xs">
+          <p className="text-white/35 text-xs">
             Skipped for now —{" "}
             <button
               onClick={() => setProgramSkipped(false)}
@@ -152,6 +152,8 @@ function ChecklistCard({
   return (
     <div className="bg-[#0d0e0f] border border-white/[0.06] px-6 py-6 flex gap-4">
       <div
+        role="img"
+        aria-label={done ? "Complete" : "Not started"}
         className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 transition-colors ${
           done
             ? "bg-[#C9A24D] text-black"
@@ -164,12 +166,12 @@ function ChecklistCard({
         <div className="flex items-center gap-2 mb-1.5">
           <h2 className="font-headline text-lg font-bold uppercase text-white">{title}</h2>
           {optional && (
-            <span className="text-[9px] text-gray-600 uppercase tracking-[0.15em] border border-white/10 px-1.5 py-0.5">
+            <span className="text-[9px] text-white/35 uppercase tracking-[0.15em] border border-white/10 px-1.5 py-0.5">
               Optional
             </span>
           )}
         </div>
-        <p className="text-gray-500 text-sm leading-relaxed mb-4">{body}</p>
+        <p className="text-white/45 text-sm leading-relaxed mb-4">{body}</p>
         {children}
       </div>
     </div>
@@ -254,7 +256,7 @@ function ProgramPicker({
         </button>
         <button
           onClick={onSkip}
-          className="text-gray-600 hover:text-gray-400 text-[11px] tracking-[0.1em] uppercase px-1 py-3 transition-colors"
+          className="text-white/35 hover:text-white/55 text-[11px] tracking-[0.1em] uppercase px-1 py-3 transition-colors"
         >
           Skip for now
         </button>
@@ -265,15 +267,15 @@ function ProgramPicker({
   return (
     <div>
       {templates === null && !loadError && (
-        <p className="text-gray-600 text-sm">Loading available programs…</p>
+        <p className="text-white/35 text-sm">Loading available programs…</p>
       )}
 
       {loadError && <p className="text-red-400 text-sm">{loadError}</p>}
 
       {templates && templates.length === 0 && (
         <div className="border border-dashed border-white/[0.08] px-5 py-8 text-center">
-          <p className="text-gray-400 text-sm font-medium mb-1">No starter templates yet</p>
-          <p className="text-gray-600 text-xs leading-relaxed mb-4">
+          <p className="text-white/60 text-sm font-medium mb-1">No starter templates yet</p>
+          <p className="text-white/35 text-xs leading-relaxed mb-4">
             Build your first program from scratch in Programs, then come back
             here to check this off — or just skip it.
           </p>
@@ -286,7 +288,7 @@ function ProgramPicker({
             </Link>
             <button
               onClick={onSkip}
-              className="text-gray-600 hover:text-gray-400 text-[10px] tracking-[0.1em] uppercase transition-colors"
+              className="text-white/35 hover:text-white/55 text-[10px] tracking-[0.1em] uppercase transition-colors"
             >
               Skip for now
             </button>
@@ -305,7 +307,7 @@ function ProgramPicker({
             >
               <div>
                 <p className="text-white text-sm font-semibold">{t.name}</p>
-                <p className="text-gray-500 text-[10px] uppercase tracking-[0.1em] mt-0.5">
+                <p className="text-white/45 text-[10px] uppercase tracking-[0.1em] mt-0.5">
                   {t.category.replace(/_/g, " ")} · {t.experienceLevel}
                 </p>
               </div>
@@ -317,7 +319,7 @@ function ProgramPicker({
           <button
             onClick={onSkip}
             disabled={applyingId !== null}
-            className="text-gray-600 hover:text-gray-400 text-[10px] tracking-[0.1em] uppercase px-1 py-2 transition-colors disabled:opacity-50"
+            className="text-white/35 hover:text-white/55 text-[10px] tracking-[0.1em] uppercase px-1 py-2 transition-colors disabled:opacity-50"
           >
             Skip for now
           </button>

@@ -301,10 +301,14 @@ export default function HQExercisesPage() {
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
     if (muscleGroup) params.set("muscleGroup", muscleGroup);
-    if (status !== "all") params.set("status", status);
+    // "all" is sent through explicitly (not omitted) — the API defaults a
+    // missing status param to "active", so omitting it here previously
+    // made "all" silently behave like "active", and (see the bug this
+    // replaces) also made "draft"/"archived" behave like "active" once
+    // this line unconditionally deleted the param for any non-active value.
+    params.set("status", status);
     if (favoritesOnly) params.set("favoritesOnly", "true");
     params.set("limit", "100");
-    if (status !== "active") params.delete("status"); // let the route handle status=all via activeOnly
 
     try {
       const res = await fetch(`/api/internal/exercises?${params.toString()}`);

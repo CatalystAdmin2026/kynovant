@@ -43,7 +43,7 @@ function fmtDate(d: Date | null): string {
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
-  submitted: "Waiting",
+  submitted: "Waiting for Review",
   in_review: "In Review",
   reviewed: "Reviewed",
 };
@@ -163,12 +163,19 @@ function QueueRow({ item, variant }: { item: QueueItem; variant: "actionable" | 
 // PAGE
 // ─────────────────────────────────────────────────────────────
 
-export default async function CheckInQueuePage() {
+export default async function CheckInQueuePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ client?: string }>;
+}) {
   const { dbUser } = await requireCoachOrAdminPage();
   const { coachId } = resolveTenantScope(dbUser);
+  const { client: clientFilter } = await searchParams;
+
   const allCheckIns = await listCoachCheckIns({
     status: ["submitted", "in_review", "reviewed"],
     coachId,
+    clientId: clientFilter || undefined,
   });
 
   const actionable = allCheckIns.filter(
@@ -177,6 +184,11 @@ export default async function CheckInQueuePage() {
   const reviewed = allCheckIns.filter((c) => c.status === "reviewed");
   const inReviewCount = allCheckIns.filter((c) => c.status === "in_review").length;
 
+  // clientId scoping in listCoachCheckIns already joins through
+  // coachingEnrollments, so a filter for a client this coach doesn't
+  // own just yields an empty result — never another coach's data.
+  const filteredClientName = clientFilter ? allCheckIns[0]?.clientName ?? null : null;
+
   return (
     <div className="space-y-8">
       <HQBreadcrumbs crumbs={[
@@ -184,14 +196,28 @@ export default async function CheckInQueuePage() {
         { label: "Check-Ins" },
       ]} />
 
-      <HQPageHeader
-        title="Check-In Queue"
-        subtitle={
-          actionable.length === 0
-            ? "All check-ins reviewed"
-            : `${actionable.length} waiting for review`
-        }
-      />
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <HQPageHeader
+          title="Check-In Queue"
+          subtitle={
+            clientFilter
+              ? `Showing ${filteredClientName ?? "this client"}'s check-ins only.`
+              : actionable.length === 0
+                ? allCheckIns.length === 0
+                  ? "No check-ins yet — clients submit these weekly from their portal."
+                  : "All check-ins reviewed"
+                : `${actionable.length} waiting for review`
+          }
+        />
+        {clientFilter && (
+          <Link
+            href="/hq/check-ins"
+            className="text-[10px] text-white/35 hover:text-white/60 uppercase tracking-[0.2em] transition-colors shrink-0 mt-1"
+          >
+            View all clients →
+          </Link>
+        )}
+      </div>
 
       {/* ── Summary metric row ────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
@@ -217,12 +243,25 @@ export default async function CheckInQueuePage() {
 
       {/* Queue */}
       {actionable.length === 0 ? (
-        <EmptyState
-          tone="dark"
-          icon={<CheckCircle2 className="size-5" />}
-          title="All caught up"
-          description="No check-ins waiting for review."
-        />
+        allCheckIns.length === 0 ? (
+          <EmptyState
+            tone="dark"
+            icon={<Inbox className="size-5" />}
+            title="No check-ins yet"
+            description={
+              clientFilter
+                ? "This client hasn't submitted a check-in yet."
+                : "Once a client submits their first weekly check-in from their portal, it'll show up here."
+            }
+          />
+        ) : (
+          <EmptyState
+            tone="dark"
+            icon={<CheckCircle2 className="size-5" />}
+            title="All caught up"
+            description="No check-ins waiting for review."
+          />
+        )
       ) : (
         <section>
           <p className="mb-3 text-[9px] uppercase tracking-[0.3em] text-white/30">Needs Review</p>

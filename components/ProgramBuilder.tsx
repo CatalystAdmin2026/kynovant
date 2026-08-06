@@ -226,7 +226,7 @@ function BlueprintPicker({
       {/* Footer */}
       <div className="px-3 py-2 border-t border-white/[0.06] flex items-center justify-between">
         <Link
-          href="/hq/blueprints/new"
+          href="/hq/blueprints"
           className="text-[10px] text-[#C9A24D]/50 hover:text-[#C9A24D]/80 transition-colors"
           onClick={onClose}
         >
@@ -1268,7 +1268,7 @@ export default function ProgramBuilder({
                     </Link>
                   ))}
                   <Link
-                    href="/hq/blueprints/new"
+                    href="/hq/blueprints"
                     className="text-[10px] text-[#C9A24D]/35 border border-[#C9A24D]/[0.12] px-2 py-1 hover:text-[#C9A24D]/60 hover:border-[#C9A24D]/25 transition-colors"
                   >
                     + New blueprint

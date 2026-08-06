@@ -488,8 +488,9 @@ export async function getCoachClientSessionDetail(
   const db = getDb();
 
   const userRow = await db
-    .select({ id: users.id, role: users.role })
+    .select({ id: users.id, role: users.role, fullName: clientProfiles.fullName, preferredName: clientProfiles.preferredName })
     .from(users)
+    .leftJoin(clientProfiles, eq(clientProfiles.userId, users.id))
     .where(eq(users.id, clientId))
     .limit(1);
 
@@ -502,5 +503,11 @@ export async function getCoachClientSessionDetail(
 
   // Delegates ownership check to the existing service.
   // Returns null if session doesn't belong to clientId.
-  return getHistoricalSessionDetail(sessionId, clientId);
+  const detail = await getHistoricalSessionDetail(sessionId, clientId);
+  if (!detail) return null;
+
+  return {
+    ...detail,
+    clientName: userRow[0].preferredName ?? userRow[0].fullName ?? "Client",
+  };
 }

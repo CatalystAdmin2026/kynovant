@@ -85,7 +85,7 @@ export default function HQSidebar({
 
       {/* Nav */}
       <nav className="flex flex-col gap-0.5 px-3 py-4 flex-1 overflow-y-auto">
-        <p className="text-[9px] text-white/20 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
+        <p className="text-[9px] text-white/40 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
           Coaching
         </p>
 
@@ -112,7 +112,7 @@ export default function HQSidebar({
           <>
             <div className="h-px bg-white/[0.05] my-3 mx-3" />
 
-            <p className="text-[9px] text-white/20 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
+            <p className="text-[9px] text-white/40 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
               Setup
             </p>
 
@@ -129,7 +129,7 @@ export default function HQSidebar({
                       : "text-white/25 hover:text-white/45 hover:bg-white/[0.03] border border-transparent"
                   }`}
                 >
-                  <Icon size={13} className={active ? "text-white/45" : "text-white/20"} />
+                  <Icon size={13} className={active ? "text-white/45" : "text-white/30"} />
                   {item.label}
                 </Link>
               );
@@ -139,7 +139,7 @@ export default function HQSidebar({
 
         <div className="h-px bg-white/[0.05] my-3 mx-3" />
 
-        <p className="text-[9px] text-white/20 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
+        <p className="text-[9px] text-white/40 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
           Coming Soon
         </p>
 
@@ -148,11 +148,11 @@ export default function HQSidebar({
           return (
             <div
               key={item.label}
-              className="flex items-center gap-3 px-3 py-2.5 text-xs font-medium tracking-wide text-white/20 cursor-default select-none border border-transparent"
+              className="flex items-center gap-3 px-3 py-2.5 text-xs font-medium tracking-wide text-white/30 cursor-default select-none border border-transparent"
             >
-              <Icon size={13} className="text-white/15" />
+              <Icon size={13} className="text-white/25" />
               {item.label}
-              <span className="ml-auto text-[9px] text-white/20 border border-white/10 px-1.5 py-0.5 leading-tight">
+              <span className="ml-auto text-[9px] text-white/35 border border-white/10 px-1.5 py-0.5 leading-tight">
                 Soon
               </span>
             </div>

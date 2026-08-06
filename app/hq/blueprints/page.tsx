@@ -149,10 +149,15 @@ export default function HQBlueprintsPage() {
   async function handleDelete(id: string, name: string) {
     if (!confirm(`Delete blueprint "${name}"? This cannot be undone.`)) return;
     try {
-      await fetch(`/api/internal/workout-templates/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/internal/workout-templates/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setError(data.error ?? "Failed to delete blueprint.");
+        return;
+      }
       setTemplates((prev) => prev.filter((t) => t.id !== id));
     } catch {
-      alert("Failed to delete template");
+      setError("Network error — the blueprint was not deleted.");
     }
   }
 

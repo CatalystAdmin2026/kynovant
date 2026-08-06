@@ -20,6 +20,10 @@ export async function GET(req: NextRequest) {
   const scope = searchParams.get("scope") as ExerciseScope | null;
   const favoritesOnly = searchParams.get("favoritesOnly") === "true";
   const status = searchParams.get("status") ?? "active";
+  // "all" has no matching row (status is draft/active/archived, never
+  // "all") — pass every real status explicitly instead of a literal
+  // that would silently match nothing.
+  const statuses = status === "all" ? ["active", "draft", "archived"] : [status];
   const limit = Math.min(parseInt(searchParams.get("limit") ?? "50", 10), 200);
 
   try {
@@ -33,7 +37,7 @@ export async function GET(req: NextRequest) {
         primaryMuscleGroup: primaryMuscleGroup ?? undefined,
         scope: scope ?? undefined,
         favoritesOf: favoritesOnly ? guard.dbUser.id : undefined,
-        statuses: [status],
+        statuses,
         limit,
       },
       guard.dbUser.id,

@@ -1538,6 +1538,32 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
     }
   }
 
+  // Previously local-state-only (setTemplate({...status:"draft"})) with no
+  // fetch call at all — the badge flipped to Draft in this tab but nothing
+  // was persisted, so the blueprint stayed live in the picker and reverted
+  // to Published on refresh. Mirrors handlePublish above.
+  async function handleUnpublish() {
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      const res = await fetch(`/api/internal/workout-templates/${templateId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "draft" }),
+      });
+      const data = await res.json() as { ok: boolean; template?: TemplateData; error?: string };
+      if (data.ok && data.template) {
+        setTemplate(data.template);
+      } else {
+        setPublishError(data.error ?? "Failed to unpublish");
+      }
+    } catch {
+      setPublishError("Network error");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#080909] text-white">
       {/* Header */}
@@ -1574,10 +1600,11 @@ export default function BlueprintEditor({ templateId, initialData, backHref = "/
                   tone="dark"
                   variant="outline"
                   size="sm"
-                  onClick={() => setTemplate((t) => ({ ...t, status: "draft" }))}
+                  onClick={handleUnpublish}
+                  loading={publishing}
                   title="Revert to draft"
                 >
-                  Unpublish
+                  {publishing ? "Unpublishing…" : "Unpublish"}
                 </Button>
               )}
             </div>

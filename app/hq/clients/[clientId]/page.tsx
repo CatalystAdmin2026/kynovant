@@ -127,6 +127,10 @@ function complianceColor(pct: number | null) {
   return SEVERITY_TEXT[complianceSeverity(pct)];
 }
 
+function humanize(value: string): string {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function deltaIndicator(delta: number | null) {
   if (delta === null) return null;
   if (delta > 0) return <span className="text-emerald-400 text-[10px] font-semibold">+{delta} lb</span>;
@@ -200,7 +204,7 @@ function ClientHeader({
           {w.enrollment && (
             <span className="text-[10px] text-gray-400">
               {w.enrollment.packageType}
-              <span className="text-gray-600"> · {w.enrollment.enrollmentStatus}</span>
+              <span className="text-gray-600"> · {humanize(w.enrollment.enrollmentStatus)}</span>
             </span>
           )}
           <span className="text-[10px] text-gray-500">
@@ -1015,7 +1019,7 @@ export default async function ClientWorkspacePage({
                     Week of {fmtDate(checkInSummary.lastCheckIn.weekStartDate, true)}
                   </p>
                   <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] mt-1">
-                    Last Check-In · {checkInSummary.lastCheckIn.status}
+                    Last Check-In · {humanize(checkInSummary.lastCheckIn.status)}
                   </p>
                   <Link
                     href={`/hq/check-ins/${checkInSummary.lastCheckIn.id}`}
@@ -1050,12 +1054,6 @@ export default async function ClientWorkspacePage({
             Set daily calorie and macro targets for this client. Targets are calculated
             using Mifflin-St Jeor and require coach review before publishing.
           </p>
-          <Link
-            href={`/hq/clients/${clientId}/nutrition`}
-            className="inline-block mt-3 text-[10px] text-[#C9A24D]/60 hover:text-[#C9A24D] transition-colors"
-          >
-            Open Nutrition →
-          </Link>
         </Card>
       </section>
 
