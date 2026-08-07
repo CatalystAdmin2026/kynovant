@@ -5,21 +5,17 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   comingSoonHQNavItems,
-  setupHQNavItems,
   visibleHQNavItems,
   type HQNavItem,
 } from "./HQNavItems";
 
 export default function HQSidebar({
   coachName,
-  onboardingComplete,
 }: {
   coachName: string;
-  onboardingComplete: boolean;
 }) {
   const pathname = usePathname();
-  const mainNav = visibleHQNavItems(onboardingComplete);
-  const setupNav = setupHQNavItems(onboardingComplete);
+  const mainNav = visibleHQNavItems();
   const comingSoonNav = comingSoonHQNavItems();
 
   function isActive(item: HQNavItem): boolean {
@@ -82,36 +78,6 @@ export default function HQSidebar({
             </Link>
           );
         })}
-
-        {setupNav.length > 0 && (
-          <>
-            <div className="h-px bg-white/[0.05] my-3 mx-3" />
-
-            <p className="text-[9px] text-white/40 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
-              Setup
-            </p>
-
-            {setupNav.map((item) => {
-              const active = isActive(item);
-              const Icon = item.icon;
-              return (
-                  <Link
-                    key={item.label}
-                    href={item.href}
-                    aria-current={active ? "page" : undefined}
-                    className={`flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium tracking-wide transition-colors ${
-                      active
-                        ? "bg-white/[0.04] text-white/55 border border-white/[0.08]"
-                        : "text-white/25 hover:text-white/45 hover:bg-white/[0.03] border border-transparent"
-                  }`}
-                >
-                  <Icon size={13} className={active ? "text-white/45" : "text-white/30"} />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </>
-        )}
 
         <div className="h-px bg-white/[0.05] my-3 mx-3" />
 

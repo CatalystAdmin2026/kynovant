@@ -15,8 +15,9 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { and, eq, asc, desc, sql } from "drizzle-orm";
+import { and, eq, asc, desc, inArray, sql } from "drizzle-orm";
 import { getDb } from "./client";
+import { clientProfiles } from "./schema";
 import {
   programGenerationDrafts,
   programGenerationRuns,
@@ -36,6 +37,7 @@ import type {
   ProgramShell,
   ModelWeekDraft,
 } from "@/lib/program-generator/contracts";
+import { parseGeneratedProgramDraft, parseProgramShell } from "@/lib/program-generator/contracts";
 import type { DraftValidationResult, ValidationFinding } from "@/lib/program-generator/validation";
 import { groupKeyForFinding, occurrenceAckKey, groupAckKey } from "@/lib/program-generator/findings-grouping";
 import type { TenantScope } from "@/lib/auth/guards";
@@ -98,6 +100,84 @@ export async function listDrafts(scope: TenantScope, clientId?: string): Promise
     .from(programGenerationDrafts)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(programGenerationDrafts.createdAt));
+}
+
+export interface DraftAttentionSummary {
+  id: string;
+  clientId: string | null;
+  clientName: string | null;
+  title: string | null;
+  status: ProgramGenerationStatus;
+  currentWeek: number | null;
+  totalWeeks: number | null;
+  createdAt: Date;
+}
+
+// Drafts a coach needs eyes on right now: still generating (queued/
+// running, so the coach knows work is in flight) or finished and
+// waiting on their review. Used by the HQ Overview dashboard only —
+// title resolves from draftJson.name once generation completes, or
+// shellJson.title while a run is still in progress and only the shell
+// step has landed; both are optional so a freshly-queued draft with
+// neither yet just falls back to null (rendered as "Untitled" by the
+// caller) rather than blocking on a parse.
+export async function listAttentionDrafts(
+  scope: TenantScope,
+  limit = 8,
+): Promise<DraftAttentionSummary[]> {
+  const db = getDb();
+  const conditions = [
+    inArray(programGenerationDrafts.status, ["queued", "running", "ready_for_review"]),
+  ];
+  if (scope.coachId !== null) conditions.push(eq(programGenerationDrafts.coachId, scope.coachId));
+
+  const rows = await db
+    .select({
+      id: programGenerationDrafts.id,
+      clientId: programGenerationDrafts.clientId,
+      clientName: clientProfiles.fullName,
+      shellJson: programGenerationDrafts.shellJson,
+      draftJson: programGenerationDrafts.draftJson,
+      status: programGenerationDrafts.status,
+      createdAt: programGenerationDrafts.createdAt,
+    })
+    .from(programGenerationDrafts)
+    .leftJoin(clientProfiles, eq(programGenerationDrafts.clientId, clientProfiles.userId))
+    .where(and(...conditions))
+    .orderBy(desc(programGenerationDrafts.createdAt))
+    .limit(limit);
+
+  return Promise.all(
+    rows.map(async (r) => {
+      let currentWeek: number | null = null;
+      let totalWeeks: number | null = null;
+      if (r.status === "queued" || r.status === "running") {
+        const run = await getLatestRun(r.id);
+        currentWeek = run?.currentWeek ?? null;
+        totalWeeks = run?.totalWeeks ?? null;
+      }
+
+      const draftParsed = r.draftJson ? parseGeneratedProgramDraft(r.draftJson) : null;
+      const shellParsed =
+        !draftParsed?.ok && r.shellJson ? parseProgramShell(r.shellJson) : null;
+      const title = draftParsed?.ok
+        ? draftParsed.data.name
+        : shellParsed?.ok
+          ? shellParsed.data.title
+          : null;
+
+      return {
+        id: r.id,
+        clientId: r.clientId,
+        clientName: r.clientName,
+        title,
+        status: r.status,
+        currentWeek,
+        totalWeeks,
+        createdAt: r.createdAt,
+      };
+    }),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────

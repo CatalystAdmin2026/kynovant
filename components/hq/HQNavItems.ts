@@ -6,7 +6,6 @@ import {
   FileText,
   Folder,
   LayoutDashboard,
-  Rocket,
   Users,
 } from "lucide-react";
 
@@ -18,9 +17,12 @@ export interface HQNavItem {
   comingSoon?: boolean;
 }
 
+// No "Get Started" entry — that page and its onboarding-gated nav
+// section were eliminated in favor of a contextual onboarding card on
+// the Overview page itself (see app/hq/page.tsx) that hides once a
+// coach has both a client and a program.
 export const HQ_NAV_ITEMS: HQNavItem[] = [
   { icon: LayoutDashboard, label: "Overview", href: "/hq", exact: true },
-  { icon: Rocket, label: "Get Started", href: "/hq/get-started" },
   { icon: Users, label: "Clients", href: "/hq/clients" },
   { icon: BookOpen, label: "Programs", href: "/hq/programs" },
   { icon: FileText, label: "Blueprints", href: "/hq/blueprints" },
@@ -30,16 +32,8 @@ export const HQ_NAV_ITEMS: HQNavItem[] = [
   { icon: Folder, label: "Documents", href: "/hq/documents", comingSoon: true },
 ];
 
-export function visibleHQNavItems(onboardingComplete: boolean): HQNavItem[] {
-  return HQ_NAV_ITEMS.filter(
-    (item) => !item.comingSoon && (!onboardingComplete || item.href !== "/hq/get-started"),
-  );
-}
-
-export function setupHQNavItems(onboardingComplete: boolean): HQNavItem[] {
-  return onboardingComplete
-    ? HQ_NAV_ITEMS.filter((item) => !item.comingSoon && item.href === "/hq/get-started")
-    : [];
+export function visibleHQNavItems(): HQNavItem[] {
+  return HQ_NAV_ITEMS.filter((item) => !item.comingSoon);
 }
 
 export function comingSoonHQNavItems(): HQNavItem[] {

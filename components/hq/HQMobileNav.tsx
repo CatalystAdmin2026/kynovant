@@ -8,21 +8,17 @@ import { Menu, X } from "lucide-react";
 import HQSignOutButton from "./HQSignOutButton";
 import {
   comingSoonHQNavItems,
-  setupHQNavItems,
   visibleHQNavItems,
 } from "./HQNavItems";
 
 export default function HQMobileNav({
   coachName,
-  onboardingComplete,
 }: {
   coachName: string;
-  onboardingComplete: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
-  const mainNav = visibleHQNavItems(onboardingComplete);
-  const setupNav = setupHQNavItems(onboardingComplete);
+  const mainNav = visibleHQNavItems();
   const comingSoonNav = comingSoonHQNavItems();
 
   function isActive(href: string, exact = false): boolean {
@@ -82,36 +78,6 @@ export default function HQMobileNav({
                   </Link>
                 );
               })}
-
-              {setupNav.length > 0 && (
-                <>
-                  <div className="h-px bg-white/[0.05] my-3" />
-
-                  <p className="px-3 pb-1 text-[9px] font-semibold uppercase tracking-[0.35em] text-white/20">
-                    Setup
-                  </p>
-
-                  {setupNav.map(({ icon: Icon, label, href, exact }) => {
-                    const active = isActive(href, exact);
-                    return (
-                      <Link
-                        key={label}
-                        href={href}
-                        onClick={() => setOpen(false)}
-                        aria-current={active ? "page" : undefined}
-                        className={`flex items-center gap-3 rounded-md px-3 py-3 text-sm font-medium transition-colors ${
-                          active
-                            ? "bg-white/[0.04] text-white/55 border border-white/[0.08]"
-                            : "text-white/30 hover:text-white/55 hover:bg-white/[0.03] border border-transparent"
-                        }`}
-                      >
-                        <Icon size={15} className={active ? "text-white/45" : "text-white/20"} />
-                        {label}
-                      </Link>
-                    );
-                  })}
-                </>
-              )}
 
               <div className="h-px bg-white/[0.05] my-3" />
 

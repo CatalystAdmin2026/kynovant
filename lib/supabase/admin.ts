@@ -26,7 +26,7 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 // response (this message names env vars and a local file — fine for a
 // server log or a trusted admin, not for an arbitrary authenticated
 // caller, e.g. a plain coach hitting /api/internal/clients from
-// /hq/get-started). Never includes any credential value.
+// HQ onboarding). Never includes any credential value.
 export class AdminClientConfigError extends Error {
   constructor() {
     super(

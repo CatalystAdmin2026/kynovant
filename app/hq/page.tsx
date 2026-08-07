@@ -1,31 +1,47 @@
 // ─────────────────────────────────────────────────────────────
-// Kynovant HQ — Daily Coach Command Dashboard
+// Kynovant HQ — Overview (Executive Command Center)
 //
 // Server component. Auth is handled by app/hq/layout.tsx.
-// Uses only the existing mission-control data contract.
+//
+// Design intent: answer one question — "what deserves my attention
+// right now?" — with no hero banner and no greeting copy. Every
+// section below is either real data (mission control, check-ins,
+// AI generation drafts) or a clearly-labeled "Coming Soon"
+// placeholder for backend that doesn't exist yet (coach-facing
+// notifications, scheduled/upcoming sessions). Nothing here is
+// fabricated to fill space.
 // ─────────────────────────────────────────────────────────────
 
 import Link from "next/link";
 import {
   Activity,
-  AlertTriangle,
   ArrowRight,
+  Bell,
+  CalendarClock,
   CheckCircle2,
   ClipboardCheck,
-  Dumbbell,
   FileText,
+  Inbox,
   Layers,
   Plus,
   Radio,
-  Users,
+  Sparkles,
 } from "lucide-react";
 import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getCoachMissionControl } from "@/lib/db/coach-dashboard-service";
+import { listCoachCheckIns } from "@/lib/db/coach-check-in-service";
+import { listAttentionDrafts } from "@/lib/db/program-generation-service";
+import { listProgramTemplates } from "@/lib/db/program-builder-service";
 import AddClientButton from "@/components/hq/clients/AddClientButton";
-import { StatusChip } from "@/components/ui";
-import { SEVERITY_BAR, SEVERITY_DOT, SEVERITY_TEXT, type Severity } from "@/lib/ui/status";
+import HQPageHeader from "@/components/hq/HQPageHeader";
+import { Badge, type BadgeVariant } from "@/components/ui";
+import { SEVERITY_BAR, SEVERITY_DOT, type Severity } from "@/lib/ui/status";
 
 export const dynamic = "force-dynamic";
+
+// ─────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────
 
 function fmtDateTime(d: Date | null): string {
   if (!d) return "No timestamp";
@@ -34,14 +50,6 @@ function fmtDateTime(d: Date | null): string {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  });
-}
-
-function fmtDate(d: Date): string {
-  return d.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
   });
 }
 
@@ -54,43 +62,21 @@ function fmtWaiting(d: Date | null): string {
   return `Oldest waiting: ${days} days`;
 }
 
-function getPrimaryAction(data: Awaited<ReturnType<typeof getCoachMissionControl>>) {
-  if (data.checkIns.waitingCount > 0) {
-    return {
-      label: "Review Check-Ins",
-      href: "/hq/check-ins",
-      body: `${data.checkIns.waitingCount} submitted check-in${data.checkIns.waitingCount === 1 ? "" : "s"} waiting.`,
-    };
-  }
+const CHECKIN_STATUS_LABEL: Record<string, string> = {
+  submitted: "Waiting for Review",
+  in_review: "In Review",
+  reviewed: "Reviewed",
+};
 
-  const noProgramClient = data.prioritizedClients.find((client) => !client.activeProgramId);
-  if (noProgramClient) {
-    return {
-      label: "Assign Program",
-      href: `/hq/clients/${noProgramClient.userId}`,
-      body: `${noProgramClient.preferredName ?? noProgramClient.fullName} has no active program.`,
-    };
-  }
+const CHECKIN_STATUS_VARIANT: Record<string, BadgeVariant> = {
+  submitted: "info",
+  in_review: "warning",
+  reviewed: "success",
+};
 
-  const inactiveClient = data.prioritizedClients.find(
-    (client) => client.attentionReason === "No workout in 7+ days",
-  );
-  if (inactiveClient) {
-    return {
-      label: "Review Client",
-      href: `/hq/clients/${inactiveClient.userId}`,
-      body: `${inactiveClient.preferredName ?? inactiveClient.fullName} has no completed workout in 7+ days.`,
-    };
-  }
-
-  return {
-    label: "View Clients",
-    href: "/hq/clients",
-    body: data.activeClientCount > 0
-      ? "No urgent coaching queue items are open."
-      : "Start by adding your first client.",
-  };
-}
+// ─────────────────────────────────────────────────────────────
+// PRESENTATIONAL PRIMITIVES
+// ─────────────────────────────────────────────────────────────
 
 function DashboardCard({
   children,
@@ -128,55 +114,56 @@ function SectionHeader({
   );
 }
 
-function QueueRow({
-  icon,
-  label,
-  value,
-  detail,
+function Row({
   href,
-  severity = "unknown",
+  children,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  value: string | number;
-  detail: string;
-  href?: string;
-  severity?: Severity;
+  href: string;
+  children: React.ReactNode;
 }) {
-  const content = (
-    <>
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-white/[0.06] bg-white/[0.03] text-white/35">
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold text-white">{label}</span>
-          <span className={`h-1.5 w-1.5 rounded-full ${SEVERITY_DOT[severity]}`} />
-        </div>
-        <p className="mt-0.5 text-xs leading-relaxed text-white/35">{detail}</p>
-      </div>
-      <div className="text-right">
-        <p className={`text-xl font-bold tabular-nums ${SEVERITY_TEXT[severity]}`}>{value}</p>
-      </div>
-      {href && <ArrowRight size={14} className="shrink-0 text-white/25" />}
-    </>
-  );
-
-  if (!href) {
-    return (
-      <div className="flex items-center gap-3 border border-white/[0.05] bg-[#101213] px-4 py-4">
-        {content}
-      </div>
-    );
-  }
-
   return (
     <Link
       href={href}
-      className="flex items-center gap-3 border border-white/[0.05] bg-[#101213] px-4 py-4 transition-colors hover:border-white/[0.12] hover:bg-[#121416] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#C9A24D]/50"
+      className="flex items-center gap-3 border border-white/[0.05] bg-[#101213] px-4 py-3.5 transition-colors hover:border-white/[0.12] hover:bg-[#121416] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#C9A24D]/50"
     >
-      {content}
+      {children}
     </Link>
+  );
+}
+
+function EmptyRow({
+  icon,
+  title,
+  detail,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div className="border border-dashed border-white/[0.06] px-4 py-5 text-center">
+      <div className="mx-auto mb-2 flex h-8 w-8 items-center justify-center text-white/30">{icon}</div>
+      <p className="text-sm font-medium text-white/55">{title}</p>
+      <p className="mt-1 text-xs text-white/35">{detail}</p>
+    </div>
+  );
+}
+
+function IconTile({
+  children,
+  tone = "default",
+}: {
+  children: React.ReactNode;
+  tone?: "default" | "gold";
+}) {
+  return (
+    <div
+      className={`flex h-9 w-9 shrink-0 items-center justify-center border border-white/[0.06] bg-white/[0.03] ${
+        tone === "gold" ? "text-[#C9A24D]/65" : "text-white/35"
+      }`}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -203,129 +190,244 @@ function QuickAction({
   );
 }
 
-export default async function MissionControlPage() {
-  const { dbUser } = await requireCoachOrAdminPage();
-  const { coachId } = resolveTenantScope(dbUser);
-  const data = await getCoachMissionControl(coachId);
-  const primaryAction = getPrimaryAction(data);
+function MetricTile({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string | number;
+  tone?: "default" | "gold" | "critical" | "muted";
+}) {
+  const color =
+    tone === "gold"
+      ? "text-[#C9A24D]"
+      : tone === "critical"
+      ? "text-red-400"
+      : tone === "muted"
+      ? "text-white/45"
+      : "text-white";
 
-  const today = fmtDate(new Date());
-  const criticalClients = data.prioritizedClients.filter((client) => client.attentionLevel === "critical");
-  const highClients = data.prioritizedClients.filter((client) => client.attentionLevel === "high");
-  const mediumClients = data.prioritizedClients.filter((client) => client.attentionLevel === "medium");
+  return (
+    <div className="border border-white/[0.05] bg-[#101213] p-4">
+      <p className={`text-2xl font-bold tabular-nums leading-none ${color}`}>{value}</p>
+      <p className="mt-2 text-[9px] font-semibold uppercase tracking-[0.24em] text-white/45">{label}</p>
+    </div>
+  );
+}
+
+// Deliberately distinct from the real-data cards elsewhere on this
+// page — dashed border, no severity dot, explicit "Coming Soon" chip
+// — so a coach never mistakes "not built yet" for "nothing's happening".
+function PlaceholderCard({
+  icon,
+  title,
+  body,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+}) {
+  return (
+    <div className="border border-dashed border-white/[0.08] bg-[#0d0e0f] p-5">
+      <div className="mb-3 flex items-center gap-2.5">
+        <span className="text-white/25">{icon}</span>
+        <p className="text-[9px] font-semibold uppercase tracking-[0.3em] text-white/35">{title}</p>
+        <span className="ml-auto shrink-0 border border-white/10 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.15em] text-white/30">
+          Coming Soon
+        </span>
+      </div>
+      <p className="text-xs leading-relaxed text-white/35">{body}</p>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// PAGE
+// ─────────────────────────────────────────────────────────────
+
+export default async function OverviewPage() {
+  const { dbUser } = await requireCoachOrAdminPage();
+  const scope = resolveTenantScope(dbUser);
+  const { coachId } = scope;
+
+  const [data, attentionDrafts, checkInRows, programTemplates] = await Promise.all([
+    getCoachMissionControl(coachId),
+    listAttentionDrafts(scope),
+    listCoachCheckIns({
+      coachId,
+      status: ["submitted", "in_review", "reviewed"],
+      limit: 50,
+    }),
+    listProgramTemplates(coachId),
+  ]);
+
+  // ── Onboarding: contextual, not a separate page. Each row hides
+  // itself the moment its own condition is met; the whole card
+  // disappears once both are done. Replaces the old /hq/get-started
+  // checklist page entirely.
+  const hasClients = data.activeClientCount > 0;
+  const hasPrograms = programTemplates.length > 0;
+  const showOnboarding = !hasClients || !hasPrograms;
+
+  const criticalClients = data.prioritizedClients.filter((c) => c.attentionLevel === "critical");
+  const highClients = data.prioritizedClients.filter((c) => c.attentionLevel === "high");
+  const mediumClients = data.prioritizedClients.filter((c) => c.attentionLevel === "medium");
   const healthyClientCount = Math.max(
     0,
     data.activeClientCount - criticalClients.length - highClients.length - mediumClients.length,
   );
   const clientsWithPrograms = Math.max(0, data.activeClientCount - data.noActiveProgramCount);
-  const allQueueClear =
-    data.checkIns.waitingCount === 0 &&
-    data.noActiveProgramCount === 0 &&
-    data.noWorkoutLast7dCount === 0 &&
-    data.checkIns.inReviewCount === 0;
 
   const portfolioSegments = [
     { label: "Healthy", value: healthyClientCount, severity: "ok" as Severity },
     { label: "Needs Attention", value: highClients.length + mediumClients.length, severity: "caution" as Severity },
     { label: "Critical", value: criticalClients.length, severity: "critical" as Severity },
   ];
+  const totalPortfolioSegments = Math.max(1, portfolioSegments.reduce((s, seg) => s + seg.value, 0));
 
-  const totalPortfolioSegments = Math.max(1, portfolioSegments.reduce((sum, item) => sum + item.value, 0));
+  const generatingDrafts = attentionDrafts.filter((d) => d.status === "queued" || d.status === "running");
+  const readyDrafts = attentionDrafts.filter((d) => d.status === "ready_for_review");
+
+  const awaitingCheckIns = checkInRows.filter((c) => c.status !== "reviewed").slice(0, 5);
+  const recentCheckIns = [...checkInRows]
+    .sort((a, b) => new Date(b.submittedAt ?? 0).getTime() - new Date(a.submittedAt ?? 0).getTime())
+    .slice(0, 5);
+
+  // ── Today's Priorities — the answer to "what deserves my attention
+  // right now". Every entry here is a real, actionable signal; nothing
+  // is synthesized just to populate the list.
+  interface Priority {
+    icon: React.ReactNode;
+    label: string;
+    detail: string;
+    href: string;
+    severity: Severity;
+  }
+
+  const priorities: Priority[] = [];
+
+  if (data.checkIns.waitingCount > 0) {
+    priorities.push({
+      icon: <ClipboardCheck size={16} />,
+      label: `${data.checkIns.waitingCount} check-in${data.checkIns.waitingCount === 1 ? "" : "s"} awaiting review`,
+      detail: fmtWaiting(data.checkIns.oldestWaitingAt),
+      href: "/hq/check-ins",
+      severity: "caution",
+    });
+  }
+
+  for (const draft of readyDrafts) {
+    priorities.push({
+      icon: <Sparkles size={16} />,
+      label: `AI draft ready for review — ${draft.title ?? draft.clientName ?? "Untitled Program"}`,
+      detail: draft.clientName ? `For ${draft.clientName}` : "No client assigned yet",
+      href: `/hq/programs/generate/${draft.id}`,
+      severity: "caution",
+    });
+  }
+
+  if (data.noActiveProgramCount > 0) {
+    priorities.push({
+      icon: <Layers size={16} />,
+      label: `${data.noActiveProgramCount} client${data.noActiveProgramCount === 1 ? "" : "s"} without an active program`,
+      detail: "Assign a multi-week program from the client workspace.",
+      href: criticalClients[0] ? `/hq/clients/${criticalClients[0].userId}` : "/hq/clients",
+      severity: "critical",
+    });
+  }
+
+  if (data.noWorkoutLast7dCount > 0) {
+    priorities.push({
+      icon: <Radio size={16} />,
+      label: `${data.noWorkoutLast7dCount} client${data.noWorkoutLast7dCount === 1 ? "" : "s"} inactive 7+ days`,
+      detail: "Active program, no completed workout in a week or more.",
+      href: highClients[0] ? `/hq/clients/${highClients[0].userId}` : "/hq/clients",
+      severity: "high",
+    });
+  }
+
+  const visiblePriorities = priorities.slice(0, 6);
+  const hiddenPriorityCount = priorities.length - visiblePriorities.length;
+
+  const headerSubtitle =
+    priorities.length === 0
+      ? "Nothing urgent — your coaching queue is clear."
+      : `${priorities.length} item${priorities.length === 1 ? "" : "s"} need your attention.`;
 
   return (
-    <div className="space-y-7">
-      <section aria-label="Daily brief" className="overflow-hidden border border-white/[0.07] bg-[#0b0c0d]">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px]">
-          <div className="relative min-h-[280px] px-6 py-7 sm:px-8 sm:py-8">
-            <div className="absolute inset-0 pointer-events-none" aria-hidden>
-              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#C9A24D]/35 to-transparent" />
-              <div className="absolute right-0 top-0 h-full w-1/2 bg-[radial-gradient(ellipse_at_top_right,rgba(201,162,77,0.08),transparent_58%)]" />
-            </div>
+    <div className="space-y-8">
+      <HQPageHeader title="Overview" subtitle={headerSubtitle} />
 
-            <div className="relative z-10 flex h-full flex-col justify-between gap-10">
-              <div>
-                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.45em] text-[#C9A24D]/70">
-                  Daily Brief
-                </p>
-                <h1 className="font-headline text-4xl font-bold uppercase leading-none text-white md:text-[58px]">
-                  Good day, Coach.
-                </h1>
-                <p className="mt-3 text-sm text-white/40">{today}</p>
-              </div>
-
-              <div className="max-w-2xl">
-                <p className="text-base leading-relaxed text-white/75">
-                  {primaryAction.body}
-                </p>
-                <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <Link
-                    href={primaryAction.href}
-                    className="inline-flex items-center justify-center gap-2 bg-[#C9A24D] px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-black transition-colors hover:bg-[#D4B56A]"
-                  >
-                    {primaryAction.label}
-                    <ArrowRight size={13} />
-                  </Link>
-                  {data.activeClientCount === 0 && (
-                    <Link
-                      href="/hq/get-started"
-                      className="inline-flex items-center justify-center gap-2 border border-white/[0.08] px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/55 transition-colors hover:border-white/[0.16] hover:text-white"
-                    >
-                      Open Get Started
-                    </Link>
-                  )}
+      {showOnboarding && (
+        <DashboardCard className="p-5">
+          <p className="mb-3 text-[9px] font-semibold uppercase tracking-[0.3em] text-[#C9A24D]/55">
+            Get Started
+          </p>
+          <div className="space-y-3">
+            {!hasClients && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border border-white/[0.05] bg-[#101213] px-4 py-3.5">
+                <div>
+                  <p className="text-sm font-semibold text-white">Invite your first client</p>
+                  <p className="mt-0.5 text-xs text-white/35">
+                    Send an email invite so they can log into their Kynovant portal.
+                  </p>
                 </div>
+                <AddClientButton />
               </div>
-            </div>
+            )}
+            {!hasPrograms && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border border-white/[0.05] bg-[#101213] px-4 py-3.5">
+                <div>
+                  <p className="text-sm font-semibold text-white">Set up your first program</p>
+                  <p className="mt-0.5 text-xs text-white/35">
+                    Start from a template or build one from scratch. Assigning it to a client is a separate, later step.
+                  </p>
+                </div>
+                <Link
+                  href="/hq/programs"
+                  className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#C9A24D] hover:text-[#D4B56A] transition-colors"
+                >
+                  Go to Programs →
+                </Link>
+              </div>
+            )}
           </div>
-
-          <div className="border-t border-white/[0.06] bg-[#080909]/60 p-5 lg:border-l lg:border-t-0">
-            <div className="grid h-full grid-cols-2 gap-3">
-              <BriefStat label="Active Clients" value={data.activeClientCount} />
-              <BriefStat label="Check-Ins Waiting" value={data.checkIns.waitingCount} tone={data.checkIns.waitingCount > 0 ? "gold" : "muted"} />
-              <BriefStat label="Need Programs" value={data.noActiveProgramCount} tone={data.noActiveProgramCount > 0 ? "critical" : "muted"} />
-              <BriefStat label="Workouts Today" value={data.workoutsCompletedToday} tone="gold" />
-            </div>
-          </div>
-        </div>
-      </section>
+        </DashboardCard>
+      )}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.4fr_0.9fr]">
-        <section aria-label="Today's coaching queue">
-          <SectionHeader eyebrow="Today" title="Coaching Queue" />
+        <section aria-label="Today's priorities">
+          <SectionHeader eyebrow="Attention" title="Today's Priorities" />
           <DashboardCard className="p-4">
-            <div className="space-y-3">
-              <QueueRow
-                icon={<ClipboardCheck size={16} />}
-                label="Check-ins awaiting review"
-                value={data.checkIns.waitingCount}
-                detail={fmtWaiting(data.checkIns.oldestWaitingAt)}
-                href="/hq/check-ins"
-                severity={data.checkIns.waitingCount > 0 ? "caution" : "ok"}
+            {visiblePriorities.length === 0 ? (
+              <EmptyRow
+                icon={<CheckCircle2 size={18} />}
+                title="You're all caught up."
+                detail="Nothing needs your attention right now."
               />
-              <QueueRow
-                icon={<Layers size={16} />}
-                label="Clients without a program"
-                value={data.noActiveProgramCount}
-                detail={data.noActiveProgramCount > 0 ? "Assign a multi-week program from the client workspace." : "Every active client has a program assignment."}
-                href={criticalClients[0] ? `/hq/clients/${criticalClients[0].userId}` : "/hq/clients"}
-                severity={data.noActiveProgramCount > 0 ? "critical" : "ok"}
-              />
-              <QueueRow
-                icon={<Radio size={16} />}
-                label="Inactive 7+ days"
-                value={data.noWorkoutLast7dCount}
-                detail={data.noWorkoutLast7dCount > 0 ? "Clients with active programs and no completed workout in 7+ days." : "Everyone with an active program has trained recently."}
-                href={highClients[0] ? `/hq/clients/${highClients[0].userId}` : "/hq/clients"}
-                severity={data.noWorkoutLast7dCount > 0 ? "high" : "ok"}
-              />
-              {allQueueClear && (
-                <div className="border border-dashed border-white/[0.06] px-4 py-5 text-center">
-                  <CheckCircle2 size={18} className="mx-auto mb-2 text-white/30" />
-                  <p className="text-sm font-medium text-white/55">You&apos;re all caught up.</p>
-                  <p className="mt-1 text-xs text-white/35">Check recent activity below for what&apos;s changed.</p>
-                </div>
-              )}
-            </div>
+            ) : (
+              <div className="space-y-2">
+                {visiblePriorities.map((p, i) => (
+                  <Row key={i} href={p.href}>
+                    <IconTile>{p.icon}</IconTile>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-white">{p.label}</span>
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${SEVERITY_DOT[p.severity]}`} />
+                      </div>
+                      <p className="mt-0.5 text-xs leading-relaxed text-white/35">{p.detail}</p>
+                    </div>
+                    <ArrowRight size={14} className="shrink-0 text-white/25" />
+                  </Row>
+                ))}
+                {hiddenPriorityCount > 0 && (
+                  <p className="px-1 pt-1 text-[10px] uppercase tracking-[0.2em] text-white/25">
+                    +{hiddenPriorityCount} more in Check-Ins / Clients
+                  </p>
+                )}
+              </div>
+            )}
           </DashboardCard>
         </section>
 
@@ -342,180 +444,207 @@ export default async function MissionControlPage() {
         </section>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <section aria-label="Portfolio health">
-          <SectionHeader eyebrow="Portfolio" title="Health Distribution" />
-          <DashboardCard className="p-5">
-            <div className="mb-5 flex h-2 overflow-hidden bg-white/[0.05]">
-              {portfolioSegments.map((segment) => (
-                <div
-                  key={segment.label}
-                  className={`${SEVERITY_BAR[segment.severity]}`}
-                  style={{ width: `${(segment.value / totalPortfolioSegments) * 100}%` }}
-                />
-              ))}
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              {portfolioSegments.map((segment) => (
-                <div key={segment.label} className="border border-white/[0.05] bg-[#101213] px-3 py-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <span className={`h-1.5 w-1.5 rounded-full ${SEVERITY_DOT[segment.severity]}`} />
-                    <p className="truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
-                      {segment.label}
-                    </p>
-                  </div>
-                  <p className="text-2xl font-bold tabular-nums text-white">{segment.value}</p>
-                </div>
-              ))}
-            </div>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <section aria-label="Clients awaiting review">
+          <SectionHeader
+            eyebrow="Queue"
+            title="Clients Awaiting Review"
+            action={
+              <Link href="/hq/check-ins" className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35 transition-colors hover:text-white/60">
+                View all →
+              </Link>
+            }
+          />
+          <DashboardCard className="p-4">
+            {awaitingCheckIns.length === 0 ? (
+              <EmptyRow icon={<Inbox size={18} />} title="No check-ins waiting." detail="New submissions will show up here." />
+            ) : (
+              <div className="space-y-2">
+                {awaitingCheckIns.map((c) => (
+                  <Row key={c.id} href={`/hq/check-ins/${c.id}`}>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-white">{c.clientName}</p>
+                      <p className="mt-0.5 text-xs text-white/35">
+                        {c.waitingDays !== null ? `Waiting ${c.waitingDays}d` : "Just submitted"}
+                      </p>
+                    </div>
+                    <Badge tone="dark" variant={CHECKIN_STATUS_VARIANT[c.status]} size="sm" className="hidden shrink-0 sm:inline-flex">
+                      {CHECKIN_STATUS_LABEL[c.status]}
+                    </Badge>
+                    <ArrowRight size={14} className="shrink-0 text-white/25" />
+                  </Row>
+                ))}
+              </div>
+            )}
           </DashboardCard>
         </section>
 
-        <section aria-label="Coaching momentum">
-          <SectionHeader eyebrow="Momentum" title="Coaching Signals" />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <MomentumCard
-              icon={<Dumbbell size={16} />}
-              label="Workouts Completed"
-              value={String(data.workoutsCompletedLast7d)}
-              detail="Last 7 days"
-            />
-            <MomentumCard
-              icon={<ClipboardCheck size={16} />}
-              label="Check-Ins In Review"
-              value={String(data.checkIns.inReviewCount)}
-              detail="Currently open"
-            />
-            <MomentumCard
-              icon={<Users size={16} />}
-              label="Clients With Programs"
-              value={String(clientsWithPrograms)}
-              detail="Active client portfolio"
-            />
-            <MomentumCard
-              icon={<AlertTriangle size={16} />}
-              label="Skipped Sessions"
-              value={String(data.recentSkippedCount)}
-              detail="Last 30 days"
-              severity={data.recentSkippedCount > 0 ? "caution" : "unknown"}
-            />
-          </div>
+        <section aria-label="Programs currently generating">
+          <SectionHeader
+            eyebrow="AI Generator"
+            title="Programs Currently Generating"
+            action={
+              <Link href="/hq/programs/generate" className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35 transition-colors hover:text-white/60">
+                New Draft →
+              </Link>
+            }
+          />
+          <DashboardCard className="p-4">
+            {generatingDrafts.length === 0 ? (
+              <EmptyRow icon={<Sparkles size={18} />} title="Nothing generating right now." detail="Start a new AI draft from Programs." />
+            ) : (
+              <div className="space-y-2">
+                {generatingDrafts.map((d) => (
+                  <Row key={d.id} href={`/hq/programs/generate/${d.id}`}>
+                    <IconTile tone="gold"><Sparkles size={16} /></IconTile>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-white">{d.title ?? "Untitled Program"}</p>
+                      <p className="mt-0.5 truncate text-xs text-white/35">
+                        {d.clientName ? `For ${d.clientName}` : "No client assigned yet"}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-xs font-semibold text-[#C9A24D]/80">
+                        {d.currentWeek && d.totalWeeks ? `Week ${d.currentWeek} of ${d.totalWeeks}` : "Starting…"}
+                      </p>
+                      <p className="mt-0.5 text-[9px] uppercase tracking-[0.2em] text-white/25">Generating</p>
+                    </div>
+                  </Row>
+                ))}
+              </div>
+            )}
+          </DashboardCard>
         </section>
       </div>
 
-      <section aria-label="Recent activity">
-        <SectionHeader
-          eyebrow="Changed"
-          title="Recent Activity"
-          action={
-            <Link href="/hq/clients" className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35 transition-colors hover:text-white/60">
-              Client Directory
-            </Link>
-          }
-        />
-        <DashboardCard className="p-4">
-          {data.recentActivity.length === 0 ? (
-            <div className="border border-dashed border-white/[0.06] px-5 py-8 text-center">
-              <Activity size={18} className="mx-auto mb-2 text-white/30" />
-              <p className="text-sm font-medium text-white/55">No recent workout activity.</p>
-              <p className="mt-1 text-xs text-white/35">Completed and skipped sessions will appear here.</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {data.recentActivity.slice(0, 8).map((activity) => (
-                <Link
-                  key={activity.sessionId}
-                  href={`/hq/clients/${activity.clientId}/history/${activity.sessionId}`}
-                  className="grid grid-cols-1 gap-3 border border-white/[0.05] bg-[#101213] px-4 py-3.5 transition-colors hover:border-white/[0.12] hover:bg-[#121416] sm:grid-cols-[1fr_auto_auto] sm:items-center"
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-sm font-semibold text-white">{activity.clientName}</p>
-                      <StatusChip
-                        tone="dark"
-                        status={activity.status === "completed" ? "ok" : "caution"}
-                        label={activity.status === "completed" ? "Completed" : "Skipped"}
-                        size="sm"
-                      />
-                    </div>
-                    <p className="mt-1 truncate text-xs text-white/40">
-                      {activity.workoutName}
-                      {activity.programWeekNumber ? ` | Week ${activity.programWeekNumber}` : ""}
-                    </p>
-                  </div>
-                  <div className="text-left sm:text-right">
-                    <p className="text-xs font-semibold text-white/60">
-                      {activity.status === "completed" ? `${activity.completionPercent}% logged` : "No completion logged"}
-                    </p>
-                    <p className="mt-0.5 text-[10px] uppercase tracking-[0.22em] text-white/25">
-                      Session
-                    </p>
-                  </div>
-                  <p className="text-xs text-white/35">{fmtDateTime(activity.occurredAt)}</p>
-                </Link>
-              ))}
-            </div>
-          )}
+      <section aria-label="Coach metrics">
+        <SectionHeader eyebrow="Portfolio" title="Coach Metrics" />
+        <DashboardCard className="p-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <MetricTile label="Active Clients" value={data.activeClientCount} />
+            <MetricTile label="With Program" value={clientsWithPrograms} />
+            <MetricTile label="Workouts Today" value={data.workoutsCompletedToday} tone="gold" />
+            <MetricTile label="Workouts (7d)" value={data.workoutsCompletedLast7d} tone="gold" />
+            <MetricTile
+              label="Skipped (30d)"
+              value={data.recentSkippedCount}
+              tone={data.recentSkippedCount > 0 ? "critical" : "muted"}
+            />
+          </div>
+
+          <div className="my-5 h-px bg-white/[0.05]" />
+
+          <p className="mb-3 text-[9px] font-semibold uppercase tracking-[0.24em] text-white/30">Portfolio Health</p>
+          <div className="mb-4 flex h-2 overflow-hidden bg-white/[0.05]">
+            {portfolioSegments.map((segment) => (
+              <div
+                key={segment.label}
+                className={SEVERITY_BAR[segment.severity]}
+                style={{ width: `${(segment.value / totalPortfolioSegments) * 100}%` }}
+              />
+            ))}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            {portfolioSegments.map((segment) => (
+              <div key={segment.label} className="border border-white/[0.05] bg-[#101213] px-3 py-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className={`h-1.5 w-1.5 rounded-full ${SEVERITY_DOT[segment.severity]}`} />
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
+                    {segment.label}
+                  </p>
+                </div>
+                <p className="text-xl font-bold tabular-nums text-white">{segment.value}</p>
+              </div>
+            ))}
+          </div>
         </DashboardCard>
       </section>
-    </div>
-  );
-}
 
-function BriefStat({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: number;
-  tone?: "default" | "gold" | "critical" | "muted";
-}) {
-  const color =
-    tone === "gold"
-      ? "text-[#C9A24D]"
-      : tone === "critical"
-      ? "text-red-400"
-      : tone === "muted"
-      ? "text-white/45"
-      : "text-white";
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <section aria-label="Recent activity">
+          <SectionHeader
+            eyebrow="Changed"
+            title="Recent Activity"
+            action={
+              <Link href="/hq/clients" className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35 transition-colors hover:text-white/60">
+                Client Directory →
+              </Link>
+            }
+          />
+          <DashboardCard className="p-4">
+            {data.recentActivity.length === 0 ? (
+              <EmptyRow icon={<Activity size={18} />} title="No recent workout activity." detail="Completed and skipped sessions will appear here." />
+            ) : (
+              <div className="space-y-2">
+                {data.recentActivity.slice(0, 6).map((activity) => (
+                  <Row key={activity.sessionId} href={`/hq/clients/${activity.clientId}/history/${activity.sessionId}`}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-semibold text-white">{activity.clientName}</p>
+                        <Badge tone="dark" variant={activity.status === "completed" ? "success" : "warning"} size="sm">
+                          {activity.status === "completed" ? "Completed" : "Skipped"}
+                        </Badge>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-white/35">
+                        {activity.workoutName}
+                        {activity.programWeekNumber ? ` · Week ${activity.programWeekNumber}` : ""}
+                      </p>
+                    </div>
+                    <p className="shrink-0 text-xs text-white/35">{fmtDateTime(activity.occurredAt)}</p>
+                  </Row>
+                ))}
+              </div>
+            )}
+          </DashboardCard>
+        </section>
 
-  return (
-    <div className="border border-white/[0.05] bg-[#101213] p-4">
-      <p className={`text-3xl font-bold tabular-nums leading-none ${color}`}>{value}</p>
-      <p className="mt-2 text-[9px] font-semibold uppercase tracking-[0.24em] text-white/45">
-        {label}
-      </p>
-    </div>
-  );
-}
-
-function MomentumCard({
-  icon,
-  label,
-  value,
-  detail,
-  severity = "unknown",
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  detail: string;
-  severity?: Severity;
-}) {
-  return (
-    <DashboardCard className="p-5">
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <div className="flex h-9 w-9 items-center justify-center border border-white/[0.06] bg-white/[0.03] text-[#C9A24D]/65">
-          {icon}
-        </div>
-        <span className={`h-1.5 w-1.5 rounded-full ${SEVERITY_DOT[severity]}`} />
+        <section aria-label="Recent client check-ins">
+          <SectionHeader
+            eyebrow="Pulse"
+            title="Recent Client Check-Ins"
+            action={
+              <Link href="/hq/check-ins" className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35 transition-colors hover:text-white/60">
+                View all →
+              </Link>
+            }
+          />
+          <DashboardCard className="p-4">
+            {recentCheckIns.length === 0 ? (
+              <EmptyRow icon={<ClipboardCheck size={18} />} title="No check-ins yet." detail="Clients submit these weekly from their portal." />
+            ) : (
+              <div className="space-y-2">
+                {recentCheckIns.map((c) => (
+                  <Row key={c.id} href={`/hq/check-ins/${c.id}`}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-semibold text-white">{c.clientName}</p>
+                        <Badge tone="dark" variant={CHECKIN_STATUS_VARIANT[c.status]} size="sm">
+                          {CHECKIN_STATUS_LABEL[c.status]}
+                        </Badge>
+                      </div>
+                      <p className="mt-0.5 text-xs text-white/35">Week of {c.weekStartDate}</p>
+                    </div>
+                    <p className="shrink-0 text-xs text-white/35">{fmtDateTime(c.submittedAt)}</p>
+                  </Row>
+                ))}
+              </div>
+            )}
+          </DashboardCard>
+        </section>
       </div>
-      <p className="text-3xl font-bold tabular-nums text-white">{value}</p>
-      <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
-        {label}
-      </p>
-      <p className="mt-1 text-xs text-white/30">{detail}</p>
-    </DashboardCard>
+
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <PlaceholderCard
+          icon={<Bell size={16} />}
+          title="Unread Notifications"
+          body="Coach-facing notifications aren't wired up yet — this will surface unread client activity once the delivery layer ships."
+        />
+        <PlaceholderCard
+          icon={<CalendarClock size={16} />}
+          title="Upcoming Sessions"
+          body="Session scheduling isn't tracked ahead of time yet — this will show what's on each client's calendar for the days ahead."
+        />
+      </div>
+    </div>
   );
 }
