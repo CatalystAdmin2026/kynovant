@@ -1,10 +1,13 @@
 // ─────────────────────────────────────────────────────────────
 // Stripe Webhook Handler — server-only
 //
-// Handles Catalyst Coaching Elite client payments (coaching packages —
-// Standard/Founding Member/Legacy/Executive Performance), NOT Kynovant
-// SaaS billing (no coach-subscription Stripe integration exists yet).
-// Registered in Stripe Dashboard under:
+// Handles BOTH Catalyst Coaching Elite client payments (coaching
+// packages — Standard/Founding Member/Legacy/Executive Performance)
+// AND Kynovant coach-platform SaaS billing (see the "COACH SUBSCRIPTION
+// EVENT HANDLING" section below) through this one endpoint —
+// isCoachPlanPrice() (lib/billing/prices.ts) and metadata.coachId
+// distinguish which path a given event belongs to. Registered in
+// Stripe Dashboard under:
 //   Developers → Webhooks → Add endpoint
 //   URL: https://www.catalystcoachingelite.com/api/stripe/webhook
 //   Events: checkout.session.completed, customer.subscription.*,
@@ -46,101 +49,47 @@ import {
   normalizeStripeEvent,
   toGasPayload,
   packageFromPriceId,
-  isCoachPlanPrice,
+  strOrNull,
   HANDLED_EVENTS,
 } from "@/lib/stripe";
 import type { GasStripePayload, NormalizedStripeEvent } from "@/lib/stripe";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { processedStripeEvents, coachSubscriptions } from "@/lib/db/schema-billing";
-import {
-  upsertCoachSubscriptionFromStripe,
-  type StripeSubscriptionSync,
-} from "@/lib/db/coach-subscription-service";
+import { upsertCoachSubscriptionFromStripe } from "@/lib/db/coach-subscription-service";
+import { isCoachPlanPrice } from "@/lib/billing/prices";
+import { syncCoachSubscriptionFromStripeSubscription } from "@/lib/billing/sync";
 
 // ─────────────────────────────────────────────────────────────
 // COACH SUBSCRIPTION EVENT HANDLING
 //
 // Distinct from the client-payment path above this file's original
 // handleNewEnrollment — this branch only fires for events on a
-// coach-plan Price ID (isCoachPlanPrice(), gated by
-// STRIPE_COACH_PLAN_PRICE_IDS; empty/unset means this branch never
-// fires, matching current production behavior exactly).
+// coach-plan Price ID (isCoachPlanPrice(), lib/billing/prices.ts —
+// derived from that registry's configured env vars; unconfigured means
+// this branch never fires).
 //
-// coachId is resolved from the Stripe object's metadata.coachId. No
-// checkout-session-creation route exists in this codebase yet (that's
-// self-serve signup, Phase 5 — explicitly out of scope here per the
-// roadmap's own sequencing), so today the only way metadata.coachId
-// gets set is an admin hand-creating the subscription in the Stripe
-// Dashboard, mirroring the existing manual-billing pattern already
-// used for the founding coach.
+// coachId is resolved from the Stripe object's metadata.coachId, set
+// at Checkout Session creation (lib/billing/checkout.ts) or, for a
+// manually-created Dashboard subscription (e.g. Founding Coach comp
+// access), by an admin setting it by hand — same mechanism either way.
+//
+// The actual status-mapping and upsert logic lives in
+// lib/billing/sync.ts, shared with the checkout-return fast path in
+// app/account-status/page.tsx so both call sites stay identical.
 // ─────────────────────────────────────────────────────────────
-
-function mapStripeSubscriptionStatus(
-  status: Stripe.Subscription.Status,
-): StripeSubscriptionSync["status"] | null {
-  switch (status) {
-    case "trialing":
-      return "trialing";
-    case "active":
-      return "active";
-    case "past_due":
-      return "past_due";
-    case "canceled":
-      return "cancelled";
-    default:
-      // incomplete, incomplete_expired, unpaid, paused — not modeled
-      // this pass; log and skip rather than guess a mapping.
-      return null;
-  }
-}
-
-function strOrNullLocal(v: unknown): string | null {
-  if (typeof v === "string" && v.length > 0) return v;
-  if (v !== null && typeof v === "object" && "id" in v) {
-    return (v as { id: string }).id ?? null;
-  }
-  return null;
-}
 
 async function handleCoachSubscriptionUpsert(
   sub: Stripe.Subscription,
   eventId: string,
   forceStatus?: "cancelled",
 ): Promise<void> {
-  const coachId = sub.metadata?.coachId;
-  if (!coachId) {
-    console.log(`[Stripe Webhook] Coach-plan subscription ${sub.id} has no metadata.coachId — skipping`);
+  const result = await syncCoachSubscriptionFromStripeSubscription(sub, eventId, forceStatus);
+  if (!result.ok) {
+    console.log(`[Stripe Webhook] ${result.detail} — skipping`);
     return;
   }
-
-  const item = sub.items?.data?.[0];
-  const priceId = item?.price?.id ?? null;
-
-  const status = forceStatus ?? mapStripeSubscriptionStatus(sub.status);
-  if (!status) {
-    console.log(`[Stripe Webhook] Subscription ${sub.id} has unmapped status '${sub.status}' — skipping`);
-    return;
-  }
-
-  await upsertCoachSubscriptionFromStripe({
-    coachId,
-    stripeCustomerId: strOrNullLocal(sub.customer),
-    stripeSubscriptionId: sub.id,
-    stripePriceId: priceId,
-    status,
-    currentPeriodStart: item?.current_period_start
-      ? new Date(item.current_period_start * 1000)
-      : null,
-    currentPeriodEnd: item?.current_period_end
-      ? new Date(item.current_period_end * 1000)
-      : null,
-    cancelAtPeriodEnd: sub.cancel_at_period_end ?? false,
-    cancelledAt: sub.canceled_at ? new Date(sub.canceled_at * 1000) : null,
-    eventId,
-  });
-
-  console.log(`[Stripe Webhook] Synced coach_subscriptions for coach ${coachId}: ${status}`);
+  console.log(`[Stripe Webhook] Synced coach_subscriptions for coach ${result.coachId}: ${result.status}`);
 }
 
 // invoice.paid / invoice.payment_failed don't reliably carry the same
@@ -152,7 +101,7 @@ async function handleCoachInvoiceEvent(
   eventId: string,
   outcome: "paid" | "payment_failed",
 ): Promise<void> {
-  const subscriptionId = strOrNullLocal(
+  const subscriptionId = strOrNull(
     (inv as unknown as Record<string, unknown>)["subscription"],
   );
   if (!subscriptionId) return;
@@ -698,13 +647,26 @@ export async function POST(req: NextRequest) {
   switch (event.type as (typeof HANDLED_EVENTS)[number] | string) {
 
     case "checkout.session.completed": {
-      // Coach-plan checkout classification is deliberately not wired here:
-      // checkout.session.completed does not carry a price ID without an
-      // extra expanded API call, and no checkout-session-creation route
-      // exists yet in this codebase to test against (self-serve coach
-      // signup is Phase 5, explicitly out of scope for this pass). This
-      // stays the existing client-payment path unchanged.
-      //
+      // checkout.session.completed doesn't carry a price ID without an
+      // extra expanded API call, so coach-plan classification here uses
+      // metadata.coachId instead — lib/billing/checkout.ts sets it on
+      // every coach Checkout Session it creates, and a client coaching-
+      // package checkout never has it. A coach's own account activation
+      // is handled by the subsequent customer.subscription.created event
+      // (whose subscription object DOES carry a real price id — routed
+      // through isCoachPlanPrice() below as usual) plus the synchronous
+      // fast path in app/account-status/page.tsx; this branch's only job
+      // for a coach checkout is to NOT run the client-enrollment side
+      // effects below.
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.metadata?.coachId) {
+        console.log(
+          `[Stripe Webhook] checkout.session.completed for coach ${session.metadata.coachId} — ` +
+          "skipping client-enrollment side effects (handled by customer.subscription.created)",
+        );
+        break;
+      }
+
       // Sprint 3B.1: Send welcome email to client + admin notification.
       // Both sends are non-fatal — the webhook ack is never blocked by email.
       //
@@ -743,7 +705,7 @@ export async function POST(req: NextRequest) {
 
     case "invoice.paid": {
       const inv = event.data.object as Stripe.Invoice;
-      const priceId = strOrNullLocal(inv.lines?.data?.[0]?.pricing?.price_details?.price);
+      const priceId = strOrNull(inv.lines?.data?.[0]?.pricing?.price_details?.price);
       if (isCoachPlanPrice(priceId)) {
         await handleCoachInvoiceEvent(inv, event.id, "paid");
       } else {
@@ -756,7 +718,7 @@ export async function POST(req: NextRequest) {
 
     case "invoice.payment_failed": {
       const inv = event.data.object as Stripe.Invoice;
-      const priceId = strOrNullLocal(inv.lines?.data?.[0]?.pricing?.price_details?.price);
+      const priceId = strOrNull(inv.lines?.data?.[0]?.pricing?.price_details?.price);
       if (isCoachPlanPrice(priceId)) {
         await handleCoachInvoiceEvent(inv, event.id, "payment_failed");
       } else {

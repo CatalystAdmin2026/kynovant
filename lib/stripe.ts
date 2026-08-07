@@ -68,8 +68,11 @@ function castAs<T>(v: unknown): T {
   return v as unknown as T;
 }
 
-// Safely resolve a Stripe expandable field (string id or expanded object)
-function strOrNull(v: unknown): string | null {
+// Safely resolve a Stripe expandable field (string id or expanded
+// object). Exported — lib/billing/sync.ts and app/api/stripe/webhook/
+// route.ts both need this exact same coercion and previously each kept
+// their own private copy.
+export function strOrNull(v: unknown): string | null {
   if (typeof v === "string" && v.length > 0) return v;
   if (v !== null && typeof v === "object" && "id" in v) {
     return (v as { id: string }).id ?? null;
@@ -186,38 +189,13 @@ export function packageFromPriceId(priceId: string | null): string {
   return PRICE_ID_TO_PACKAGE[priceId] ?? "";
 }
 
-// ─────────────────────────────────────────────────────────────
-// COACH-PLAN PRICE CLASSIFICATION
-//
-// Distinguishes a Kynovant coach-platform-seat Price ID from a
-// Catalyst Elite end-client coaching-package Price ID, so the same
-// webhook endpoint can route subscription/invoice events to the
-// correct handler. Deliberately env-driven, not hardcoded — no real
-// Stripe Price ID has been created for the coach plan yet (pricing
-// model is still an open product decision), so this set is empty
-// until STRIPE_COACH_PLAN_PRICE_IDS is configured. Until then, every
-// event is classified as the existing client-payment path, which is
-// exactly current behavior — zero risk of misclassifying a real event.
-//
-// Configure as a comma-separated list of price_... IDs:
-//   STRIPE_COACH_PLAN_PRICE_IDS=price_abc,price_def
-// ─────────────────────────────────────────────────────────────
-
-function coachPlanPriceIds(): Set<string> {
-  const raw = process.env.STRIPE_COACH_PLAN_PRICE_IDS ?? "";
-  return new Set(
-    raw
-      .split(",")
-      .map((id) => id.trim())
-      .filter((id) => id.length > 0),
-  );
-}
-
-/** True only if priceId is explicitly configured via STRIPE_COACH_PLAN_PRICE_IDS. */
-export function isCoachPlanPrice(priceId: string | null): boolean {
-  if (!priceId) return false;
-  return coachPlanPriceIds().has(priceId);
-}
+// Coach-plan price classification (distinguishing a Kynovant coach-
+// platform-seat Price ID from a Catalyst Elite end-client coaching-
+// package Price ID) has moved to lib/billing/prices.ts's
+// isCoachPlanPrice() — that module is this app's single Price ID
+// registry (Stripe Product → Price → Price ID → env var → app), and
+// duplicating a second price-classification mechanism here would
+// undermine that. Import isCoachPlanPrice from "@/lib/billing/prices".
 
 // ─────────────────────────────────────────────────────────────
 // GAS PAYLOAD
