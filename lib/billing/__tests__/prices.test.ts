@@ -8,7 +8,7 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 
-const ENV_VAR = "STRIPE_MONTHLY_PRICE_ID";
+const ENV_VAR = "KYNOVANT_STRIPE_MONTHLY_PRICE_ID";
 const originalValue = process.env[ENV_VAR];
 
 async function freshPricesModule() {

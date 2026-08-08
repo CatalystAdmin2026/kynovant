@@ -13,7 +13,7 @@
 
 import "server-only";
 import type Stripe from "stripe";
-import { stripe } from "@/lib/stripe";
+import { kynovantStripe } from "./stripe-client";
 import { getPlanPriceId, type CoachPlanKey } from "./prices";
 
 // 14-day free trial (requirement). Every Checkout Session this
@@ -59,7 +59,7 @@ export async function createCoachCheckoutSession(
     };
   }
 
-  const session = await stripe().checkout.sessions.create({
+  const session = await kynovantStripe().checkout.sessions.create({
     mode: "subscription",
     line_items: [{ price: priceId, quantity: 1 }],
     success_url: params.successUrl,
@@ -108,7 +108,7 @@ export async function retrieveCheckoutSession(
   sessionId: string,
 ): Promise<Stripe.Checkout.Session | null> {
   try {
-    return await stripe().checkout.sessions.retrieve(sessionId, {
+    return await kynovantStripe().checkout.sessions.retrieve(sessionId, {
       expand: ["subscription"],
     });
   } catch (err) {

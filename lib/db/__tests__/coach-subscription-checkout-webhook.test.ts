@@ -4,17 +4,21 @@
 // Same technique as the existing "Stripe webhook — duplicate delivery
 // is ignored" suite in coach-entitlement.test.ts: constructs a
 // signature-valid Stripe.Event locally via
-// stripe().webhooks.generateTestHeaderString() and POSTs it straight to
-// the real route handler. No live Stripe API call is made anywhere in
-// this file — signing and signature verification are both local HMAC
-// operations.
+// kynovantStripe().webhooks.generateTestHeaderString() and POSTs it
+// straight to the real route handler. No live Stripe API call is made
+// anywhere in this file — signing and signature verification are both
+// local HMAC operations. Every request carries ?__brand=kynovant since
+// there's no real kynovant.com hostname available in a test process —
+// see app/api/stripe/webhook/route.ts's resolveWebhookBrand().
 //
 // Proves the price registry (lib/billing/prices.ts) actually drives
-// webhook routing end-to-end: a subscription event on the configured
-// STRIPE_MONTHLY_PRICE_ID reaches coach_subscriptions; an unrelated
-// price id does not. Also proves the checkout.session.completed
-// classification fix — a coach-plan checkout (metadata.coachId set)
-// must never run the client-enrollment welcome-email side effects.
+// event handling end-to-end within the Kynovant branch: a subscription
+// event on the configured KYNOVANT_STRIPE_MONTHLY_PRICE_ID reaches
+// coach_subscriptions; an unrelated price id does not. Also proves
+// checkout.session.completed in the Kynovant branch never runs any
+// Catalyst client-enrollment logic (structurally impossible now — the
+// two branches are entirely separate functions — but this asserts the
+// actual log output as a concrete, observable check).
 // ─────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
@@ -25,13 +29,13 @@ import { getDb } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { users } from "../schema";
 import { coachSubscriptions } from "../schema-billing";
-import { stripe } from "@/lib/stripe";
+import { kynovantStripe } from "@/lib/billing/stripe-client";
 import { POST as stripeWebhookPost } from "@/app/api/stripe/webhook/route";
 
 const db = getDb();
 const coach = { id: "" };
 
-const ENV_VAR = "STRIPE_MONTHLY_PRICE_ID";
+const ENV_VAR = "KYNOVANT_STRIPE_MONTHLY_PRICE_ID";
 const originalPriceId = process.env[ENV_VAR];
 const TEST_PRICE_ID = `price_test_webhook_${randomUUID().slice(0, 8)}`;
 
@@ -71,8 +75,8 @@ afterEach(() => {
 });
 
 function buildSignedRequest(eventId: string, type: string, dataObject: Record<string, unknown>): NextRequest {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret) throw new Error("STRIPE_WEBHOOK_SECRET must be set for this test");
+  const secret = process.env.KYNOVANT_STRIPE_WEBHOOK_SECRET;
+  if (!secret) throw new Error("KYNOVANT_STRIPE_WEBHOOK_SECRET must be set for this test");
 
   const payload = JSON.stringify({
     id: eventId,
@@ -85,9 +89,9 @@ function buildSignedRequest(eventId: string, type: string, dataObject: Record<st
     pending_webhooks: 0,
     request: { id: null, idempotency_key: null },
   });
-  const signature = stripe().webhooks.generateTestHeaderString({ payload, secret });
+  const signature = kynovantStripe().webhooks.generateTestHeaderString({ payload, secret });
 
-  return new NextRequest("http://localhost/api/stripe/webhook", {
+  return new NextRequest("http://localhost/api/stripe/webhook?__brand=kynovant", {
     method: "POST",
     headers: { "stripe-signature": signature, "content-type": "application/json" },
     body: payload,
@@ -190,7 +194,7 @@ describe("Stripe webhook — coach-plan events are routed by the price registry"
     }
   });
 
-  it("checkout.session.completed with metadata.coachId skips client-enrollment side effects", async () => {
+  it("checkout.session.completed on the Kynovant branch never runs Catalyst client-enrollment logic", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     const res = await stripeWebhookPost(
@@ -209,9 +213,18 @@ describe("Stripe webhook — coach-plan events are routed by the price registry"
     );
     expect(res.status).toBe(200);
 
-    const skippedClientEnrollment = logSpy.mock.calls.some((call) =>
-      typeof call[0] === "string" && call[0].includes("skipping client-enrollment side effects"),
+    // The Kynovant branch logs a coach-specific confirmation and never
+    // reaches handleNewEnrollment (Catalyst-only, a different function
+    // entirely — this call site can't invoke it regardless, but the log
+    // output is a concrete, observable proof of which branch actually ran).
+    const loggedKynovantCheckout = logSpy.mock.calls.some((call) =>
+      typeof call[0] === "string" && call[0].includes("Kynovant checkout completed for coach"),
     );
-    expect(skippedClientEnrollment).toBe(true);
+    expect(loggedKynovantCheckout).toBe(true);
+
+    const loggedClientWelcome = logSpy.mock.calls.some((call) =>
+      typeof call[0] === "string" && call[0].includes("Welcome email sent"),
+    );
+    expect(loggedClientWelcome).toBe(false);
   });
 });

@@ -1097,14 +1097,14 @@ function StripeEventsTab({ diagnostic }: { diagnostic?: ReconciliationDiagnostic
         <div className="space-y-2">
           {[
             {
-              key: "STRIPE_SECRET_KEY",
-              where: "Stripe Dashboard → Developers → API Keys → Secret key",
-              note: "Server-side only. Never use NEXT_PUBLIC_ prefix.",
+              key: "CATALYST_STRIPE_SECRET_KEY",
+              where: "Catalyst's Stripe Dashboard → Developers → API Keys → Secret key",
+              note: "Server-side only. Never use NEXT_PUBLIC_ prefix. Separate from Kynovant's Stripe account.",
             },
             {
-              key: "STRIPE_WEBHOOK_SECRET",
-              where: "Stripe Dashboard → Developers → Webhooks → [endpoint] → Signing secret",
-              note: "Starts with whsec_. For local testing use the secret printed by stripe listen.",
+              key: "CATALYST_STRIPE_WEBHOOK_SECRET",
+              where: "Catalyst's Stripe Dashboard → Developers → Webhooks → [endpoint] → Signing secret",
+              note: "Starts with whsec_. For local testing use ?__brand=catalyst — see env.local.example.",
             },
           ].map(({ key, where, note }) => (
             <div key={key} className="bg-[#0d0e0f] border border-white/[0.05] px-4 py-3">
@@ -1131,7 +1131,7 @@ function StripeEventsTab({ diagnostic }: { diagnostic?: ReconciliationDiagnostic
             `Paste the production URL: ${PROD_WEBHOOK_URL}`,
             'Under "Select events", add all 6 events listed above',
             'Click "Add endpoint" to save',
-            'Open the endpoint → copy Signing secret (whsec_...) → paste into .env.local as STRIPE_WEBHOOK_SECRET',
+            'Open the endpoint → copy Signing secret (whsec_...) → paste into .env.local as CATALYST_STRIPE_WEBHOOK_SECRET',
             'Restart the dev server — webhooks will now be verified and logged',
           ].map((step, i) => (
             <li key={i} className="flex items-start gap-3 text-xs text-gray-500">

@@ -38,15 +38,16 @@
 
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { hostBrand, type Brand } from "@/lib/domain-routing";
 
 // ─────────────────────────────────────────────────────────────
 // DOMAIN CLASSIFICATION
+//
+// Hostname → brand classification itself lives in lib/domain-routing.ts
+// (shared with app/api/stripe/webhook/route.ts) — this file only adds
+// the page-routing-specific pieces: the ?__brand= local/preview
+// override and the URL constants used for cross-brand redirects.
 // ─────────────────────────────────────────────────────────────
-
-type Brand = "kynovant" | "catalyst" | null;
-
-const KYNOVANT_HOSTS = new Set(["kynovant.com", "www.kynovant.com"]);
-const CATALYST_HOSTS = new Set(["catalystcoachingelite.com", "www.catalystcoachingelite.com"]);
 
 const KYNOVANT_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://kynovant.com";
 const CATALYST_URL = process.env.NEXT_PUBLIC_CATALYST_URL ?? "https://catalystcoachingelite.com";
@@ -86,13 +87,6 @@ const KYNOVANT_ONLY_PREFIXES = [
 
 function matchesPrefix(pathname: string, prefixes: string[]): boolean {
   return prefixes.some((p) => pathname === p || pathname.startsWith(p + "/"));
-}
-
-function hostBrand(hostname: string): Brand {
-  const host = hostname.toLowerCase();
-  if (KYNOVANT_HOSTS.has(host)) return "kynovant";
-  if (CATALYST_HOSTS.has(host)) return "catalyst";
-  return null;
 }
 
 // Resolves which brand's routing rules apply. Unrecognized hosts

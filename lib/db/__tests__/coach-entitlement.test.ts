@@ -33,7 +33,7 @@ import {
 } from "../coach-subscription-service";
 import { assertCoachEntitled } from "@/lib/auth/guards";
 import type { PublicUser } from "@/lib/supabase/session";
-import { stripe } from "@/lib/stripe";
+import { kynovantStripe } from "@/lib/billing/stripe-client";
 import { POST as stripeWebhookPost } from "@/app/api/stripe/webhook/route";
 
 const db = getDb();
@@ -226,8 +226,13 @@ describe("activateCoachBeta / suspendCoachSubscription — manual activation", (
 
 describe("Stripe webhook — duplicate delivery is ignored", () => {
   it("processes an event once, then ignores a redelivery of the same event ID", async () => {
-    const secret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!secret) throw new Error("STRIPE_WEBHOOK_SECRET must be set for this test");
+    // Idempotency is a shared, brand-agnostic gate (see
+    // app/api/stripe/webhook/route.ts's recordProcessedEvent) — routed
+    // via ?__brand=kynovant here purely because a test process has no
+    // real hostname to classify by; the gate itself runs identically
+    // for either brand.
+    const secret = process.env.KYNOVANT_STRIPE_WEBHOOK_SECRET;
+    if (!secret) throw new Error("KYNOVANT_STRIPE_WEBHOOK_SECRET must be set for this test");
 
     const eventId = `evt_test_${randomUUID()}`;
     const payload = JSON.stringify({
@@ -253,10 +258,10 @@ describe("Stripe webhook — duplicate delivery is ignored", () => {
       request: { id: null, idempotency_key: null },
     });
 
-    const signature = stripe().webhooks.generateTestHeaderString({ payload, secret });
+    const signature = kynovantStripe().webhooks.generateTestHeaderString({ payload, secret });
 
     function buildRequest(): NextRequest {
-      return new NextRequest("http://localhost/api/stripe/webhook", {
+      return new NextRequest("http://localhost/api/stripe/webhook?__brand=kynovant", {
         method: "POST",
         headers: { "stripe-signature": signature, "content-type": "application/json" },
         body: payload,

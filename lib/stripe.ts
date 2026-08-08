@@ -1,28 +1,37 @@
 // ─────────────────────────────────────────────────────────────
 // SERVER-ONLY — never import this file from a client component.
-// It initializes the Stripe SDK with the secret key, which must
-// never reach the browser bundle.
+// It initializes the Stripe SDK for the Catalyst Coaching Elite Stripe
+// account (client coaching-package payments) with CATALYST_STRIPE_SECRET_KEY,
+// which must never reach the browser bundle.
+//
+// This is a DIFFERENT Stripe account from Kynovant's coach-platform
+// billing — see lib/billing/stripe-client.ts's kynovantStripe() for
+// that one. Catalyst and Kynovant are separate businesses with
+// separate Stripe accounts; never pass a value read from one business's
+// env vars to the other's client, and never use catalystStripe() for
+// anything under lib/billing/ (Kynovant's domain).
 // ─────────────────────────────────────────────────────────────
 
 import Stripe from "stripe";
 
-// Lazily accessed so Next.js build doesn't fail when STRIPE_SECRET_KEY
-// is absent — it will fail at runtime (server-side only) if missing.
-function getStripe(): Stripe {
-  const key = process.env.STRIPE_SECRET_KEY;
+// Lazily accessed so Next.js build doesn't fail when
+// CATALYST_STRIPE_SECRET_KEY is absent — it will fail at runtime
+// (server-side only) if missing.
+function getCatalystStripe(): Stripe {
+  const key = process.env.CATALYST_STRIPE_SECRET_KEY;
   if (!key) {
     throw new Error(
-      "STRIPE_SECRET_KEY is not set. Add it to .env.local — see env.local.example.",
+      "CATALYST_STRIPE_SECRET_KEY is not set. Add it to .env.local — see env.local.example.",
     );
   }
   return new Stripe(key, { apiVersion: "2026-06-24.dahlia" });
 }
 
 // Singleton — module-level cache safe in server context
-let _stripe: Stripe | null = null;
-export function stripe(): Stripe {
-  if (!_stripe) _stripe = getStripe();
-  return _stripe;
+let _catalystStripe: Stripe | null = null;
+export function catalystStripe(): Stripe {
+  if (!_catalystStripe) _catalystStripe = getCatalystStripe();
+  return _catalystStripe;
 }
 
 // ─────────────────────────────────────────────────────────────

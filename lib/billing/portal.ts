@@ -12,7 +12,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { stripe } from "@/lib/stripe";
+import { kynovantStripe } from "./stripe-client";
 
 export type CreateBillingPortalSessionResult =
   | { ok: true; url: string }
@@ -23,7 +23,7 @@ export async function createBillingPortalSession(
   returnUrl: string,
 ): Promise<CreateBillingPortalSessionResult> {
   try {
-    const session = await stripe().billingPortal.sessions.create({
+    const session = await kynovantStripe().billingPortal.sessions.create({
       customer: stripeCustomerId,
       return_url: returnUrl,
     });

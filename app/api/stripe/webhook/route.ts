@@ -1,51 +1,60 @@
 // ─────────────────────────────────────────────────────────────
 // Stripe Webhook Handler — server-only
 //
-// Handles BOTH Catalyst Coaching Elite client payments (coaching
-// packages — Standard/Founding Member/Legacy/Executive Performance)
-// AND Kynovant coach-platform SaaS billing (see the "COACH SUBSCRIPTION
-// EVENT HANDLING" section below) through this one endpoint —
-// isCoachPlanPrice() (lib/billing/prices.ts) and metadata.coachId
-// distinguish which path a given event belongs to. Registered in
-// Stripe Dashboard under:
-//   Developers → Webhooks → Add endpoint
-//   URL: https://www.catalystcoachingelite.com/api/stripe/webhook
-//   Events: checkout.session.completed, customer.subscription.*,
-//           invoice.paid, invoice.payment_failed
+// Catalyst Coaching Elite and Kynovant are two separate businesses
+// with two separate Stripe accounts (separate secret keys, separate
+// webhook signing secrets, separate registered endpoints). This ONE
+// route file serves BOTH of their webhook URLs — Next.js's own
+// domain-based rewriting maps each hostname's /api/stripe/webhook path
+// here (see proxy.ts; API routes are deliberately excluded from that
+// proxy's page-routing logic, so this file does its own classification):
+//   https://www.catalystcoachingelite.com/api/stripe/webhook
+//   https://www.kynovant.com/api/stripe/webhook
 //
-// Local testing:
-//   stripe listen --forward-to localhost:3000/api/stripe/webhook
-//   (requires Stripe CLI — brew install stripe/stripe-cli/stripe)
+// POST() below resolves which business a request belongs to from its
+// HOSTNAME FIRST — before reading any Stripe secret or running any
+// business-specific logic — then dispatches to handleCatalystWebhook()
+// or handleKynovantWebhook(), two fully independent functions that each
+// use only their own business's env vars (CATALYST_STRIPE_* /
+// KYNOVANT_STRIPE_*) and only their own business's data (Catalyst:
+// client coaching-package payments, emails, Drive workspace, Sheets
+// logging. Kynovant: coach_subscriptions). Neither function calls the
+// other, imports the other's Stripe client, or touches the other's
+// side effects.
 //
-// Persistence (Phase 2B — active):
-//   After verifying the Stripe signature and normalizing the event,
-//   the normalized payload is POSTed to the Stripe Events GAS script
-//   (STRIPE_EVENTS_GAS_URL). The GAS script writes the event to the
-//   "Stripe Events" sheet tab. Missing or unavailable GAS URL is
-//   non-fatal — the webhook always returns 200 to Stripe.
+// Local testing (no real DNS, so hostname alone can't classify):
+//   stripe listen --forward-to "localhost:3000/api/stripe/webhook?__brand=kynovant"
+//   stripe listen --forward-to "localhost:3000/api/stripe/webhook?__brand=catalyst"
+//   (requires Stripe CLI — brew install stripe/stripe-cli/stripe; the
+//   ?__brand= override mirrors proxy.ts's own local/preview convention)
 //
-// Sprint 3B.1 — Welcome Email + Admin Notification (active):
-//   checkout.session.completed → sendClientWelcomeEmail + sendAdminNotificationEmail
-//   Both emails are non-fatal: failures are logged but never block the 200 ack.
+// ── Catalyst-specific behavior (unchanged from before this split) ──
+// Persistence (Phase 2B): the normalized payload is POSTed to the
+//   Stripe Events GAS script (STRIPE_EVENTS_GAS_URL — a Catalyst-only
+//   Sheets integration, not a Stripe credential, so not renamed).
+//   Missing/unavailable GAS URL is non-fatal.
+// Sprint 3B.1: checkout.session.completed → sendClientWelcomeEmail +
+//   sendAdminNotificationEmail. Non-fatal.
+// Sprint 3B.2: checkout.session.completed → createClientWorkspace via
+//   GAS. Non-fatal.
+// TODO (Phase 3): Map NormalizedStripeEvent fields to Lead pipeline
+//   updates in app/admin/page.tsx.
 //
-// Sprint 3B.2 — Google Drive Client Workspace (active):
-//   checkout.session.completed → createClientWorkspace via GAS (drive-workspace-backend.gs)
-//   Non-fatal: failures are logged but never block the 200 ack.
-//
-// TODO (Phase 3 — Pipeline automation):
-//   Map NormalizedStripeEvent fields to Lead pipeline updates in
-//   app/admin/page.tsx after persistence is confirmed working:
-//     checkout.session.completed  → advance Lead to "Paid" stage
-//     subscription.created        → set Lead.stripeStatus = "active"
-//     subscription.deleted        → set Lead.stripeStatus = "cancelled"
-//     invoice.payment_failed      → set Lead.stripeStatus = "past_due"
+// ── Kynovant-specific behavior ──
+// customer.subscription.* / invoice.* → lib/billing/sync.ts, gated by
+//   isCoachPlanPrice() (lib/billing/prices.ts) as defense-in-depth
+//   within this already-Kynovant-only branch (is this specific price
+//   one of Kynovant's own registered plans). checkout.session.completed
+//   only logs — account activation happens via
+//   customer.subscription.created plus the synchronous fast path in
+//   app/account-status/page.tsx.
 // ─────────────────────────────────────────────────────────────
 
 import { Resend } from "resend";
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import {
-  stripe,
+  catalystStripe,
   normalizeStripeEvent,
   toGasPayload,
   packageFromPriceId,
@@ -53,6 +62,8 @@ import {
   HANDLED_EVENTS,
 } from "@/lib/stripe";
 import type { GasStripePayload, NormalizedStripeEvent } from "@/lib/stripe";
+import { kynovantStripe } from "@/lib/billing/stripe-client";
+import { hostBrand, type Brand } from "@/lib/domain-routing";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { processedStripeEvents, coachSubscriptions } from "@/lib/db/schema-billing";
@@ -571,102 +582,85 @@ async function handleNewEnrollment(normalized: NormalizedStripeEvent): Promise<v
   }
 }
 
-// Never cache — every webhook POST must be processed fresh
-export const dynamic = "force-dynamic";
+// ─────────────────────────────────────────────────────────────
+// IDEMPOTENCY — shared table, checked before ANY side effect in either
+// branch. Stripe redelivers on any non-2xx response or timeout as
+// routine production behavior, not an edge case (see
+// docs/catalyst-os-scale-readiness-audit.md finding #6, which flagged
+// this exact gap). Stripe event IDs are globally unique (not merely
+// per-account), so one shared table is safe to reuse across both
+// Stripe accounts — this is purely a dedup ledger, not a place either
+// business's data lives, so sharing it does not violate the "never
+// activate/modify the other business's records" requirement.
+// ─────────────────────────────────────────────────────────────
 
-export async function POST(req: NextRequest) {
-  // 1. Read raw body — must be the unmodified bytes Stripe signed
-  const rawBody = await req.text();
-
-  // 2. Validate signature header
-  const sigHeader = req.headers.get("stripe-signature");
-  if (!sigHeader) {
-    console.warn("[Stripe Webhook] Request missing stripe-signature header");
-    return NextResponse.json(
-      { error: "Missing stripe-signature header" },
-      { status: 400 },
-    );
-  }
-
-  // 3. Validate env config
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!webhookSecret) {
-    console.error(
-      "[Stripe Webhook] STRIPE_WEBHOOK_SECRET not set — " +
-      "add it to .env.local and see env.local.example.",
-    );
-    return NextResponse.json(
-      { error: "Webhook not configured on server" },
-      { status: 503 },
-    );
-  }
-
-  // 4. Verify Stripe signature (prevents spoofed events)
-  let event: Stripe.Event;
-  try {
-    event = stripe().webhooks.constructEvent(rawBody, sigHeader, webhookSecret);
-  } catch (err) {
-    console.error(
-      "[Stripe Webhook] Signature verification failed:",
-      err instanceof Error ? err.message : err,
-    );
-    return NextResponse.json(
-      { error: "Webhook signature invalid" },
-      { status: 400 },
-    );
-  }
-
-  // 5. Idempotency gate — checked before ANY side effect. Stripe redelivers
-  // on any non-2xx response or timeout as routine production behavior, not
-  // an edge case (see docs/catalyst-os-scale-readiness-audit.md finding #6,
-  // which flagged this exact gap — this closes it for every event type
-  // handled below, both the existing client-payment path and the coach-
-  // subscription path). Zero rows returned means this event ID was already
-  // processed; ack Stripe and skip straight to persistence-logging.
+async function recordProcessedEvent(eventId: string, eventType: string): Promise<boolean> {
   const db = getDb();
-  const idempotencyResult = await db
+  const result = await db
     .insert(processedStripeEvents)
-    .values({ stripeEventId: event.id, eventType: event.type })
+    .values({ stripeEventId: eventId, eventType })
     .onConflictDoNothing({ target: processedStripeEvents.stripeEventId })
     .returning({ stripeEventId: processedStripeEvents.stripeEventId });
+  return result.length === 0; // true = already processed
+}
 
-  const alreadyProcessed = idempotencyResult.length === 0;
-  if (alreadyProcessed) {
+// ─────────────────────────────────────────────────────────────
+// BRAND RESOLUTION — see this file's header comment. Runs before any
+// Stripe secret is read.
+// ─────────────────────────────────────────────────────────────
+
+function resolveWebhookBrand(req: NextRequest): Brand {
+  const fromHost = hostBrand(req.nextUrl.hostname);
+  if (fromHost) return fromHost;
+
+  // No real DNS in local dev / preview deployments — mirrors proxy.ts's
+  // own ?__brand= override for the identical problem on page routes.
+  const override = req.nextUrl.searchParams.get("__brand");
+  if (override === "kynovant" || override === "catalyst") return override;
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// CATALYST HANDLER — client coaching-package payments. Uses only
+// CATALYST_STRIPE_* env vars and catalystStripe(). Never reads a
+// KYNOVANT_STRIPE_* var, never touches coach_subscriptions.
+// ─────────────────────────────────────────────────────────────
+
+async function handleCatalystWebhook(rawBody: string, sigHeader: string): Promise<NextResponse> {
+  const webhookSecret = process.env.CATALYST_STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error(
+      "[Stripe Webhook] CATALYST_STRIPE_WEBHOOK_SECRET not set — " +
+      "add it to .env.local and see env.local.example.",
+    );
+    return NextResponse.json({ error: "Webhook not configured on server" }, { status: 503 });
+  }
+
+  let event: Stripe.Event;
+  try {
+    event = catalystStripe().webhooks.constructEvent(rawBody, sigHeader, webhookSecret);
+  } catch (err) {
+    console.error(
+      "[Stripe Webhook] Catalyst signature verification failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return NextResponse.json({ error: "Webhook signature invalid" }, { status: 400 });
+  }
+
+  if (await recordProcessedEvent(event.id, event.type)) {
     console.log(`[Stripe Webhook] Duplicate event ignored: ${event.id} (${event.type})`);
     return NextResponse.json({ received: true, duplicate: true });
   }
 
-  // 6. Normalize and log
   const normalized = normalizeStripeEvent(event);
   console.log(
-    `[Stripe Webhook] ${event.type} — eventId: ${event.id}`,
+    `[Stripe Webhook] (Catalyst) ${event.type} — eventId: ${event.id}`,
     "\n  normalized:", JSON.stringify(normalized, null, 2),
   );
 
-  // 7. Handle each event type
   switch (event.type as (typeof HANDLED_EVENTS)[number] | string) {
-
-    case "checkout.session.completed": {
-      // checkout.session.completed doesn't carry a price ID without an
-      // extra expanded API call, so coach-plan classification here uses
-      // metadata.coachId instead — lib/billing/checkout.ts sets it on
-      // every coach Checkout Session it creates, and a client coaching-
-      // package checkout never has it. A coach's own account activation
-      // is handled by the subsequent customer.subscription.created event
-      // (whose subscription object DOES carry a real price id — routed
-      // through isCoachPlanPrice() below as usual) plus the synchronous
-      // fast path in app/account-status/page.tsx; this branch's only job
-      // for a coach checkout is to NOT run the client-enrollment side
-      // effects below.
-      const session = event.data.object as Stripe.Checkout.Session;
-      if (session.metadata?.coachId) {
-        console.log(
-          `[Stripe Webhook] checkout.session.completed for coach ${session.metadata.coachId} — ` +
-          "skipping client-enrollment side effects (handled by customer.subscription.created)",
-        );
-        break;
-      }
-
+    case "checkout.session.completed":
       // Sprint 3B.1: Send welcome email to client + admin notification.
       // Both sends are non-fatal — the webhook ack is never blocked by email.
       //
@@ -674,69 +668,40 @@ export async function POST(req: NextRequest) {
       // stage to "Paid", create a "Send Onboarding Link" task.
       await handleNewEnrollment(normalized);
       break;
-    }
 
     case "customer.subscription.created":
-    case "customer.subscription.updated": {
-      const sub = event.data.object as Stripe.Subscription;
-      const priceId = sub.items?.data?.[0]?.price?.id ?? null;
-      if (isCoachPlanPrice(priceId)) {
-        await handleCoachSubscriptionUpsert(sub, event.id);
-      } else {
-        // TODO (Phase 3): Set Lead.stripeStatus = "active", set nextBilling
-        // from current_period_end, set enrolledDate.
-        console.log(`[Stripe Webhook] ${event.type} — TODO: sync client lead`);
-      }
+    case "customer.subscription.updated":
+      // TODO (Phase 3): Set Lead.stripeStatus = "active", set nextBilling
+      // from current_period_end, set enrolledDate.
+      console.log(`[Stripe Webhook] ${event.type} — TODO: sync client lead`);
       break;
-    }
 
-    case "customer.subscription.deleted": {
-      const sub = event.data.object as Stripe.Subscription;
-      const priceId = sub.items?.data?.[0]?.price?.id ?? null;
-      if (isCoachPlanPrice(priceId)) {
-        await handleCoachSubscriptionUpsert(sub, event.id, "cancelled");
-      } else {
-        // TODO (Phase 3): Set Lead.stripeStatus = "cancelled",
-        // advance pipeline to "Cancelled", create a win-back task.
-        console.log("[Stripe Webhook] subscription.deleted — TODO: mark client lead cancelled");
-      }
+    case "customer.subscription.deleted":
+      // TODO (Phase 3): Set Lead.stripeStatus = "cancelled",
+      // advance pipeline to "Cancelled", create a win-back task.
+      console.log("[Stripe Webhook] subscription.deleted — TODO: mark client lead cancelled");
       break;
-    }
 
-    case "invoice.paid": {
-      const inv = event.data.object as Stripe.Invoice;
-      const priceId = strOrNull(inv.lines?.data?.[0]?.pricing?.price_details?.price);
-      if (isCoachPlanPrice(priceId)) {
-        await handleCoachInvoiceEvent(inv, event.id, "paid");
-      } else {
-        // TODO (Phase 3): Confirm MRR for this billing period.
-        // Clear any "past_due" flag. Log payment timestamp.
-        console.log("[Stripe Webhook] invoice.paid — TODO: confirm client MRR");
-      }
+    case "invoice.paid":
+      // TODO (Phase 3): Confirm MRR for this billing period.
+      // Clear any "past_due" flag. Log payment timestamp.
+      console.log("[Stripe Webhook] invoice.paid — TODO: confirm client MRR");
       break;
-    }
 
-    case "invoice.payment_failed": {
-      const inv = event.data.object as Stripe.Invoice;
-      const priceId = strOrNull(inv.lines?.data?.[0]?.pricing?.price_details?.price);
-      if (isCoachPlanPrice(priceId)) {
-        await handleCoachInvoiceEvent(inv, event.id, "payment_failed");
-      } else {
-        // TODO (Phase 3): Set Lead.stripeStatus = "past_due".
-        // Create an urgent "Payment Issue" task in the admin dashboard.
-        // Consider: trigger retry-payment email via Stripe's Smart Retries.
-        console.log("[Stripe Webhook] invoice.payment_failed — TODO: flag client lead past_due");
-      }
+    case "invoice.payment_failed":
+      // TODO (Phase 3): Set Lead.stripeStatus = "past_due".
+      // Create an urgent "Payment Issue" task in the admin dashboard.
+      // Consider: trigger retry-payment email via Stripe's Smart Retries.
+      console.log("[Stripe Webhook] invoice.payment_failed — TODO: flag client lead past_due");
       break;
-    }
 
     default:
-      // Log non-handled events without error — Stripe sends many event types
       console.log(`[Stripe Webhook] Unhandled event type: ${event.type} — ignoring`);
       break;
   }
 
-  // 8. Persist to Google Sheets via GAS (non-blocking, non-fatal)
+  // Persist to Google Sheets via GAS (non-blocking, non-fatal). Catalyst-
+  // only — Kynovant has no equivalent Sheets integration.
   const gasUrl = process.env.STRIPE_EVENTS_GAS_URL;
   if (gasUrl) {
     await persistToGas(gasUrl, toGasPayload(normalized));
@@ -747,6 +712,141 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Always return 200 so Stripe doesn't retry
   return NextResponse.json({ received: true });
+}
+
+// ─────────────────────────────────────────────────────────────
+// KYNOVANT HANDLER — coach-platform SaaS billing. Uses only
+// KYNOVANT_STRIPE_* env vars and kynovantStripe(). Never reads a
+// CATALYST_STRIPE_* var, never sends a client email, never posts to
+// the Catalyst Sheets/Drive GAS integrations.
+// ─────────────────────────────────────────────────────────────
+
+async function handleKynovantWebhook(rawBody: string, sigHeader: string): Promise<NextResponse> {
+  const webhookSecret = process.env.KYNOVANT_STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error(
+      "[Stripe Webhook] KYNOVANT_STRIPE_WEBHOOK_SECRET not set — " +
+      "add it to .env.local and see env.local.example.",
+    );
+    return NextResponse.json({ error: "Webhook not configured on server" }, { status: 503 });
+  }
+
+  let event: Stripe.Event;
+  try {
+    event = kynovantStripe().webhooks.constructEvent(rawBody, sigHeader, webhookSecret);
+  } catch (err) {
+    console.error(
+      "[Stripe Webhook] Kynovant signature verification failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return NextResponse.json({ error: "Webhook signature invalid" }, { status: 400 });
+  }
+
+  if (await recordProcessedEvent(event.id, event.type)) {
+    console.log(`[Stripe Webhook] Duplicate event ignored: ${event.id} (${event.type})`);
+    return NextResponse.json({ received: true, duplicate: true });
+  }
+
+  console.log(`[Stripe Webhook] (Kynovant) ${event.type} — eventId: ${event.id}`);
+
+  switch (event.type) {
+    case "checkout.session.completed": {
+      // Every Kynovant Checkout Session sets metadata.coachId
+      // (lib/billing/checkout.ts) — account activation itself happens
+      // via customer.subscription.created below (and the synchronous
+      // fast path in app/account-status/page.tsx), so this event is
+      // log-only.
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (!session.metadata?.coachId) {
+        console.log(
+          `[Stripe Webhook] Kynovant checkout.session.completed ${session.id} has no metadata.coachId — unexpected, skipping.`,
+        );
+        break;
+      }
+      console.log(`[Stripe Webhook] Kynovant checkout completed for coach ${session.metadata.coachId}`);
+      break;
+    }
+
+    case "customer.subscription.created":
+    case "customer.subscription.updated": {
+      const sub = event.data.object as Stripe.Subscription;
+      const priceId = sub.items?.data?.[0]?.price?.id ?? null;
+      if (!isCoachPlanPrice(priceId)) {
+        console.log(`[Stripe Webhook] Kynovant ${event.type} on unrecognized price ${priceId ?? "(none)"} — skipping.`);
+        break;
+      }
+      await handleCoachSubscriptionUpsert(sub, event.id);
+      break;
+    }
+
+    case "customer.subscription.deleted": {
+      const sub = event.data.object as Stripe.Subscription;
+      const priceId = sub.items?.data?.[0]?.price?.id ?? null;
+      if (!isCoachPlanPrice(priceId)) {
+        console.log(`[Stripe Webhook] Kynovant ${event.type} on unrecognized price ${priceId ?? "(none)"} — skipping.`);
+        break;
+      }
+      await handleCoachSubscriptionUpsert(sub, event.id, "cancelled");
+      break;
+    }
+
+    case "invoice.paid": {
+      const inv = event.data.object as Stripe.Invoice;
+      const priceId = strOrNull(inv.lines?.data?.[0]?.pricing?.price_details?.price);
+      if (!isCoachPlanPrice(priceId)) {
+        console.log(`[Stripe Webhook] Kynovant invoice.paid on unrecognized price ${priceId ?? "(none)"} — skipping.`);
+        break;
+      }
+      await handleCoachInvoiceEvent(inv, event.id, "paid");
+      break;
+    }
+
+    case "invoice.payment_failed": {
+      const inv = event.data.object as Stripe.Invoice;
+      const priceId = strOrNull(inv.lines?.data?.[0]?.pricing?.price_details?.price);
+      if (!isCoachPlanPrice(priceId)) {
+        console.log(`[Stripe Webhook] Kynovant invoice.payment_failed on unrecognized price ${priceId ?? "(none)"} — skipping.`);
+        break;
+      }
+      await handleCoachInvoiceEvent(inv, event.id, "payment_failed");
+      break;
+    }
+
+    default:
+      console.log(`[Stripe Webhook] Unhandled Kynovant event type: ${event.type} — ignoring`);
+      break;
+  }
+
+  return NextResponse.json({ received: true });
+}
+
+// Never cache — every webhook POST must be processed fresh
+export const dynamic = "force-dynamic";
+
+export async function POST(req: NextRequest) {
+  const rawBody = await req.text();
+
+  const sigHeader = req.headers.get("stripe-signature");
+  if (!sigHeader) {
+    console.warn("[Stripe Webhook] Request missing stripe-signature header");
+    return NextResponse.json({ error: "Missing stripe-signature header" }, { status: 400 });
+  }
+
+  // Brand resolution FIRST — before either business's Stripe secret is
+  // read and before any business-specific logic runs. See this file's
+  // header comment for the full rationale.
+  const brand = resolveWebhookBrand(req);
+  if (!brand) {
+    console.error(
+      `[Stripe Webhook] Could not classify host "${req.nextUrl.hostname}" as catalyst or kynovant, ` +
+      "and no ?__brand override was supplied — refusing to process.",
+    );
+    return NextResponse.json({ error: "Unrecognized webhook host" }, { status: 400 });
+  }
+
+  if (brand === "catalyst") {
+    return handleCatalystWebhook(rawBody, sigHeader);
+  }
+  return handleKynovantWebhook(rawBody, sigHeader);
 }
