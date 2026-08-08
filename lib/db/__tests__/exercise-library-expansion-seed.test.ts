@@ -134,6 +134,76 @@ describe("reviewed Exercise Library expansion seed data", () => {
     }
   });
 
+  it("keeps mixed-family computed metadata honest for audited variants", () => {
+    const bySlug = new Map(EXERCISES.map((exercise) => [exercise.slug, exercise]));
+
+    expect(bySlug.get("contralateral-single-leg-romanian-deadlift")).toMatchObject({
+      primary: "hamstrings",
+      movementPattern: "hip_hinge",
+      resistanceType: "dumbbell",
+      equipment: ["dumbbells"],
+    });
+    expect(bySlug.get("nordic-curl-assisted-band")).toMatchObject({
+      primary: "hamstrings",
+      movementPattern: "knee_flexion",
+      resistanceType: "band",
+      equipment: ["resistance-band"],
+    });
+    expect(bySlug.get("razor-curl")).toMatchObject({
+      primary: "hamstrings",
+      movementPattern: "knee_flexion",
+      resistanceType: "bodyweight",
+      equipment: ["glute-ham-developer"],
+    });
+    expect(bySlug.get("machine-hip-hinge-hamstring-bias")).toMatchObject({
+      movementPattern: "hip_hinge",
+      resistanceType: "machine",
+      equipment: ["machine-back-extension"],
+    });
+    expect(bySlug.get("bent-knee-bodyweight-calf-raise")).toMatchObject({
+      primary: "calves",
+      movementPattern: "gait",
+      resistanceType: "bodyweight",
+      equipment: [],
+    });
+    expect(bySlug.get("farmer-carry-calf-raise")).toMatchObject({
+      primary: "calves",
+      movementPattern: "gait",
+      resistanceType: "dumbbell",
+      equipment: ["dumbbells"],
+    });
+    expect(bySlug.get("wall-ankle-mobilization")).toMatchObject({
+      primary: "calves",
+      movementPattern: "gait",
+      resistanceType: "bodyweight",
+      equipment: [],
+    });
+    expect(bySlug.get("banded-lat-stretch")).toMatchObject({
+      primary: "lats",
+      movementPattern: "shoulder_adduction",
+      resistanceType: "band",
+      equipment: ["resistance-band"],
+    });
+    expect(bySlug.get("pec-doorway-stretch")).toMatchObject({
+      primary: "chest",
+      movementPattern: "shoulder_adduction",
+      resistanceType: "bodyweight",
+      equipment: [],
+    });
+    expect(bySlug.get("mini-band-glute-bridge")).toMatchObject({
+      primary: "glutes",
+      movementPattern: "hip_extension",
+      resistanceType: "band",
+      equipment: ["mini-band"],
+    });
+    expect(bySlug.get("scapular-wall-slide-with-lift-off")).toMatchObject({
+      primary: "upper_back",
+      movementPattern: "scapular_retraction",
+      resistanceType: "bodyweight",
+      equipment: [],
+    });
+  });
+
   it("references only valid equipment catalog slugs", () => {
     const knownEquipment = new Set([
       ...sharedEquipmentSlugs(),

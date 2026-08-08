@@ -137,13 +137,16 @@ function normalizedExerciseText(slug: string, name: string) {
 
 function inferResistanceType(seed: FamilySeed, slug: string, name: string): ResistanceType | undefined {
   const text = normalizedExerciseText(slug, name);
-  if (seed.classification === "cardio" || seed.classification === "mobility") return seed.resistanceType;
+  if (seed.classification === "cardio") return seed.resistanceType;
+  if (text.includes("farmer-carry-calf-raise")) return "dumbbell";
+  if (text.includes("band") || text.includes("mini-band")) return "band";
+  if (text.includes("slider") || text.includes("stability-ball") || text.includes("nordic") || text.includes("razor-curl") || text.includes("glute-ham")) return "bodyweight";
+  if (seed.classification === "mobility") return seed.resistanceType ?? "bodyweight";
   if (text.includes("smith")) return "smith_machine";
   if (text.includes("plate-loaded")) return "plate_loaded";
   if (text.includes("landmine")) return "landmine";
   if (text.includes("machine") || text.includes("hack-squat") || text.includes("leg-press") || text.includes("pendulum") || text.includes("v-squat")) return "machine";
   if (text.includes("cable") || text.includes("pulldown")) return "cable";
-  if (text.includes("band") || text.includes("mini-band")) return "band";
   if (text.includes("kettlebell")) return "kettlebell";
   if (text.includes("dumbbell") || text.includes("db")) return "dumbbell";
   if (text.includes("ez-bar") || text.includes("barbell") || text.includes("zercher") || text.includes("clean") || text.includes("snatch") || text.includes("jerk")) return "barbell";
@@ -187,7 +190,7 @@ function inferEquipment(seed: FamilySeed, slug: string, name: string): readonly 
   if (text.includes("sled")) equipment.add("sled");
 
   if (text.includes("cable") || text.includes("pulldown")) equipment.add("cable-station");
-  if (text.includes("ankle") || text.includes("kickback") || text.includes("hip-adduction") || text.includes("hip-abduction")) equipment.add("ankle-strap");
+  if (text.includes("kickback") || text.includes("hip-adduction") || text.includes("hip-abduction") || (text.includes("cable") && text.includes("ankle"))) equipment.add("ankle-strap");
   if (text.includes("lat-pulldown")) equipment.add("lat-pulldown-machine");
   if (text.includes("machine-chest-press") || text.includes("plate-loaded-chest-press")) equipment.add("machine-chest-press");
   if (text.includes("machine-row") || text.includes("iso-lateral-machine-row") || text.includes("plate-loaded-high-row") || text.includes("plate-loaded-low-row")) equipment.add("machine-row");
@@ -197,6 +200,7 @@ function inferEquipment(seed: FamilySeed, slug: string, name: string): readonly 
   if (text.includes("machine-preacher-curl") || text.includes("machine-curl")) equipment.add("machine-curl");
   if (text.includes("machine-dip") || text.includes("assisted-dip")) equipment.add("dip-station");
   if (text.includes("machine-glute-kickback")) equipment.add("hip-thrust-machine");
+  if (text.includes("machine-hip-hinge")) equipment.add("machine-back-extension");
   if (text.includes("machine-hip-adduction")) equipment.add("machine-hip-adduction");
   if (text.includes("machine-hip-abduction")) equipment.add("machine-hip-abduction");
   if (text.includes("machine-calf-raise") || text.includes("donkey-calf-raise")) equipment.add("machine-calf-raise");
@@ -206,8 +210,9 @@ function inferEquipment(seed: FamilySeed, slug: string, name: string): readonly 
   if (text.includes("smith")) equipment.add("smith-machine");
   if (text.includes("pendulum") || text.includes("v-squat")) equipment.add("hack-squat-machine");
   if (text.includes("leg-curl") && text.includes("seated")) equipment.add("seated-leg-curl-machine");
-  if (text.includes("leg-curl") && text.includes("lying")) equipment.add("lying-leg-curl-machine");
+  if (text.includes("leg-curl") && text.includes("lying") && !text.includes("banded")) equipment.add("lying-leg-curl-machine");
   if (text.includes("glute-ham")) equipment.add("glute-ham-developer");
+  if (text.includes("razor-curl")) equipment.add("glute-ham-developer");
   if (text.includes("reverse-hyper")) equipment.add("reverse-hyper-machine");
   if (text.includes("45-degree-back-extension")) equipment.add("back-extension-bench");
   if (text.includes("captain")) equipment.add("captains-chair");
@@ -224,12 +229,29 @@ function inferEquipment(seed: FamilySeed, slug: string, name: string): readonly 
   if (text.includes("bench") || text.includes("incline") || text.includes("seal-row")) equipment.add(text.includes("floor") ? "yoga-mat" : "adjustable-bench");
   if (text.includes("sandbag")) equipment.add("sandbag");
 
+  if (text.includes("bodyweight-calf-raise") || text.includes("wall-ankle-mobilization") || text.includes("half-kneeling-ankle-mobilization")) return [];
+  if (text.includes("banded-ankle-distraction")) return ["resistance-band"];
+  if (text.includes("pec-doorway") || text.includes("wall-pec-minor") || text.includes("wall-slide")) return [];
+  if (text.includes("farmer-carry-calf-raise")) {
+    equipment.delete("machine-calf-raise");
+    equipment.add("dumbbells");
+  }
+
   if (equipment.size > 0) return [...equipment];
   return seed.equipment;
 }
 
 function inferMovementPattern(seed: FamilySeed, slug: string, name: string): MovementPattern {
   const text = normalizedExerciseText(slug, name);
+  if (text.includes("calf-raise") || text.includes("tibialis")) return "gait";
+  if (text.includes("romanian-deadlift") || text.includes("hip-hinge") || text.includes("pull-through")) return "hip_hinge";
+  if (text.includes("leg-curl") || text.includes("nordic") || text.includes("razor-curl") || text.includes("glute-ham")) return "knee_flexion";
+  if (text.includes("terminal-knee-extension")) return "knee_extension";
+  if (text.includes("ankle-mobilization") || text.includes("ankle-distraction")) return "gait";
+  if (text.includes("couch-stretch") || text.includes("pigeon-stretch") || text.includes("90-90") || text.includes("adductor-rock") || text.includes("frog-rock") || text.includes("hamstring-floss")) return "hip_flexion";
+  if (text.includes("pec-doorway") || text.includes("pec-minor") || text.includes("lat-stretch")) return "shoulder_adduction";
+  if (text.includes("wall-slide") || text.includes("bird-dog-row-reach")) return "scapular_retraction";
+  if (text.includes("glute-bridge")) return "hip_extension";
   if (text.includes("face-pull") || text.includes("pull-apart") || text.includes("reverse-fly") || text.includes("rear-delt")) return "scapular_retraction";
   if (text.includes("external-rotation") || text.includes("dislocate")) return "external_rotation";
   if (text.includes("pulldown") || text.includes("pull-up")) return "pull_vertical";
@@ -238,12 +260,9 @@ function inferMovementPattern(seed: FamilySeed, slug: string, name: string): Mov
   if (text.includes("lateral-raise") || text.includes("scaption")) return "shoulder_abduction";
   if (text.includes("curl") && !text.includes("leg-curl")) return "elbow_flexion";
   if (text.includes("triceps") || text.includes("pushdown") || text.includes("dip")) return "elbow_extension";
-  if (text.includes("leg-curl") || text.includes("nordic") || text.includes("razor-curl") || text.includes("glute-ham")) return "knee_flexion";
-  if (text.includes("terminal-knee-extension")) return "knee_extension";
   if (text.includes("lunge")) return "lunge";
   if (text.includes("split-squat") || text.includes("single-leg") || text.includes("pistol") || text.includes("shrimp") || text.includes("step-down") || text.includes("step-up") || text.includes("skater")) return "squat_unilateral";
   if (text.includes("squat") || text.includes("leg-press")) return "squat_bilateral";
-  if (text.includes("romanian-deadlift") || text.includes("hip-hinge") || text.includes("pull-through")) return "hip_hinge";
   if (text.includes("hip-thrust") || text.includes("frog-pump") || text.includes("glute-kickback") || text.includes("hip-extension") || text.includes("hyperextension")) return "hip_extension";
   if (text.includes("pallof")) return "anti_rotation";
   if (text.includes("plank") || text.includes("hold") || text.includes("dead-bug") || text.includes("hollow") || text.includes("body-saw")) return "iso_hold";
@@ -263,6 +282,15 @@ function inferClassification(seed: FamilySeed, slug: string, name: string): Exer
 
 function inferPrimary(seed: FamilySeed, slug: string, name: string): MuscleGroup {
   const text = normalizedExerciseText(slug, name);
+  if (text.includes("couch-stretch")) return "hip_flexors";
+  if (text.includes("ankle-mobilization") || text.includes("ankle-distraction")) return "calves";
+  if (text.includes("pigeon-stretch") || text.includes("90-90") || text.includes("glute-bridge")) return "glutes";
+  if (text.includes("frog-rock") || text.includes("adductor-rock")) return "adductors";
+  if (text.includes("hamstring-floss")) return "hamstrings";
+  if (text.includes("lat-stretch")) return "lats";
+  if (text.includes("pec-doorway") || text.includes("pec-minor")) return "chest";
+  if (text.includes("wall-slide") || text.includes("bird-dog-row-reach")) return "upper_back";
+  if (text.includes("band-dislocate")) return "front_deltoid";
   if (text.includes("tibialis")) return "tibialis";
   if (text.includes("hip-adduction") || text.includes("adductor") || text.includes("copenhagen")) return "adductors";
   if (text.includes("hip-abduction") || text.includes("abductor") || text.includes("lateral-walk") || text.includes("monster-walk") || text.includes("clamshell")) return "abductors";
@@ -276,8 +304,19 @@ function inferPrimary(seed: FamilySeed, slug: string, name: string): MuscleGroup
 
 function inferSecondary(seed: FamilySeed, primary: MuscleGroup, slug: string, name: string): readonly MuscleGroup[] | undefined {
   const text = normalizedExerciseText(slug, name);
-  const secondary = new Set<MuscleGroup>(seed.secondary ?? []);
+  const secondary = new Set<MuscleGroup>(seed.classification === "mobility" ? [] : seed.secondary ?? []);
   secondary.delete(primary);
+  if (seed.classification === "mobility") {
+    if (primary === "spinal_erectors") secondary.add("obliques");
+    if (primary === "hip_flexors") secondary.add("glutes");
+    if (primary === "glutes") secondary.add("hip_flexors");
+    if (primary === "adductors") secondary.add("hip_flexors");
+    if (primary === "lats" || primary === "chest") secondary.add("front_deltoid");
+    if (primary === "upper_back") secondary.add("rear_deltoid");
+    if (primary === "front_deltoid") secondary.add("lateral_deltoid");
+    if (primary === "forearms") secondary.add("brachioradialis");
+    if (primary === "hamstrings") secondary.add("glutes");
+  }
   if (text.includes("tibialis")) secondary.add("calves");
   if (primary === "adductors") {
     secondary.add("hip_flexors");
