@@ -231,12 +231,36 @@ export async function buildExerciseCandidateSet(
     };
   });
 
-  const targetMuscleGroups = Array.from(new Set([...CORE_MUSCLE_GROUPS, ...brief.musclePriorities]));
-  const selected = new Map<string, ExerciseCandidate>();
+  return selectCandidatesFromPool(allCandidates, brief.musclePriorities);
+}
+
+// Pure selection/capping logic, split out from buildExerciseCandidateSet
+// so it can be exercised directly with a synthetic in-memory pool —
+// including one large enough to trigger the global cap — without a
+// live database. buildExerciseCandidateSet's own DB query, tenant
+// filter, equipment filter, and exclusions all run before this; nothing
+// about tenant visibility, equipment compatibility, or exclusions lives
+// here or is affected by it.
+export function selectCandidatesFromPool(
+  allCandidates: ExerciseCandidate[],
+  musclePriorities: readonly MuscleGroup[],
+): ExerciseCandidateSet {
+  const targetMuscleGroups = Array.from(new Set([...CORE_MUSCLE_GROUPS, ...musclePriorities]));
   const gaps: CandidateCoverageGap[] = [];
 
+  // Each bucket below is independently capped (12/16 per muscle group,
+  // 15 mobility, 8 cardio) and deterministically ordered — unchanged
+  // from before. Gap detection also stays exactly as before: it reads
+  // each bucket's own pre-global-cap match count, so whether a category
+  // has ANY real, eligible matches is untouched by anything past this
+  // point.
+  interface CategoryBucket {
+    candidates: ExerciseCandidate[];
+  }
+  const buckets: CategoryBucket[] = [];
+
   for (const mg of targetMuscleGroups) {
-    const cap = brief.musclePriorities.includes(mg) ? MAX_PER_MUSCLE_GROUP_PRIORITY : MAX_PER_MUSCLE_GROUP;
+    const cap = musclePriorities.includes(mg) ? MAX_PER_MUSCLE_GROUP_PRIORITY : MAX_PER_MUSCLE_GROUP;
     const matches = allCandidates
       .filter((c) => c.primaryMuscleGroup === mg)
       .sort(sortCandidates)
@@ -247,7 +271,7 @@ export async function buildExerciseCandidateSet(
         reason: `No active, equipment-and-level-compatible exercises are available for ${mg.replace(/_/g, " ")} under the current brief.`,
       });
     }
-    for (const c of matches) selected.set(c.id, c);
+    buckets.push({ candidates: matches });
   }
 
   const mobilityMatches = allCandidates
@@ -260,7 +284,7 @@ export async function buildExerciseCandidateSet(
       reason: "No active mobility/warmup exercises are available in the library under the current brief. Warmup sections may need to be built manually.",
     });
   }
-  for (const c of mobilityMatches) selected.set(c.id, c);
+  buckets.push({ candidates: mobilityMatches });
 
   const cardioMatches = allCandidates
     .filter((c) => c.isCardio)
@@ -272,12 +296,69 @@ export async function buildExerciseCandidateSet(
       reason: "No active cardio/conditioning exercises are available in the library under the current brief.",
     });
   }
-  for (const c of cardioMatches) selected.set(c.id, c);
+  buckets.push({ candidates: cardioMatches });
 
-  let finalCandidates = Array.from(selected.values()).sort(sortCandidates);
-  if (finalCandidates.length > TARGET_MAX_CANDIDATES) {
-    finalCandidates = finalCandidates.slice(0, TARGET_MAX_CANDIDATES);
+  // ─────────────────────────────────────────────────────────────
+  // GLOBAL CAP — round-robin across category buckets, not a flat
+  // sort-and-slice.
+  //
+  // Every bucket above is already independently capped and
+  // deterministically ordered. When the union of all buckets fits
+  // within TARGET_MAX_CANDIDATES, every candidate below survives and
+  // this produces exactly the same final set as before (the common
+  // case — most briefs, and every previously-passing test, never
+  // approach 150 total candidates).
+  //
+  // When the union EXCEEDS the cap, the previous implementation sorted
+  // the entire merged set by classification-then-name and sliced the
+  // first TARGET_MAX_CANDIDATES — a global truncation blind to category
+  // boundaries. That could silently drop an ENTIRE category to zero
+  // survivors merely because its candidates happened to sort after
+  // enough candidates from OTHER categories filled every slot (e.g. a
+  // category whose matches are all "isolation"-classified sorts after
+  // every "compound" candidate from every other category) — with no
+  // gap recorded, since gaps above are computed from each bucket's
+  // pre-global-cap match count, not its post-truncation survivor count.
+  // That is exactly the "silently drop a required category because
+  // earlier categories consumed the cap" failure this round-robin
+  // exists to make structurally impossible: it takes at most one
+  // candidate from each not-yet-exhausted bucket per pass, so every
+  // bucket that has at least one match is guaranteed at least one
+  // surviving candidate before any bucket receives a second — as long
+  // as the number of non-empty buckets doesn't itself exceed
+  // TARGET_MAX_CANDIDATES (at most ~16 buckets today: up to 14 core
+  // muscle groups plus any priority additions, mobility, and cardio —
+  // an order of magnitude under the 150 cap).
+  //
+  // The final list is re-sorted by sortCandidates exactly as before, so
+  // round-robin changes only WHICH candidates survive when supply
+  // exceeds the cap, never the returned list's presentation order.
+  // ─────────────────────────────────────────────────────────────
+  const selected = new Map<string, ExerciseCandidate>();
+  const bucketIndex = buckets.map(() => 0);
+  for (;;) {
+    if (selected.size >= TARGET_MAX_CANDIDATES) break;
+    let madeProgress = false;
+    for (let i = 0; i < buckets.length; i++) {
+      if (selected.size >= TARGET_MAX_CANDIDATES) break;
+      const bucket = buckets[i];
+      // Skip candidates this bucket shares with an already-claimed
+      // bucket (an exercise can be, e.g., both isMobility and have a
+      // primaryMuscleGroup) so one turn never wastes a bucket's slot on
+      // a candidate that cost it nothing new.
+      while (bucketIndex[i] < bucket.candidates.length && selected.has(bucket.candidates[bucketIndex[i]].id)) {
+        bucketIndex[i]++;
+      }
+      if (bucketIndex[i] < bucket.candidates.length) {
+        selected.set(bucket.candidates[bucketIndex[i]].id, bucket.candidates[bucketIndex[i]]);
+        bucketIndex[i]++;
+        madeProgress = true;
+      }
+    }
+    if (!madeProgress) break; // every bucket exhausted — nothing left to round-robin
   }
+
+  const finalCandidates = Array.from(selected.values()).sort(sortCandidates);
 
   return { candidates: finalCandidates, gaps };
 }

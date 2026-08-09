@@ -798,6 +798,15 @@ describe("staged generation orchestration", () => {
     expect(weekRows.find((w) => w.weekNumber === 3)?.weekJson).toBeNull();
   });
 
+  // This test resumes generation for weeks 3-4, each a real model call
+  // (no fixture provider in this suite — see provider.ts's
+  // PROGRAM_GENERATOR_USE_FIXTURE) — the default 5000ms test timeout
+  // left this real, network-latency-bound test almost no margin even
+  // before the Exercise Library grew to ~647 rows; the correctly larger
+  // (still capped at 150 — see exercise-candidates.ts) candidate set now
+  // in every prompt tips it over. Not a capping/exhaustion defect — a
+  // real API call taking longer than a too-tight timeout — so only the
+  // timeout is widened here, nothing about candidate selection.
   it("resuming a failed generation continues from the first incomplete week without regenerating completed weeks", async () => {
     const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 4, daysPerWeek: 2 };
     const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
@@ -880,7 +889,7 @@ describe("staged generation orchestration", () => {
     const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
     expect(draftRow.status).toBe("ready_for_review");
     expect((draftRow.draftJson as GeneratedProgramDraft).weeks).toHaveLength(4);
-  });
+  }, 30000);
 
   it("claimFailedDraftForResume closes the double-click resume race — only one concurrent caller wins the claim", async () => {
     const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 1, daysPerWeek: 1 };
@@ -914,17 +923,39 @@ describe("staged generation orchestration", () => {
       experienceLevel: "beginner",
     };
 
-    // Determine exactly which candidates a bodyweight+beginner brief
-    // would otherwise see, then exclude every single one — the only way
-    // to deterministically drive the real candidate set to zero without
-    // mutating shared seed data other tests depend on.
-    const baseline = await buildExerciseCandidateSet(narrowBrief, coachA.id);
-    expect(baseline.candidates.length).toBeGreaterThan(0);
-    expect(baseline.candidates.length).toBeLessThanOrEqual(100); // brief.excludedExerciseIds cap
+    // Drive the real candidate set to true exhaustion by repeatedly
+    // excluding whatever comes back, not just a single call's own
+    // output. buildExerciseCandidateSet's per-muscle-group/mobility/
+    // cardio caps (12/16/15/8 — see exercise-candidates.ts) are
+    // deliberately preserved: they bound how many NEW candidates any one
+    // call can return, so if a category's real supply exceeds its cap,
+    // one call's output undercounts the true matching set and excluding
+    // only that output would leave real, unexcluded matches behind on
+    // the next call — exactly the false "exhausted" signal a bigger
+    // Exercise Library exposed here once the mobility category's real
+    // bodyweight+beginner supply grew past its cap of 15. Looping until
+    // a call returns nothing new converges on the true, full exclusion
+    // set regardless of library size, without weakening or bypassing
+    // any per-category cap.
+    const excludedIds = new Set<string>();
+    for (let i = 0; i < 20; i++) {
+      const { candidates } = await buildExerciseCandidateSet(
+        { ...narrowBrief, excludedExerciseIds: [...excludedIds] },
+        coachA.id,
+      );
+      if (candidates.length === 0) break;
+      for (const c of candidates) excludedIds.add(c.id);
+    }
+    expect(excludedIds.size).toBeGreaterThan(0);
+    // excludedExerciseIds is capped at 100 (contracts.ts) — this narrow
+    // a brief's true matching pool must stay within that bound for
+    // "exclude everything real, then confirm zero" to be expressible as
+    // a single ProgramGenerationBrief at all.
+    expect(excludedIds.size).toBeLessThanOrEqual(100);
 
     const exhaustedBrief: ProgramGenerationBrief = {
       ...narrowBrief,
-      excludedExerciseIds: baseline.candidates.map((c) => c.id),
+      excludedExerciseIds: [...excludedIds],
     };
     const confirmedEmpty = await buildExerciseCandidateSet(exhaustedBrief, coachA.id);
     expect(confirmedEmpty.candidates).toHaveLength(0);

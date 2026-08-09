@@ -19,10 +19,12 @@ import {
   buildExerciseCandidateSet,
   verifyWeekAgainstCandidates,
   verifyProgramDraftAgainstCandidates,
+  selectCandidatesFromPool,
   type ExerciseCandidate,
 } from "../exercise-candidates";
 import { buildWeekGenerationPrompt } from "../prompt";
 import type { ProgramGenerationBrief, ModelWeekDraft, ModelProgramDraft } from "../contracts";
+import type { MuscleGroup } from "@/lib/db/schema-exercise";
 
 const db = getDb();
 
@@ -340,5 +342,197 @@ describe("verifyProgramDraftAgainstCandidates — same rules, regenerate-day's s
     for (const c of bodyweightOnly) {
       expect(c.resistanceType === null || c.resistanceType === "bodyweight").toBe(true);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// selectCandidatesFromPool — global-cap fairness (real-library defect,
+// found once the Exercise Library grew to ~647 rows post Seed 011)
+//
+// Pure, synchronous, in-memory — no DB — so a synthetic pool large
+// enough to actually exceed TARGET_MAX_CANDIDATES (150) can be built
+// directly, deterministically, without inserting 150+ real rows into
+// the shared database. buildExerciseCandidateSet's own DB query,
+// tenant filter, equipment filter, and exclusions all run BEFORE this
+// function and are untouched by anything below — these tests only
+// exercise the selection/capping algorithm itself.
+//
+// THE PROVEN DEFECT (previous implementation): every per-category
+// bucket (per muscle group, mobility, cardio) was independently capped
+// and merged into one Map, then the GLOBAL cap was applied by sorting
+// the entire merged set by classification-then-name and slicing the
+// first 150 — a truncation blind to category boundaries. Coverage gaps
+// were (and still are) computed from each bucket's PRE-global-cap match
+// count, so a category with real matches that got entirely sliced away
+// by the global cap produced no gap warning: a silent, complete drop of
+// a required category purely because other categories' candidates
+// happened to sort earlier.
+// ─────────────────────────────────────────────────────────────
+
+let candidateCounter = 0;
+function makeCandidate(overrides: Partial<ExerciseCandidate> & { primaryMuscleGroup: MuscleGroup | null }): ExerciseCandidate {
+  candidateCounter++;
+  return {
+    id: `synthetic-${candidateCounter}-${randomUUID()}`,
+    name: `Synthetic Candidate ${candidateCounter}`,
+    alternateNames: [],
+    secondaryMuscleGroups: [],
+    movementPattern: "push_horizontal",
+    classification: "compound",
+    resistanceType: null,
+    difficulty: "beginner",
+    isCardio: false,
+    isMobility: false,
+    highJointStress: [],
+    defaultPrescription: null,
+    ...overrides,
+  };
+}
+
+// All 14 groups selectCandidatesFromPool always targets (mirrors
+// CORE_MUSCLE_GROUPS in exercise-candidates.ts — not exported, so
+// listed here; any drift would show up as an unexpected gap in the
+// "no muscle-group gaps" assertion below, which would catch it).
+const ALL_CORE_MUSCLE_GROUPS: MuscleGroup[] = [
+  "chest", "lats", "upper_back", "front_deltoid", "lateral_deltoid", "rear_deltoid",
+  "biceps", "triceps", "quadriceps", "hamstrings", "glutes", "calves",
+  "rectus_abdominis", "obliques",
+];
+
+describe("selectCandidatesFromPool — global cap no longer silently drops a whole category", () => {
+  it("guarantees at least one survivor for every category with real matches, even when supply exceeds the global cap and that category's own candidates would sort last", () => {
+    // 13 muscle groups at their full per-category cap (12), all
+    // "compound" classification (sorts FIRST) — 156 candidates, already
+    // over TARGET_MAX_CANDIDATES(150) on its own.
+    const heavyGroups = ALL_CORE_MUSCLE_GROUPS.slice(0, 13);
+    const starvedGroup = ALL_CORE_MUSCLE_GROUPS[13]; // "obliques"
+
+    const pool: ExerciseCandidate[] = [];
+    for (const mg of heavyGroups) {
+      for (let i = 0; i < 12; i++) {
+        pool.push(makeCandidate({ primaryMuscleGroup: mg, classification: "compound" }));
+      }
+    }
+    // The starved category: only 3 real matches, but "isolation"
+    // classification — under the OLD flat classification-then-name
+    // sort, EVERY "compound" candidate above sorts before ALL THREE of
+    // these, so with 156 compound candidates already exceeding the 150
+    // cap, a flat slice(0, 150) would keep zero of them.
+    for (let i = 0; i < 3; i++) {
+      pool.push(makeCandidate({ primaryMuscleGroup: starvedGroup, classification: "isolation" }));
+    }
+    expect(pool.length).toBe(159); // 156 + 3, safely over the 150 cap
+
+    const { candidates, gaps } = selectCandidatesFromPool(pool, []);
+
+    // Global cap is still enforced exactly.
+    expect(candidates.length).toBe(150);
+
+    // THE FIX: the starved category is not silently zeroed out.
+    const starvedSurvivors = candidates.filter((c) => c.primaryMuscleGroup === starvedGroup);
+    expect(starvedSurvivors.length).toBeGreaterThanOrEqual(1);
+
+    // Every one of the 14 core muscle groups had at least one real
+    // match in this synthetic pool, so there must be no muscle-group
+    // gap at all — including no gap for the starved category (it DID
+    // have matches; it was merely at risk of losing all of them to the
+    // global cap, which is exactly what this test proves no longer
+    // happens).
+    const muscleGroupGaps = gaps.filter((g) => (ALL_CORE_MUSCLE_GROUPS as string[]).includes(g.category));
+    expect(muscleGroupGaps).toEqual([]);
+
+    // Deterministic output ordering is unaffected by the fix — still
+    // classification-then-name.
+    for (let i = 1; i < candidates.length; i++) {
+      const rank = (c: ExerciseCandidate) =>
+        c.classification === "compound" ? 0 : c.classification === "power" ? 1 : c.classification === "skill" ? 2 : 3;
+      const prevRank = rank(candidates[i - 1]);
+      const curRank = rank(candidates[i]);
+      expect(prevRank <= curRank).toBe(true);
+    }
+  });
+
+  it("is deterministic: the same oversized pool produces the identical candidate id set and order on repeated calls", () => {
+    const pool: ExerciseCandidate[] = [];
+    for (const mg of ALL_CORE_MUSCLE_GROUPS) {
+      for (let i = 0; i < 12; i++) {
+        pool.push(makeCandidate({ primaryMuscleGroup: mg, classification: i % 2 === 0 ? "compound" : "isolation" }));
+      }
+    }
+    expect(pool.length).toBe(168); // 14 * 12, over the 150 cap
+
+    const first = selectCandidatesFromPool(pool, []);
+    const second = selectCandidatesFromPool(pool, []);
+    expect(second.candidates.map((c) => c.id)).toEqual(first.candidates.map((c) => c.id));
+    expect(second.gaps).toEqual(first.gaps);
+  });
+
+  it("under uniform oversupply (every category equally over cap), round-robin still gives every category fair representation, not just the first ones processed", () => {
+    const pool: ExerciseCandidate[] = [];
+    for (const mg of ALL_CORE_MUSCLE_GROUPS) {
+      for (let i = 0; i < 12; i++) {
+        pool.push(makeCandidate({ primaryMuscleGroup: mg, classification: "compound" }));
+      }
+    }
+    expect(pool.length).toBe(168);
+
+    const { candidates } = selectCandidatesFromPool(pool, []);
+    expect(candidates.length).toBe(150);
+
+    const countByGroup = new Map<string, number>();
+    for (const c of candidates) {
+      if (!c.primaryMuscleGroup) continue;
+      countByGroup.set(c.primaryMuscleGroup, (countByGroup.get(c.primaryMuscleGroup) ?? 0) + 1);
+    }
+    // 150 / 14 groups = ~10-11 each — every group must survive with a
+    // near-even share, not "first 12 groups get their full 12, last 2
+    // groups get nothing" (what a naive flat-slice would tend toward
+    // when every candidate shares the same classification, since ties
+    // then fall to a global name sort with no category awareness).
+    expect(countByGroup.size).toBe(14);
+    for (const count of countByGroup.values()) {
+      expect(count).toBeGreaterThanOrEqual(10);
+    }
+  });
+
+  it("preserves per-category caps: a non-priority group never contributes more than 12, a priority group never more than 16", () => {
+    const pool: ExerciseCandidate[] = [];
+    for (let i = 0; i < 20; i++) {
+      pool.push(makeCandidate({ primaryMuscleGroup: "chest", classification: "compound" }));
+      pool.push(makeCandidate({ primaryMuscleGroup: "lats", classification: "compound" }));
+    }
+
+    const { candidates } = selectCandidatesFromPool(pool, ["lats"]);
+    const chestCount = candidates.filter((c) => c.primaryMuscleGroup === "chest").length;
+    const latsCount = candidates.filter((c) => c.primaryMuscleGroup === "lats").length;
+    expect(chestCount).toBe(12); // non-priority cap
+    expect(latsCount).toBe(16); // priority cap — unchanged by this fix
+  });
+
+  it("regression: when total real matches are within the global cap, every match survives (identical to pre-fix behavior) — most briefs never approach 150", () => {
+    const pool: ExerciseCandidate[] = [
+      makeCandidate({ primaryMuscleGroup: "chest" }),
+      makeCandidate({ primaryMuscleGroup: "chest" }),
+      makeCandidate({ primaryMuscleGroup: "lats" }),
+      makeCandidate({ primaryMuscleGroup: null, isMobility: true }),
+      makeCandidate({ primaryMuscleGroup: null, isCardio: true }),
+    ];
+    const { candidates } = selectCandidatesFromPool(pool, []);
+    expect(candidates.length).toBe(pool.length);
+    expect(new Set(candidates.map((c) => c.id))).toEqual(new Set(pool.map((c) => c.id)));
+  });
+
+  it("still reports a real gap for a core muscle group with zero matches, even in an oversized pool", () => {
+    const pool: ExerciseCandidate[] = [];
+    // Every core group except "glutes" gets matches; "glutes" gets none.
+    for (const mg of ALL_CORE_MUSCLE_GROUPS) {
+      if (mg === "glutes") continue;
+      for (let i = 0; i < 12; i++) {
+        pool.push(makeCandidate({ primaryMuscleGroup: mg, classification: "compound" }));
+      }
+    }
+
+    const { gaps } = selectCandidatesFromPool(pool, []);
+    expect(gaps.some((g) => g.category === "glutes")).toBe(true);
   });
 });
