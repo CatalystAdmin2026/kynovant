@@ -520,7 +520,7 @@ export default async function OverviewPage() {
       <section aria-label="Coach metrics">
         <SectionHeader eyebrow="Portfolio" title="Coach Metrics" />
         <DashboardCard className="p-5">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <MetricTile label="Active Clients" value={data.activeClientCount} />
             <MetricTile label="With Program" value={clientsWithPrograms} />
             <MetricTile label="Workouts Today" value={data.workoutsCompletedToday} tone="gold" />
@@ -548,8 +548,8 @@ export default async function OverviewPage() {
             {portfolioSegments.map((segment) => (
               <div key={segment.label} className="border border-white/[0.05] bg-[#101213] px-3 py-3">
                 <div className="mb-2 flex items-center gap-2">
-                  <span className={`h-1.5 w-1.5 rounded-full ${SEVERITY_DOT[segment.severity]}`} />
-                  <p className="truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${SEVERITY_DOT[segment.severity]}`} />
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35 leading-tight">
                     {segment.label}
                   </p>
                 </div>
