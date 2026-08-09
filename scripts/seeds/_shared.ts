@@ -156,6 +156,24 @@ export async function seedEquipment(
   return new Map(rows.map((e) => [e.slug, e.id]));
 }
 
+// Inserts canonical Kynovant Exercise Library content — never a
+// coach's private data. scope MUST be "system" (shared-library
+// visibility) and coachCreated MUST be false (this row was not
+// authored by a coach) for every row this function inserts.
+//
+// Previously this function set neither scope nor coachCreated: true was
+// hardcoded, and scope was left to the column default ("coach"), with
+// created_by left at its default (null). That produced rows that were
+// scope='coach' with no owner — under the AI Program Generator's
+// tenant-scoped exercise resolution (lib/program-generator/exercise-
+// resolution.ts, lib/program-generator/exercise-candidates.ts), a
+// coach-scope row is visible ONLY to the coach matching created_by, so
+// an ownerless one is visible to nobody. Every seed file that calls
+// this function inherited the defect (fixed once, in the shared
+// helper, rather than per seed file — see scripts/repairs/orphaned-
+// system-exercises.ts for the one-time repair of rows already seeded
+// before this fix, and scripts/repairs/canonical-seed-exercise-
+// slugs.ts for how that repair recognizes which slugs are canonical).
 export async function seedExercises(
   exerciseDefs: readonly ExerciseDef[],
   equipmentMap: Map<string, string>,
@@ -192,7 +210,11 @@ export async function seedExercises(
         // loosening the seed data's own immutability.
         alternateNames: e.alternateNames ? [...e.alternateNames] : undefined,
         status: "active" as const,
-        coachCreated: true,
+        // Canonical Kynovant library content — see this function's own
+        // header comment for why these two fields, specifically, must
+        // never be left at their column defaults ("coach" / true).
+        scope: "system" as const,
+        coachCreated: false,
         primaryMuscleGroup: primaryMuscleBySlug.get(e.slug) ?? null,
       })),
     )

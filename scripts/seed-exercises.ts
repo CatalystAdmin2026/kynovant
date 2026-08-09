@@ -497,7 +497,12 @@ async function main() {
       EXERCISES.map((e) => ({
         ...e,
         status: "active" as const,
-        coachCreated: true,
+        // Canonical Kynovant library content, same as scripts/seeds/
+        // _shared.ts's seedExercises() — see that function's header
+        // comment for why scope/coachCreated must be set explicitly
+        // rather than left at their "coach"/true column defaults.
+        scope: "system" as const,
+        coachCreated: false,
       })),
     )
     .onConflictDoNothing();

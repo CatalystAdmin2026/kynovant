@@ -3,8 +3,9 @@
 //
 // The reviewed, canonical set of exercise slugs the bulk Exercise
 // Library seed pipeline (scripts/seed-exercises.ts and
-// scripts/seeds/001-upper-push.ts through 010-ai-vocabulary-coverage.ts)
-// inserts as shared library content — never a coach's private data.
+// scripts/seeds/001-upper-push.ts through
+// 011-reviewed-library-expansion.ts) inserts as shared library
+// content — never a coach's private data.
 //
 // This is the second half of orphaned-system-exercises.ts's safety
 // predicate: scope='coach' AND created_by IS NULL alone can't
@@ -13,16 +14,16 @@
 // membership in this set can, since only the seed pipeline could ever
 // have produced a row with one of these exact slugs AND no owner.
 //
-// Slugs are read directly from each seed file's own reviewed source
-// text — never hand-copied into a second, driftable list — using the
-// same slug-extraction approach already established in this codebase
-// by lib/db/__tests__/exercise-library-p0-remediation.test.ts's
-// exerciseSlugsFromSource(). Three files (008, 009, 010) already have a
-// pure, side-effect-free "-data.ts" companion built for exactly this
-// kind of reuse (see that same test file for precedent) — those are
+// Slugs are read directly from each seed file's own reviewed source —
+// never hand-copied into a second, driftable list. Four files (008,
+// 009, 010, 011) have a pure, side-effect-free "-data.ts" companion
+// (008-010) or a pure, side-effect-free EXERCISES export (011 — its
+// EXERCISES is `FAMILIES.flatMap(...)`, a computed array, not a
+// literal — see lib/db/__tests__/exercise-library-p0-remediation.test.ts
+// for the same import-the-pure-module precedent) — those four are
 // imported directly. The remaining eight files define their EXERCISES
-// array inline, alongside a live-database-connecting seed runner (they
-// import scripts/seeds/_shared.ts, which opens a real
+// array as a literal inline, alongside a live-database-connecting seed
+// runner (they import scripts/seeds/_shared.ts, which opens a real
 // DATABASE_URL_DIRECT connection as a side effect of module
 // evaluation) — this repair reads their source text instead of
 // importing them as modules, so it never needs a database connection
@@ -39,6 +40,7 @@ import { join } from "node:path";
 import { EXERCISES as KNEE_FLEXION_EXERCISES } from "../seeds/008-knee-flexion-data";
 import { EXERCISES as LAUNCH_CRITICAL_EXERCISES } from "../seeds/009-launch-critical-families-data";
 import { EXERCISES as AI_VOCAB_EXERCISES } from "../seeds/010-ai-vocabulary-coverage-data";
+import { EXERCISES as REVIEWED_EXPANSION_EXERCISES } from "../seeds/011-reviewed-library-expansion-data";
 
 // Files whose EXERCISES array is defined inline (no pure data-only
 // companion) — read as plain source text, never imported as a module.
@@ -108,6 +110,7 @@ export function getCanonicalSeedExerciseSlugs(): Set<string> {
     ...KNEE_FLEXION_EXERCISES,
     ...LAUNCH_CRITICAL_EXERCISES,
     ...AI_VOCAB_EXERCISES,
+    ...REVIEWED_EXPANSION_EXERCISES,
   ].map((e) => e.slug);
 
   const fromTextSourcedFiles = TEXT_SOURCED_SEED_FILES.flatMap(exerciseSlugsFromSeedFile);

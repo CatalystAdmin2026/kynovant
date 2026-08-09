@@ -13,14 +13,18 @@
 // file is a thin CLI wrapper around that module's pure, tested logic
 // (lib/db/__tests__/repair-orphaned-system-exercises.test.ts).
 //
-// NOTE: the shared database has already been repaired manually
-// (2026-08-05, as part of the AI Program Generator production-readiness
-// audit). This script exists so the SAME defect can be repaired
-// identically and idempotently on a fresh database, a preview
-// environment, a restore, or after a future seed run recreates it —
-// there is no need to run it against the already-repaired shared
-// database again, and doing so is safe regardless (it will report zero
-// rows to repair).
+// NOTE: the shared database was repaired manually once already
+// (2026-08-05, AI Program Generator production-readiness audit), but
+// Seed 011 (scripts/seeds/011-reviewed-library-expansion.ts, 336 rows)
+// recreated the defect afterward, because the bug lived in the shared
+// seed helper (scripts/seeds/_shared.ts) that every seed file — including
+// ones written after the first repair — inherited from. That helper is
+// now fixed (see its own header comment), so this script needs to run
+// again once against the current shared database to repair the Seed
+// 011 rows specifically, and — because it re-derives the canonical slug
+// set from the seed files' own source on every run — is always safe to
+// run again afterward: rows already correct simply don't match the
+// predicate, so a repeat run reports zero rows to repair.
 // ─────────────────────────────────────────────────────────────
 
 import postgres from "postgres";
@@ -70,7 +74,7 @@ async function main() {
   }
 
   const result = await repairOrphanedSystemExercises(sql);
-  console.log(`\n✓ Repaired ${result.repairedCount} row(s) — reclassified to scope='system'.\n`);
+  console.log(`\n✓ Repaired ${result.repairedCount} row(s) — reclassified to scope='system', coach_created=false.\n`);
 
   await sql.end();
 }

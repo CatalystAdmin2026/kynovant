@@ -14,10 +14,18 @@
 // ─────────────────────────────────────────────────────────────
 // exercises.scope defaults to 'coach' and exercises.created_by is
 // nullable with no default (schema-exercise.ts). The bulk exercise-seed
-// pipeline (scripts/seed-exercises.ts, scripts/seeds/001-*.ts through
-// 010-*.ts, via scripts/seeds/_shared.ts) inserts every canonical
-// library row without ever setting either column, so every seeded row
-// lands as scope='coach', created_by=NULL — "private to no one."
+// pipeline (scripts/seed-exercises.ts and scripts/seeds/_shared.ts,
+// used by every scripts/seeds/0XX-*.ts seed file) inserted every
+// canonical library row without ever setting either column, so every
+// seeded row landed as scope='coach', created_by=NULL — "private to no
+// one." This recurred with Seed 011 (scripts/seeds/011-reviewed-
+// library-expansion.ts, 336 rows) because the defect lived in the
+// SHARED helper, not any individual seed file — every new seed file
+// inherited it automatically. Both scripts/seed-exercises.ts and
+// scripts/seeds/_shared.ts now set scope: "system" explicitly (and
+// coachCreated: false — see below), so this cannot recur for a seed
+// file written after that fix landed. This repair remains necessary
+// for rows seeded before it.
 //
 // Both the AI Program Generator's candidate-selection layer
 // (lib/program-generator/exercise-candidates.ts) and its name-based
@@ -71,13 +79,19 @@
 //      slug condition above is exactly the extra safeguard that keeps
 //      this repair correct even after that stops being true.
 //
-// exercises.coach_created (a boolean, default true) was deliberately
-// NOT added to this predicate: the very seed pipeline that causes this
-// defect explicitly sets coachCreated: true on every row it inserts
-// (scripts/seed-exercises.ts:500, scripts/seeds/_shared.ts:195) — it is
-// not a real provenance signal for this data, and requiring
-// coach_created = false would make this repair match nothing on a
-// fresh run of the exact defect it exists to fix.
+// exercises.coach_created (a boolean, default true) is deliberately NOT
+// part of the WHERE-clause safety PREDICATE above: the buggy seed
+// pipeline set coachCreated: true on every row it inserted (the same
+// bug this whole repair exists for), so requiring coach_created = false
+// to MATCH a row would make this repair find nothing among the exact
+// rows it needs to fix. It IS corrected by the repair's UPDATE below,
+// alongside scope — coach_created's name and column semantics mean
+// "was this exercise authored by a coach," which is false for every
+// canonical seed row (verified: the column is never read by any
+// application code today — grepped the full app/ and lib/ trees — so
+// this correction changes no runtime behavior; it only makes stored
+// data match what scripts/seeds/_shared.ts now writes for a fresh seed,
+// per that function's own header comment on why the value matters).
 //
 // This predicate is intentionally scope='coach' only — organization-
 // scoped rows are never touched, regardless of created_by, since
@@ -86,6 +100,32 @@
 //
 // Idempotent: the UPDATE's WHERE clause re-checks the identical
 // predicate, so a second run always affects zero rows.
+//
+// ─────────────────────────────────────────────────────────────
+// restrictToSlugs — fixture scoping for tests
+// ─────────────────────────────────────────────────────────────
+// Both functions below accept an optional `options.restrictToSlugs`.
+// When omitted (the CLI script's normal usage — see
+// scripts/repair-orphaned-system-exercises.ts), the safety predicate's
+// slug condition is the FULL canonical set, exactly as documented above
+// — this is the real repair, meant to run against every canonical row
+// in the database.
+//
+// When provided, it's INTERSECTED with the canonical set (never used on
+// its own) — so it can only ever narrow which rows the existing safety
+// predicate can match, never widen it. This exists solely so this
+// module's own test suite (lib/db/__tests__/repair-orphaned-system-
+// exercises.test.ts) can call the real repair function — not a
+// reimplementation of it — while being physically incapable of
+// mutating any row it did not itself insert: every test passes the
+// exact slug(s) of its own fixture row(s), so even if the live shared
+// database happens to already contain other real orphaned canonical
+// rows at test time (as Seed 011's did — see this file's own incident
+// history), a test run cannot touch them. This was learned the hard way
+// once already: an earlier test run against this same predicate, before
+// this parameter existed, repaired 336 real ambient Seed 011 rows as an
+// unintended side effect of proving idempotency, not through any
+// deliberate CLI invocation.
 // ─────────────────────────────────────────────────────────────
 
 import type postgres from "postgres";
@@ -97,20 +137,35 @@ export interface OrphanedExerciseRow {
   name: string;
 }
 
+export interface RepairScopeOptions {
+  /** Fixture-scoping only — see this file's "restrictToSlugs" header
+   *  comment. Intersected with the canonical seed slug set, never used
+   *  standalone. Omit for the real, full-database repair. */
+  restrictToSlugs?: readonly string[];
+}
+
+function resolveSlugScope(options?: RepairScopeOptions): string[] {
+  const canonicalSlugs = getCanonicalSeedExerciseSlugs();
+  if (!options?.restrictToSlugs) return [...canonicalSlugs];
+  const restrict = new Set(options.restrictToSlugs);
+  return [...canonicalSlugs].filter((slug) => restrict.has(slug));
+}
+
 // Read-only — rows currently matching the safety predicate. Used for
 // both the CLI's dry-run preview and this repair's test suite.
 export async function findOrphanedSystemExercises(
   sql: postgres.Sql,
+  options?: RepairScopeOptions,
 ): Promise<OrphanedExerciseRow[]> {
-  const canonicalSlugs = [...getCanonicalSeedExerciseSlugs()];
-  if (canonicalSlugs.length === 0) return [];
+  const slugs = resolveSlugScope(options);
+  if (slugs.length === 0) return [];
 
   const rows = await sql`
     SELECT id, slug, name
     FROM exercises
     WHERE scope = 'coach'
       AND created_by IS NULL
-      AND slug IN ${sql(canonicalSlugs)}
+      AND slug IN ${sql(slugs)}
     ORDER BY slug
   `;
   return rows.map((r) => ({ id: r.id as string, slug: r.slug as string, name: r.name as string }));
@@ -127,16 +182,17 @@ export interface RepairResult {
 // repairedCount: 0 rather than erroring.
 export async function repairOrphanedSystemExercises(
   sql: postgres.Sql,
+  options?: RepairScopeOptions,
 ): Promise<RepairResult> {
-  const canonicalSlugs = [...getCanonicalSeedExerciseSlugs()];
-  if (canonicalSlugs.length === 0) return { repairedCount: 0, repairedIds: [] };
+  const slugs = resolveSlugScope(options);
+  if (slugs.length === 0) return { repairedCount: 0, repairedIds: [] };
 
   const rows = await sql`
     UPDATE exercises
-    SET scope = 'system', updated_at = now()
+    SET scope = 'system', coach_created = false, updated_at = now()
     WHERE scope = 'coach'
       AND created_by IS NULL
-      AND slug IN ${sql(canonicalSlugs)}
+      AND slug IN ${sql(slugs)}
     RETURNING id
   `;
   const repairedIds = rows.map((r) => r.id as string);
