@@ -430,7 +430,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["barbell-bench-press",          "triceps",        "secondary"],
 
   ["incline-barbell-bench-press",  "chest",          "primary"],
-  ["incline-barbell-bench-press",  "front_deltoid",  "primary"],
+  ["incline-barbell-bench-press",  "front_deltoid",  "secondary"],
   ["incline-barbell-bench-press",  "triceps",        "secondary"],
 
   ["decline-barbell-bench-press",  "chest",          "primary"],
@@ -446,7 +446,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["pause-bench-press",            "triceps",        "secondary"],
 
   ["barbell-floor-press",          "chest",          "primary"],
-  ["barbell-floor-press",          "triceps",        "primary"],
+  ["barbell-floor-press",          "triceps",        "secondary"],
   ["barbell-floor-press",          "front_deltoid",  "secondary"],
 
   ["wide-grip-bench-press",        "chest",          "primary"],
@@ -459,7 +459,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["dumbbell-bench-press",         "triceps",        "secondary"],
 
   ["incline-dumbbell-bench-press", "chest",          "primary"],
-  ["incline-dumbbell-bench-press", "front_deltoid",  "primary"],
+  ["incline-dumbbell-bench-press", "front_deltoid",  "secondary"],
   ["incline-dumbbell-bench-press", "triceps",        "secondary"],
 
   ["decline-dumbbell-bench-press", "chest",          "primary"],
@@ -467,7 +467,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["decline-dumbbell-bench-press", "triceps",        "secondary"],
 
   ["dumbbell-floor-press",         "chest",          "primary"],
-  ["dumbbell-floor-press",         "triceps",        "primary"],
+  ["dumbbell-floor-press",         "triceps",        "secondary"],
   ["dumbbell-floor-press",         "front_deltoid",  "secondary"],
 
   ["single-arm-dumbbell-bench-press", "chest",       "primary"],
@@ -515,7 +515,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["diamond-push-up",              "front_deltoid",  "secondary"],
 
   ["decline-push-up",              "chest",          "primary"],
-  ["decline-push-up",              "front_deltoid",  "primary"],
+  ["decline-push-up",              "front_deltoid",  "secondary"],
   ["decline-push-up",              "triceps",        "secondary"],
 
   ["incline-push-up",              "chest",          "primary"],
@@ -529,11 +529,11 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
 
   // Dip & related
   ["dip",                          "chest",          "primary"],
-  ["dip",                          "triceps",        "primary"],
+  ["dip",                          "triceps",        "secondary"],
   ["dip",                          "front_deltoid",  "secondary"],
 
   ["weighted-dip",                 "chest",          "primary"],
-  ["weighted-dip",                 "triceps",        "primary"],
+  ["weighted-dip",                 "triceps",        "secondary"],
   ["weighted-dip",                 "front_deltoid",  "secondary"],
 
   // Dumbbell flyes
@@ -541,7 +541,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["dumbbell-chest-fly",           "front_deltoid",  "secondary"],
 
   ["incline-dumbbell-fly",         "chest",          "primary"],
-  ["incline-dumbbell-fly",         "front_deltoid",  "primary"],
+  ["incline-dumbbell-fly",         "front_deltoid",  "secondary"],
 
   ["dumbbell-pullover",            "chest",          "primary"],
   ["dumbbell-pullover",            "lats",           "secondary"],
@@ -575,7 +575,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["z-press",                      "transverse_abdominis", "stabilizer"],
 
   ["behind-neck-press",            "front_deltoid",  "primary"],
-  ["behind-neck-press",            "lateral_deltoid","primary"],
+  ["behind-neck-press",            "lateral_deltoid","secondary"],
   ["behind-neck-press",            "triceps",        "secondary"],
   ["behind-neck-press",            "rear_deltoid",   "secondary"],
 
@@ -589,7 +589,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["dumbbell-seated-overhead-press","triceps",       "secondary"],
 
   ["arnold-press",                 "front_deltoid",  "primary"],
-  ["arnold-press",                 "lateral_deltoid","primary"],
+  ["arnold-press",                 "lateral_deltoid","secondary"],
   ["arnold-press",                 "triceps",        "secondary"],
 
   ["single-arm-dumbbell-overhead-press","front_deltoid","primary"],
@@ -628,7 +628,7 @@ const MUSCLES: Array<[string, MuscleGroup, MuscleRole]> = [
   ["pike-push-up",                 "triceps",        "secondary"],
 
   ["handstand-push-up",            "front_deltoid",  "primary"],
-  ["handstand-push-up",            "lateral_deltoid","primary"],
+  ["handstand-push-up",            "lateral_deltoid","secondary"],
   ["handstand-push-up",            "triceps",        "secondary"],
   ["handstand-push-up",            "trapezius",      "stabilizer"],
 ];
@@ -957,11 +957,11 @@ const RELATIONS: Array<[string, string, ExerciseRelationType, string]> = [
     "Floor press limits ROM and eliminates deep shoulder stretch — lower shoulder joint stress and useful when bench is unavailable."],
 
   // Push-up progression chain
-  ["push-up", "incline-push-up", "progression",
+  ["push-up", "incline-push-up", "regression",
     "Incline push-up reduces load by ~50% — the entry point for athletes who cannot perform a standard push-up yet."],
-  ["push-up", "decline-push-up", "regression",
+  ["push-up", "decline-push-up", "progression",
     "Decline push-up increases load and shifts emphasis to upper chest — appropriate progression past standard push-up."],
-  ["push-up", "ring-push-up", "regression",
+  ["push-up", "ring-push-up", "progression",
     "Ring push-up adds significant stability demand — appropriate for athletes seeking progressive overload without adding weight."],
   ["push-up", "barbell-bench-press", "progression",
     "Once push-up volume is high, loading with a barbell provides better progressive overload potential."],
