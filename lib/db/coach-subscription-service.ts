@@ -28,6 +28,7 @@ import {
   coachSubscriptions,
   type CoachSubscriptionStatus,
 } from "./schema-billing";
+import { notifyBillingPastDue } from "./coach-notification-service";
 
 const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -183,12 +184,18 @@ export async function upsertCoachSubscriptionFromStripe(
     .where(eq(coachSubscriptions.coachId, sync.coachId))
     .limit(1);
 
+  // Fresh transition into past_due only — never on a replayed webhook
+  // or a repeat invoice.payment_failed retry for the same still-
+  // unresolved failure. Reuses the exact same condition gracePeriodEnd
+  // re-arming already relies on, so this can't fire on a case that
+  // condition doesn't also treat as "new."
+  const isFreshPastDue = sync.status === "past_due" && existing?.status !== "past_due";
+
   let gracePeriodEnd: Date | null;
   if (sync.status === "past_due") {
-    gracePeriodEnd =
-      existing?.status === "past_due"
-        ? existing.gracePeriodEnd
-        : new Date(Date.now() + GRACE_PERIOD_MS);
+    gracePeriodEnd = isFreshPastDue
+      ? new Date(Date.now() + GRACE_PERIOD_MS)
+      : (existing?.gracePeriodEnd ?? null);
   } else {
     gracePeriodEnd = null;
   }
@@ -209,8 +216,17 @@ export async function upsertCoachSubscriptionFromStripe(
     updatedAt: new Date(),
   };
 
-  await db
+  const [row] = await db
     .insert(coachSubscriptions)
     .values(values)
-    .onConflictDoUpdate({ target: coachSubscriptions.coachId, set: values });
+    .onConflictDoUpdate({ target: coachSubscriptions.coachId, set: values })
+    .returning({ id: coachSubscriptions.id });
+
+  if (isFreshPastDue) {
+    await notifyBillingPastDue({
+      coachId: sync.coachId,
+      subscriptionId: row.id,
+      gracePeriodEnd,
+    });
+  }
 }

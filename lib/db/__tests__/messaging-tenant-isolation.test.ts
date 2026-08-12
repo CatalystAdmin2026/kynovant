@@ -29,6 +29,8 @@ import { getDb } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { users, clientProfiles, coachProfiles, coachingEnrollments } from "../schema";
 import { conversations, messages } from "../schema-messaging";
+import { coachNotifications } from "../schema-coach-notifications";
+import { listCoachNotifications } from "../coach-notification-service";
 import {
   checkConversationAccess,
   getOrCreateConversationForClient,
@@ -104,6 +106,7 @@ afterAll(async () => {
     await db.delete(messages).where(inArray(messages.conversationId, convIds));
     await db.delete(conversations).where(inArray(conversations.id, convIds));
   }
+  await db.delete(coachNotifications).where(inArray(coachNotifications.coachId, [coachA.id, coachB.id].filter(Boolean)));
   if (userIds.length > 0) {
     await db.delete(coachingEnrollments).where(inArray(coachingEnrollments.clientId, [clientA.id, clientB.id].filter(Boolean)));
     await db.delete(clientProfiles).where(inArray(clientProfiles.userId, [clientA.id, clientB.id].filter(Boolean)));
@@ -276,5 +279,44 @@ describe("listMessagingContacts — compose picker scoping", () => {
     const contacts = await listMessagingContacts(coachA.id);
     const contact = contacts.find((c) => c.clientId === clientA.id);
     expect(contact?.hasConversation).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// sendMessage() → coach notification — real call-site wiring.
+// The producer itself (notifyNewMessage) is proven more broadly in
+// coach-notification-producers.test.ts; this proves sendMessage()
+// actually calls it, only for a client-authored message, and never
+// leaks to an uninvolved coach.
+// ─────────────────────────────────────────────────────────────
+describe("sendMessage — coach notification wiring", () => {
+  it("notifies the coach when the CLIENT sends a message, with conversation resource linkage", async () => {
+    const before = await listCoachNotifications(coachA.id, 50);
+    const result = await sendMessage(conversationAId, clientA.id, "Client-authored message for notification wiring.");
+    expect(result.ok).toBe(true);
+
+    const after = await listCoachNotifications(coachA.id, 50);
+    expect(after.unreadCount).toBe(before.unreadCount + 1);
+    const found = after.notifications.find((n) => n.resourceId === conversationAId && n.eventType === "new_message");
+    expect(found).toBeDefined();
+    expect(found!.resourceType).toBe("conversation");
+    expect(found!.actorId).toBe(clientA.id);
+  });
+
+  it("does NOT notify anyone when the COACH sends a message (no self-notification)", async () => {
+    const before = await listCoachNotifications(coachA.id, 50);
+    const result = await sendMessage(conversationAId, coachA.id, "Coach-authored message — should not self-notify.");
+    expect(result.ok).toBe(true);
+
+    const after = await listCoachNotifications(coachA.id, 50);
+    expect(after.unreadCount).toBe(before.unreadCount);
+  });
+
+  it("never delivers clientA's message notification to an uninvolved coach (coachB)", async () => {
+    const result = await sendMessage(conversationAId, clientA.id, "Another client message.");
+    expect(result.ok).toBe(true);
+
+    const { notifications } = await listCoachNotifications(coachB.id, 50);
+    expect(notifications.some((n) => n.resourceId === conversationAId)).toBe(false);
   });
 });

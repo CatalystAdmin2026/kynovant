@@ -20,6 +20,8 @@ import { getDb } from "@/lib/db/client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { users } from "@/lib/db/schema";
 import { coachSubscriptions } from "@/lib/db/schema-billing";
+import { coachNotifications } from "@/lib/db/schema-coach-notifications";
+import { listCoachNotifications } from "@/lib/db/coach-notification-service";
 import {
   mapStripeSubscriptionStatus,
   syncCoachSubscriptionFromStripeSubscription,
@@ -48,6 +50,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (coach.id) {
+    await db.delete(coachNotifications).where(eq(coachNotifications.coachId, coach.id));
     await db.delete(coachSubscriptions).where(eq(coachSubscriptions.coachId, coach.id));
     await db.delete(users).where(eq(users.id, coach.id));
     const supa = createAdminClient();
@@ -240,6 +243,57 @@ describe("syncCoachSubscriptionFromStripeSubscription — real DB", () => {
         .limit(1);
       expect(row.status).toBe("cancelled");
       expect(row.cancelAtPeriodEnd).toBe(false);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // notifyBillingPastDue wiring — the one billing event this codebase
+  // wires into coach_notifications (see coach-subscription-service.ts's
+  // upsertCoachSubscriptionFromStripe). Proven here rather than only in
+  // coach-notification-producers.test.ts because the dedup behavior is
+  // specific to THIS call site: it reuses the exact same "was the row
+  // already past_due" condition gracePeriodEnd re-arming already
+  // relies on, so a repeat invoice.payment_failed retry (or a replayed
+  // customer.subscription.updated) for the same still-unresolved
+  // failure must not re-notify.
+  // ─────────────────────────────────────────────────────────────
+  describe("notifyBillingPastDue wiring — fresh transitions only", () => {
+    it("notifies on a fresh transition into past_due", async () => {
+      // coach.id's row is "cancelled" from the previous test — not
+      // past_due, so this is a genuine fresh transition.
+      const before = await listCoachNotifications(coach.id, 50);
+      const sub = fakeSubscription({ status: "past_due" });
+      const result = await syncCoachSubscriptionFromStripeSubscription(sub, `evt_${randomUUID()}`);
+      expect(result.ok).toBe(true);
+
+      const after = await listCoachNotifications(coach.id, 50);
+      expect(after.unreadCount).toBe(before.unreadCount + 1);
+      const found = after.notifications[0];
+      expect(found.eventType).toBe("billing_payment_failed");
+      expect(found.resourceType).toBe("coach_subscription");
+      expect(found.readAt).toBeNull();
+    });
+
+    it("does NOT re-notify on a repeat past_due sync for the same unresolved failure (duplicate webhook / invoice retry)", async () => {
+      const before = await listCoachNotifications(coach.id, 50);
+      // Two more syncs while the row is already past_due — simulates
+      // both a replayed webhook delivery and a distinct Smart-Retries
+      // invoice.payment_failed event for the same still-unpaid invoice.
+      await syncCoachSubscriptionFromStripeSubscription(fakeSubscription({ status: "past_due" }), `evt_${randomUUID()}`);
+      await syncCoachSubscriptionFromStripeSubscription(fakeSubscription({ status: "past_due" }), `evt_${randomUUID()}`);
+
+      const after = await listCoachNotifications(coach.id, 50);
+      expect(after.unreadCount).toBe(before.unreadCount);
+    });
+
+    it("notifies again on a SECOND distinct failure (active -> past_due -> active -> past_due)", async () => {
+      await syncCoachSubscriptionFromStripeSubscription(fakeSubscription({ status: "active" }), `evt_${randomUUID()}`);
+      const before = await listCoachNotifications(coach.id, 50);
+
+      await syncCoachSubscriptionFromStripeSubscription(fakeSubscription({ status: "past_due" }), `evt_${randomUUID()}`);
+
+      const after = await listCoachNotifications(coach.id, 50);
+      expect(after.unreadCount).toBe(before.unreadCount + 1);
     });
   });
 });

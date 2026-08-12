@@ -29,6 +29,7 @@ import {
   hasFieldErrors,
   type CheckInFieldErrors,
 } from "./check-in-validation";
+import { notifyCheckInSubmitted } from "./coach-notification-service";
 
 // ─────────────────────────────────────────────────────────────
 // WEEK DATE HELPERS
@@ -371,6 +372,16 @@ export async function submitCheckIn(
     title: "Weekly check-in submitted",
     description: `Week of ${checkIn.weekStartDate}`,
     occurredAt: now,
+  });
+
+  // Non-fatal — see notifyCheckInSubmitted's own comment. Guarded by
+  // the same "status actually just transitioned" branch as the
+  // timeline event above, so a concurrent double-submit can't reach
+  // this twice.
+  await notifyCheckInSubmitted({
+    clientId,
+    checkInId,
+    weekStartDate: checkIn.weekStartDate,
   });
 
   return { ok: true };

@@ -32,6 +32,7 @@ import { getDb } from "./client";
 import { coachOwnsClient } from "@/lib/auth/guards";
 import { users, clientProfiles, coachProfiles, coachingEnrollments } from "./schema";
 import { conversations, messages, type Message } from "./schema-messaging";
+import { notifyNewMessage } from "./coach-notification-service";
 
 // ─────────────────────────────────────────────────────────────
 // SHAPES
@@ -445,6 +446,19 @@ export async function sendMessage(
       updatedAt: now,
     })
     .where(eq(conversations.id, conversationId));
+
+  // Notify the coach only when the CLIENT sent this message — a coach
+  // messaging their own client should never notify themselves.
+  if (senderId === conversation.clientId) {
+    const names = await resolveDisplayNames([conversation.clientId]);
+    await notifyNewMessage({
+      coachId: conversation.coachId,
+      clientId: conversation.clientId,
+      clientName: names.get(conversation.clientId) ?? null,
+      conversationId,
+      preview,
+    });
+  }
 
   return {
     ok: true,

@@ -76,6 +76,7 @@ import {
 } from "@/lib/program-generator/edit-ops";
 import { approveDraft } from "@/lib/program-generator/approval";
 import { runStagedGeneration, runAndSaveValidation } from "@/lib/program-generator/staged-generation";
+import { notifyProgramDraftReady, notifyProgramDraftFailed } from "@/lib/db/coach-notification-service";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
 
 export interface ActionResult<T = undefined> {
@@ -159,6 +160,12 @@ export async function generateProgramDraftAction(input: {
     existingCompletedWeeks: new Map(),
   });
 
+  if (result.ok) {
+    await notifyProgramDraftReady({ coachId: actor.coachId, draftId: draftRow.id });
+  } else {
+    await notifyProgramDraftFailed({ coachId: actor.coachId, draftId: draftRow.id, reason: result.error });
+  }
+
   revalidateDraft(draftRow.id);
   return result.ok
     ? { ok: true, data: { draftId: draftRow.id } }
@@ -228,6 +235,12 @@ export async function resumeGenerationAction(draftId: string): Promise<ActionRes
     startFromWeek,
     existingCompletedWeeks,
   });
+
+  if (result.ok) {
+    await notifyProgramDraftReady({ coachId: auth.coachId, draftId });
+  } else {
+    await notifyProgramDraftFailed({ coachId: auth.coachId, draftId, reason: result.error });
+  }
 
   revalidateDraft(draftId);
   return result.ok ? { ok: true } : { ok: false, error: result.error };
