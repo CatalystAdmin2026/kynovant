@@ -46,6 +46,67 @@ function mergeAliases(existing: unknown, aliases: readonly string[]) {
   return [...merged.values()];
 }
 
+function normalizeAlias(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function aliasesFromJsonb(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function validateAliasCollisions(
+  activeRows: Array<{ slug: string; name: string; alternate_names: unknown }>,
+  repairs: typeof AI_VOCABULARY_ALIAS_REPAIRS,
+) {
+  const proposed = repairs.flatMap((repair) =>
+    repair.aliases.map((alias) => ({
+      slug: repair.slug,
+      alias,
+      normalized: normalizeAlias(alias),
+    })),
+  );
+
+  const collisions: string[] = [];
+  const proposedByNormalized = new Map<string, Array<{ slug: string; alias: string }>>();
+
+  for (const entry of proposed) {
+    proposedByNormalized.set(entry.normalized, [
+      ...(proposedByNormalized.get(entry.normalized) ?? []),
+      { slug: entry.slug, alias: entry.alias },
+    ]);
+  }
+
+  for (const [normalized, entries] of proposedByNormalized) {
+    const targetSlugs = new Set(entries.map((entry) => entry.slug));
+    if (targetSlugs.size > 1) {
+      collisions.push(
+        `proposed alias "${normalized}" maps to multiple repair targets: ${[...targetSlugs].join(", ")}`,
+      );
+    }
+  }
+
+  for (const row of activeRows) {
+    const normalizedCanonical = normalizeAlias(row.name);
+    for (const entry of proposedByNormalized.get(normalizedCanonical) ?? []) {
+      if (entry.slug !== row.slug) {
+        collisions.push(`alias "${entry.alias}" for ${entry.slug} matches canonical name for ${row.slug}`);
+      }
+    }
+
+    for (const alias of aliasesFromJsonb(row.alternate_names)) {
+      const normalizedExistingAlias = normalizeAlias(alias);
+      for (const entry of proposedByNormalized.get(normalizedExistingAlias) ?? []) {
+        if (entry.slug !== row.slug) {
+          collisions.push(`alias "${entry.alias}" for ${entry.slug} matches existing alias on ${row.slug}`);
+        }
+      }
+    }
+  }
+
+  return collisions;
+}
+
 async function main() {
   const sql = postgres(dbUrl!, { prepare: false });
 
@@ -66,6 +127,28 @@ async function main() {
   if (missingSlugs.length > 0) {
     console.error("Missing referenced exercises:");
     for (const slug of missingSlugs) console.error(`  - ${slug}`);
+    await sql.end();
+    process.exit(1);
+  }
+
+  const activeRows = await sql`
+    SELECT slug, name, alternate_names
+    FROM exercises
+    WHERE status = 'active'
+    ORDER BY slug
+  `;
+  const collisions = validateAliasCollisions(
+    activeRows.map((row) => ({
+      slug: row.slug as string,
+      name: row.name as string,
+      alternate_names: row.alternate_names,
+    })),
+    AI_VOCABULARY_ALIAS_REPAIRS,
+  );
+
+  if (collisions.length > 0) {
+    console.error("Alias collision preflight failed:");
+    for (const collision of collisions) console.error(`  - ${collision}`);
     await sql.end();
     process.exit(1);
   }

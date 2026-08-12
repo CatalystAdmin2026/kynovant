@@ -6,12 +6,20 @@ import {
   AI_VOCABULARY_ALIAS_REPAIRS,
   INTENTIONALLY_AMBIGUOUS_AI_NAMES,
 } from "../../../scripts/repairs/exercise-ai-vocabulary-aliases-data";
+import { EXERCISES as AI_VOCABULARY_SEED_EXERCISES } from "../../../scripts/seeds/010-ai-vocabulary-coverage-data";
+import { EXERCISES as REVIEWED_EXPANSION_EXERCISES } from "../../../scripts/seeds/011-reviewed-library-expansion-data";
+import { normalizeExerciseName } from "../../program-generator/exercise-resolution";
 
 function sourceText(file: string) {
   return readFileSync(resolve(process.cwd(), file), "utf8");
 }
 
-function seededExerciseSlugs() {
+function exerciseBlock(file: string) {
+  const text = sourceText(file);
+  return text.match(/const EXERCISES = \[([\s\S]*?)\]\s*(?:as const)?;/)?.[1] ?? text;
+}
+
+function seededExerciseRows() {
   const seedFiles = [
     "scripts/seed-exercises.ts",
     "scripts/seeds/001-upper-push.ts",
@@ -23,12 +31,38 @@ function seededExerciseSlugs() {
     "scripts/seeds/007-shoulders.ts",
     "scripts/seeds/008-knee-flexion-data.ts",
     "scripts/seeds/009-launch-critical-families-data.ts",
-    "scripts/seeds/010-ai-vocabulary-coverage-data.ts",
   ];
 
-  return new Set(
-    seedFiles.flatMap((file) => Array.from(sourceText(file).matchAll(/slug:\s*"([^"]+)"/g), (match) => match[1])),
+  const parsedRows = seedFiles.flatMap((file) =>
+    Array.from(exerciseBlock(file).matchAll(/slug:\s*"([^"]+)"[\s\S]{0,320}?name:\s*"([^"]+)"/g), (match) => ({
+      slug: match[1],
+      name: match[2],
+      alternateNames: [] as readonly string[],
+    })),
   );
+
+  const rowsBySlug = new Map<string, { slug: string; name: string; alternateNames: readonly string[] }>();
+  for (const row of [
+    ...parsedRows,
+    ...AI_VOCABULARY_SEED_EXERCISES.map((exercise) => ({
+      slug: exercise.slug,
+      name: exercise.name,
+      alternateNames: exercise.alternateNames ?? [],
+    })),
+    ...REVIEWED_EXPANSION_EXERCISES.map((exercise) => ({
+      slug: exercise.slug,
+      name: exercise.name,
+      alternateNames: exercise.alternateNames ?? [],
+    })),
+  ]) {
+    rowsBySlug.set(row.slug, row);
+  }
+
+  return [...rowsBySlug.values()];
+}
+
+function seededExerciseSlugs() {
+  return new Set(seededExerciseRows().map((exercise) => exercise.slug));
 }
 
 function aliasEntries() {
@@ -36,7 +70,7 @@ function aliasEntries() {
     repair.aliases.map((alias) => ({
       slug: repair.slug,
       alias,
-      normalizedAlias: alias.trim().toLowerCase(),
+      normalizedAlias: normalizeExerciseName(alias),
     })),
   );
 }
@@ -62,6 +96,45 @@ describe("Exercise Library AI vocabulary alias repair", () => {
 
     for (const [alias, slugs] of aliasesByNormalized) {
       expect(new Set(slugs).size, `${alias} maps to multiple exercises`).toBe(1);
+    }
+  });
+
+  it("does not duplicate aliases within a reviewed repair target", () => {
+    for (const repair of AI_VOCABULARY_ALIAS_REPAIRS) {
+      const normalizedAliases = repair.aliases.map(normalizeExerciseName);
+      expect(new Set(normalizedAliases).size, `${repair.slug} duplicate aliases`).toBe(normalizedAliases.length);
+    }
+  });
+
+  it("does not introduce aliases that collide with another canonical exercise name", () => {
+    const canonicalByNormalized = new Map<string, string[]>();
+
+    for (const exercise of seededExerciseRows()) {
+      const normalized = normalizeExerciseName(exercise.name);
+      canonicalByNormalized.set(normalized, [...(canonicalByNormalized.get(normalized) ?? []), exercise.slug]);
+    }
+
+    for (const entry of aliasEntries()) {
+      const canonicalSlugs = canonicalByNormalized.get(entry.normalizedAlias) ?? [];
+      const conflictingCanonicalSlugs = canonicalSlugs.filter((slug) => slug !== entry.slug);
+      expect(conflictingCanonicalSlugs, `${entry.alias} aliases another canonical exercise`).toEqual([]);
+    }
+  });
+
+  it("does not introduce normalized collisions against existing seed aliases", () => {
+    const knownByNormalized = new Map<string, string[]>();
+
+    for (const exercise of seededExerciseRows()) {
+      for (const alias of exercise.alternateNames) {
+        const normalized = normalizeExerciseName(alias);
+        knownByNormalized.set(normalized, [...(knownByNormalized.get(normalized) ?? []), exercise.slug]);
+      }
+    }
+
+    for (const entry of aliasEntries()) {
+      const existingSlugs = knownByNormalized.get(entry.normalizedAlias) ?? [];
+      const conflictingSeedAliasSlugs = existingSlugs.filter((slug) => slug !== entry.slug);
+      expect(conflictingSeedAliasSlugs, `${entry.alias} collides with existing seed aliases`).toEqual([]);
     }
   });
 
@@ -93,12 +166,22 @@ describe("Exercise Library AI vocabulary alias repair", () => {
     expect(aliasBySlug.get("rowing-machine")?.has("Row Erg")).toBe(true);
     expect(aliasBySlug.get("stationary-bike")?.has("Exercise Bike")).toBe(true);
     expect(aliasBySlug.get("stationary-bike")?.has("Upright Bike")).toBe(true);
+    expect(aliasBySlug.get("incline-dumbbell-bench-press")?.has("Incline DB Press")).toBe(true);
+    expect(aliasBySlug.get("bent-over-barbell-row")?.has("BB Row")).toBe(true);
+    expect(aliasBySlug.get("standing-dumbbell-lateral-raise")?.has("DB Lateral Raise")).toBe(true);
+    expect(aliasBySlug.get("cable-lateral-raise")?.has("Cable Side Raise")).toBe(true);
+    expect(aliasBySlug.get("leg-extension")?.has("Quad Extension")).toBe(true);
+    expect(aliasBySlug.get("ez-bar-curl")?.has("EZ Curl")).toBe(true);
+    expect(aliasBySlug.get("cable-triceps-pressdown")?.has("Cable Tricep Pressdown")).toBe(true);
+    expect(aliasBySlug.get("recumbent-bike")?.has("Recumbent Cycling")).toBe(true);
+    expect(aliasBySlug.get("worlds-greatest-stretch")?.has("Worlds Greatest Stretch")).toBe(true);
   });
 
   it("keeps the alias repair idempotent and non-destructive", () => {
     const repairSource = sourceText("scripts/repair-exercise-ai-vocabulary-aliases.ts");
 
     expect(repairSource).toContain("mergeAliases");
+    expect(repairSource).toContain("validateAliasCollisions");
     expect(repairSource).toContain("--dry-run");
     expect(repairSource).toContain("WHERE slug IN");
     expect(repairSource).not.toContain("DELETE FROM");
