@@ -31,6 +31,7 @@ import { users, coachingEnrollments, programTemplates, workoutTemplates } from "
 import { workoutSessions, programWeeks } from "@/lib/db/schema-program";
 import { weeklyCheckIns } from "@/lib/db/schema-check-in";
 import { workoutTemplateSections, workoutTemplateExercises } from "@/lib/db/schema-exercise";
+import { documents } from "@/lib/db/schema-documents";
 import { getCoachEntitlement, type CoachEntitlement } from "@/lib/db/coach-subscription-service";
 import type { User } from "@supabase/supabase-js";
 import type { PublicUser } from "@/lib/supabase/session";
@@ -687,5 +688,51 @@ export async function authorizeCoachPrescriptionMutation(
   prescriptionId: string,
 ): Promise<NextResponse | null> {
   const result = await assertCoachOwnsPrescription(dbUser, prescriptionId);
+  return result.ok ? null : denyNotFound();
+}
+
+// ─────────────────────────────────────────────────────────────
+// DOCUMENT OWNERSHIP (ADR-012)
+//
+// Unlike program templates, documents have no "published, viewable
+// by any coach" state — a document belongs to exactly the coach who
+// created it, full stop. There is no coachCanView/coachOwns split
+// here; one ownership check covers both read and mutation, matching
+// the product requirement "another coach cannot view/manage
+// documents they do not own."
+// ─────────────────────────────────────────────────────────────
+
+export async function coachOwnsDocument(
+  coachId: string,
+  documentId: string,
+): Promise<boolean> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: documents.id })
+    .from(documents)
+    .where(and(eq(documents.id, documentId), eq(documents.createdByCoachId, coachId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+export async function assertCoachOwnsDocument(
+  dbUser: PublicUser,
+  documentId: string,
+): Promise<OwnershipResult> {
+  const scope = resolveTenantScope(dbUser);
+  if (scope.coachId === null) return { ok: true, scope }; // admin bypass
+  const owns = await coachOwnsDocument(scope.coachId, documentId);
+  if (!owns) return { ok: false, error: "Not found" };
+  return { ok: true, scope };
+}
+
+// API-route flavor — covers list-item view, update, archive, delete,
+// and download (signed-URL generation). Route handlers use the same
+// `if (deny) return deny;` pattern as authorizeCoachProgramMutation.
+export async function authorizeCoachDocumentMutation(
+  dbUser: PublicUser,
+  documentId: string,
+): Promise<NextResponse | null> {
+  const result = await assertCoachOwnsDocument(dbUser, documentId);
   return result.ok ? null : denyNotFound();
 }

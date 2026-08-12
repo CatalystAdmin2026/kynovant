@@ -7,8 +7,18 @@
 // coach (HQ) and client (portal) surfaces.
 //
 // Authorization contract:
-//   Coach functions: caller has already been verified as coach/admin
-//     by requireCoachOrAdmin() or requireCoachOrAdminPage().
+//   Coach functions: role alone (requireCoachOrAdmin/requireCoachOrAdminPage)
+//     is NOT sufficient — a document belongs to exactly the coach who
+//     created it (see schema-documents.ts's ownership model), so every
+//     coach-facing route must ALSO call guards.ts's
+//     authorizeCoachDocumentMutation()/assertCoachOwnsDocument() before
+//     reaching a function here that takes a bare documentId. The two
+//     functions that cross a second tenant boundary in the same call —
+//     assignDocument() (touches a client) and generateCoachDocumentUrl()
+//     (returns a working file URL) — re-verify ownership themselves as
+//     defense in depth; the rest trust the route-layer guard, matching
+//     the existing coachOwnsProgramTemplate/authorizeCoachProgramMutation
+//     precedent in guards.ts.
 //   Client functions: caller has already been verified as a client
 //     by requireClientUser(). Object-level auth is enforced by
 //     querying only rows where client_id = the verified clientId.
@@ -17,8 +27,8 @@
 //   Clients never receive a storageKey or permanent URL.
 //   generateSignedUrl() is called only after authorization is confirmed.
 //   URLs expire in 1 hour (3600 seconds) by default.
-//   The Supabase Storage bucket "coaching-documents" must be set to
-//   private (no public access) in the Supabase dashboard.
+//   The Supabase Storage bucket "coaching-documents" is private (no
+//   public access) — see scripts/setup-documents-bucket.ts.
 //
 // Deletion policy:
 //   - Zero assignment history → deleteDocument() performs hard delete.
@@ -32,24 +42,106 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { eq, and, isNull, isNotNull, count } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { eq, and, isNull, count } from "drizzle-orm";
 import { getDb } from "./client";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { coachOwnsClient, coachOwnsDocument } from "@/lib/auth/guards";
 import {
   documents,
   clientDocumentAssignments,
+  documentCategoryEnum,
   type Document,
   type ClientDocumentAssignment,
   type DocumentCategory,
 } from "./schema-documents";
-import { users } from "./schema";
+import { users, clientProfiles, coachingEnrollments } from "./schema";
 
 // Supabase Storage bucket for coaching documents.
-// Must be created as a PRIVATE bucket in the Supabase dashboard.
+// Must be created as a PRIVATE bucket — see scripts/setup-documents-bucket.ts.
 const DOCUMENTS_BUCKET = "coaching-documents";
 
 // Default signed URL TTL. 1 hour is sufficient for a portal session.
 const SIGNED_URL_TTL_SECONDS = 3600;
+
+// ─────────────────────────────────────────────────────────────
+// UPLOAD VALIDATION — server-side, never trusts the client beyond
+// what the browser reports (filename/MIME/size), which is itself
+// re-validated against these whitelists before anything touches
+// storage or the database. Sized for coaching materials (meal plans,
+// training guides, technique references) — not video or CAD files.
+// ─────────────────────────────────────────────────────────────
+
+export const MAX_DOCUMENT_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
+
+export const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "text/plain",
+]);
+
+export interface UploadValidationInput {
+  title: string;
+  category: string;
+  fileSizeBytes: number;
+  mimeType: string;
+  filename: string;
+}
+
+export type UploadValidationResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+// Pure function — no I/O — so it's directly unit-testable without a
+// DB connection or a real file.
+export function validateDocumentUpload(input: UploadValidationInput): UploadValidationResult {
+  if (!input.title.trim()) {
+    return { ok: false, error: "Title is required" };
+  }
+  if (input.title.length > 200) {
+    return { ok: false, error: "Title must be 200 characters or fewer" };
+  }
+  if (!documentCategoryEnum.enumValues.includes(input.category as DocumentCategory)) {
+    return { ok: false, error: `Invalid category: ${input.category}` };
+  }
+  if (!input.filename.trim()) {
+    return { ok: false, error: "A file is required" };
+  }
+  if (input.fileSizeBytes <= 0) {
+    return { ok: false, error: "File is empty" };
+  }
+  if (input.fileSizeBytes > MAX_DOCUMENT_SIZE_BYTES) {
+    return {
+      ok: false,
+      error: `File exceeds the ${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)}MB limit`,
+    };
+  }
+  if (!ALLOWED_DOCUMENT_MIME_TYPES.has(input.mimeType)) {
+    return { ok: false, error: `File type "${input.mimeType}" is not supported` };
+  }
+  return { ok: true };
+}
+
+// Strips anything that isn't alphanumeric/dot/dash/underscore, and
+// collapses repeats — keeps storageKey paths predictable and free of
+// path-traversal or URL-encoding surprises regardless of what the
+// original filename contained.
+export function sanitizeFilename(filename: string): string {
+  const sanitized = filename
+    .trim()
+    .replace(/[^a-zA-Z0-9.\-_]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return sanitized.length > 0 ? sanitized : "file";
+}
 
 // ─────────────────────────────────────────────────────────────
 // SHARED TYPES
@@ -90,17 +182,52 @@ export interface DocumentWithStats {
 }
 
 // ─────────────────────────────────────────────────────────────
-// STORAGE — SIGNED URL
+// STORAGE — UPLOAD, SIGNED URL
 //
-// Generate a short-lived signed URL for a document's storageKey.
-// Call only after confirming authorization (active assignment or coach).
+// Both operations use the service-role admin client, not the
+// request-scoped one — this bucket is private with no public
+// access and no storage RLS policies of its own (see
+// scripts/setup-documents-bucket.ts). Authorization is enforced
+// entirely in application code (the ownership/assignment checks
+// below and in guards.ts) BEFORE either of these is ever called;
+// they perform the mechanical storage operation only. Matches this
+// codebase's existing "coach writes are server-side (service-role,
+// bypasses RLS)" posture used elsewhere (e.g. weekly_check_ins).
 // ─────────────────────────────────────────────────────────────
 
+// Uploads raw file bytes to the private documents bucket. Returns
+// the storageKey the caller should persist on the documents row.
+// documentId is always server-generated (randomUUID(), never client-
+// supplied) and coachId always comes from the verified session — see
+// createDocumentWithUpload() below, the only intended caller.
+export async function uploadDocumentToStorage(
+  coachId: string,
+  documentId: string,
+  filename: string,
+  fileBytes: Uint8Array,
+  mimeType: string,
+): Promise<string> {
+  const storageKey = `${coachId}/${documentId}/${sanitizeFilename(filename)}`;
+  const supabase = createAdminClient();
+  const { error } = await supabase.storage
+    .from(DOCUMENTS_BUCKET)
+    .upload(storageKey, fileBytes, { contentType: mimeType, upsert: false });
+
+  if (error) {
+    throw new Error(`Failed to upload document to storage: ${error.message}`);
+  }
+
+  return storageKey;
+}
+
+// Generate a short-lived signed URL for a document's storageKey.
+// Call only after confirming authorization (active assignment or
+// coach ownership) — this function performs no auth check itself.
 export async function generateSignedUrl(
   storageKey: string,
   expiresInSeconds = SIGNED_URL_TTL_SECONDS,
 ): Promise<string> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data, error } = await supabase.storage
     .from(DOCUMENTS_BUCKET)
     .createSignedUrl(storageKey, expiresInSeconds);
@@ -149,6 +276,91 @@ export async function createDocument(
     })
     .returning();
   return rows[0];
+}
+
+export interface CreateDocumentWithUploadParams {
+  title: string;
+  description?: string | null;
+  category: DocumentCategory;
+  filename: string;
+  mimeType: string;
+  fileBytes: Uint8Array;
+  /** Client ids to share with immediately — must all belong to coachId. */
+  shareWithClientIds?: string[];
+}
+
+export interface CreateDocumentWithUploadResult {
+  document: Document;
+  sharedCount: number;
+}
+
+// Single entry point for the HQ upload flow: validates input, uploads
+// to storage, creates the document row, immediately publishes it
+// (this app has no draft-preview workflow — every uploaded document
+// is assignable right away), and optionally shares it with one or
+// more of the coach's own clients in the same call. documentId is
+// generated here (server-side, never client-supplied) so the storage
+// path can never be steered by request input.
+export async function createDocumentWithUpload(
+  params: CreateDocumentWithUploadParams,
+  coachId: string,
+): Promise<CreateDocumentWithUploadResult> {
+  const validation = validateDocumentUpload({
+    title: params.title,
+    category: params.category,
+    fileSizeBytes: params.fileBytes.byteLength,
+    mimeType: params.mimeType,
+    filename: params.filename,
+  });
+  if (!validation.ok) {
+    throw new Error(validation.error);
+  }
+
+  const documentId = randomUUID();
+  const storageKey = await uploadDocumentToStorage(
+    coachId,
+    documentId,
+    params.filename,
+    params.fileBytes,
+    params.mimeType,
+  );
+
+  const db = getDb();
+  const [row] = await db
+    .insert(documents)
+    .values({
+      id: documentId,
+      createdByCoachId: coachId,
+      title: params.title.trim(),
+      description: params.description?.trim() || null,
+      category: params.category,
+      storageKey,
+      originalFilename: params.filename,
+      mimeType: params.mimeType,
+      fileSizeBytes: params.fileBytes.byteLength,
+      status: "active", // auto-published — see doc comment above.
+      version: 1,
+    })
+    .returning();
+
+  let sharedCount = 0;
+  const clientIds = [...new Set(params.shareWithClientIds ?? [])];
+  for (const clientId of clientIds) {
+    // assignDocument() re-verifies coachOwnsClient itself — a
+    // malicious/stale clientId in the request body still can't reach
+    // another coach's client, even though this document is freshly
+    // created and definitely owned by coachId.
+    try {
+      await assignDocument(row.id, clientId, coachId);
+      sharedCount += 1;
+    } catch {
+      // Skip clients this coach doesn't actually own rather than
+      // failing the whole upload — the document itself was created
+      // successfully and the coach can retry sharing from the list.
+    }
+  }
+
+  return { document: row, sharedCount };
 }
 
 export interface UpdateDocumentParams {
@@ -217,12 +429,20 @@ export async function deleteDocument(documentId: string): Promise<void> {
   await db.delete(documents).where(eq(documents.id, documentId));
 }
 
-// Returns all documents (draft, active, archived) for display in coach UI.
-export async function listCoachDocuments(): Promise<Document[]> {
+// Returns all documents (draft, active, archived) for display in coach
+// UI. coachId === null means admin/unscoped (every document, any
+// coach) — consistent with resolveTenantScope()'s coachId === null
+// convention used throughout guards.ts and coach-dashboard-service.ts.
+// A non-null coachId scopes strictly to documents THAT coach created —
+// this is the fix for the pre-existing gap where this function (and
+// listDocumentsWithStats below) returned every document platform-wide
+// with no tenant filter at all.
+export async function listCoachDocuments(coachId: string | null): Promise<Document[]> {
   const db = getDb();
   return db
     .select()
     .from(documents)
+    .where(coachId === null ? undefined : eq(documents.createdByCoachId, coachId))
     .orderBy(documents.status, documents.createdAt);
 }
 
@@ -240,10 +460,16 @@ export async function getDocument(
   return rows[0] ?? null;
 }
 
-// Returns documents with assignment counts — useful for coach list views.
-export async function listDocumentsWithStats(): Promise<DocumentWithStats[]> {
+// Returns documents with assignment counts — useful for coach list
+// views. Same coachId === null (admin/unscoped) convention as
+// listCoachDocuments() above.
+export async function listDocumentsWithStats(coachId: string | null): Promise<DocumentWithStats[]> {
   const db = getDb();
-  const docs = await db.select().from(documents).orderBy(documents.createdAt);
+  const docs = await db
+    .select()
+    .from(documents)
+    .where(coachId === null ? undefined : eq(documents.createdByCoachId, coachId))
+    .orderBy(documents.createdAt);
 
   const result: DocumentWithStats[] = await Promise.all(
     docs.map(async (doc) => {
@@ -284,6 +510,39 @@ export async function listDocumentsWithStats(): Promise<DocumentWithStats[]> {
   return result;
 }
 
+// Lightweight client roster for the "share with" picker — id + name
+// only. Deliberately not listCoachClients() from coach-dashboard-service.ts
+// (heavy program/session-stat joins this picker doesn't need) and
+// deliberately not shared with lib/db/messaging-service.ts's own
+// near-identical listMessagingContacts() — same shape, different
+// feature, kept independent so neither can accidentally couple to
+// the other's schema/behavior.
+export interface DocumentShareContact {
+  clientId: string;
+  name: string;
+}
+
+export async function listCoachClientsForSharing(coachId: string): Promise<DocumentShareContact[]> {
+  const db = getDb();
+  const rows = await db
+    .selectDistinct({
+      clientId: coachingEnrollments.clientId,
+      fullName: clientProfiles.fullName,
+      preferredName: clientProfiles.preferredName,
+      email: users.email,
+    })
+    .from(coachingEnrollments)
+    .innerJoin(users, eq(users.id, coachingEnrollments.clientId))
+    .leftJoin(clientProfiles, eq(clientProfiles.userId, coachingEnrollments.clientId))
+    .where(eq(coachingEnrollments.coachId, coachId))
+    .orderBy(clientProfiles.fullName);
+
+  return rows.map((row) => ({
+    clientId: row.clientId,
+    name: row.preferredName || row.fullName || row.email,
+  }));
+}
+
 // ─────────────────────────────────────────────────────────────
 // COACH — ASSIGNMENT MANAGEMENT
 // ─────────────────────────────────────────────────────────────
@@ -297,6 +556,16 @@ export interface AssignDocumentParams {
 // The partial unique index on (document_id, client_id) WHERE revoked_at IS NULL
 // prevents duplicate active assignments — a unique constraint violation
 // will surface as a thrown error from Postgres.
+//
+// Defense in depth: re-verifies coachId owns BOTH the document and the
+// client, even though the API route layer (guards.ts's
+// authorizeCoachDocumentMutation) already checked document ownership
+// before reaching here. This is the one function in this file that
+// touches a second tenant boundary (the client) in the same call, and
+// it is the literal enforcement point for "coach cannot share a
+// document with another coach's client" — worth not trusting the
+// caller alone for. Throws (never silently no-ops) so callers can't
+// mistake a blocked cross-tenant share for a successful one.
 export async function assignDocument(
   documentId: string,
   clientId: string,
@@ -309,10 +578,17 @@ export async function assignDocument(
   if (!doc) {
     throw new Error(`Document ${documentId} not found`);
   }
+  if (doc.createdByCoachId !== coachId) {
+    throw new Error(`Document ${documentId} not found`); // non-disclosing
+  }
   if (doc.status !== "active") {
     throw new Error(
       `Document "${doc.title}" must be active before it can be assigned (current status: ${doc.status})`,
     );
+  }
+  const ownsClient = await coachOwnsClient(coachId, clientId);
+  if (!ownsClient) {
+    throw new Error(`Client ${clientId} not found`); // non-disclosing
   }
 
   const rows = await db
@@ -335,12 +611,34 @@ export interface UpdateAssignmentParams {
   dueAt?: Date | null;
 }
 
+// Resolves an assignment's owning documentId, purely to support the
+// ownership checks in updateAssignment/revokeAssignment below — an
+// assignment carries no coachId of its own, so ownership always
+// resolves one hop up via its document, same "resolve parent, then
+// defer" shape as guards.ts's assertCoachOwnsProgramWeek.
+async function getAssignmentDocumentId(assignmentId: string): Promise<string | null> {
+  const db = getDb();
+  const rows = await db
+    .select({ documentId: clientDocumentAssignments.documentId })
+    .from(clientDocumentAssignments)
+    .where(eq(clientDocumentAssignments.id, assignmentId))
+    .limit(1);
+  return rows[0]?.documentId ?? null;
+}
+
+// Returns true if the update applied, false if the assignment doesn't
+// exist, is already revoked, or belongs to a document this coachId
+// doesn't own.
 export async function updateAssignment(
   assignmentId: string,
   params: UpdateAssignmentParams,
-): Promise<void> {
+  coachId: string,
+): Promise<boolean> {
+  const documentId = await getAssignmentDocumentId(assignmentId);
+  if (!documentId || !(await coachOwnsDocument(coachId, documentId))) return false;
+
   const db = getDb();
-  await db
+  const rows = await db
     .update(clientDocumentAssignments)
     .set(params)
     .where(
@@ -348,18 +646,29 @@ export async function updateAssignment(
         eq(clientDocumentAssignments.id, assignmentId),
         isNull(clientDocumentAssignments.revokedAt),
       ),
-    );
+    )
+    .returning({ id: clientDocumentAssignments.id });
+  return rows.length > 0;
 }
 
 // Revokes an assignment. The client immediately loses portal access.
 // The row is preserved for audit history (revokedAt is set, not deleted).
 // The source document is not affected.
+//
+// Returns true if revoked, false if the assignment doesn't exist, is
+// already revoked, or — the tenant-isolation-critical case — belongs
+// to a document this coachId doesn't own. Non-disclosing: a coach
+// probing another coach's assignment id gets the same "false" as a
+// bad/already-revoked id, never a distinct error.
 export async function revokeAssignment(
   assignmentId: string,
   coachId: string,
-): Promise<void> {
+): Promise<boolean> {
+  const documentId = await getAssignmentDocumentId(assignmentId);
+  if (!documentId || !(await coachOwnsDocument(coachId, documentId))) return false;
+
   const db = getDb();
-  await db
+  const rows = await db
     .update(clientDocumentAssignments)
     .set({
       revokedAt: new Date(),
@@ -370,7 +679,9 @@ export async function revokeAssignment(
         eq(clientDocumentAssignments.id, assignmentId),
         isNull(clientDocumentAssignments.revokedAt),
       ),
-    );
+    )
+    .returning({ id: clientDocumentAssignments.id });
+  return rows.length > 0;
 }
 
 // Returns all assignments (active and revoked) for a given document.
@@ -379,7 +690,7 @@ export async function listDocumentAssignments(
 ): Promise<
   (ClientDocumentAssignment & {
     clientEmail: string;
-    clientName: string | null;
+    clientName: string;
   })[]
 > {
   const db = getDb();
@@ -399,14 +710,19 @@ export async function listDocumentAssignments(
       assignedAt: clientDocumentAssignments.assignedAt,
       createdAt: clientDocumentAssignments.createdAt,
       clientEmail: users.email,
-      clientName: users.email,
+      clientFullName: clientProfiles.fullName,
+      clientPreferredName: clientProfiles.preferredName,
     })
     .from(clientDocumentAssignments)
     .innerJoin(users, eq(clientDocumentAssignments.clientId, users.id))
+    .leftJoin(clientProfiles, eq(clientProfiles.userId, clientDocumentAssignments.clientId))
     .where(eq(clientDocumentAssignments.documentId, documentId))
     .orderBy(clientDocumentAssignments.assignedAt);
 
-  return rows;
+  return rows.map(({ clientFullName, clientPreferredName, ...row }) => ({
+    ...row,
+    clientName: clientPreferredName || clientFullName || row.clientEmail,
+  }));
 }
 
 // Returns all active assignments for a given client.
@@ -578,14 +894,24 @@ export async function generateClientDocumentUrl(
   return generateSignedUrl(rows[0].storageKey);
 }
 
-// Generates a signed URL for a coach to access any document by ID.
-// Caller must already be authorized via requireCoachOrAdmin().
+// Generates a signed URL for a coach to access one of their own
+// documents. requireCoachOrAdmin() alone is NOT sufficient authorization
+// here — it only confirms the caller is *a* coach, not that they own
+// this specific document. The route layer should already have called
+// guards.ts's authorizeCoachDocumentMutation() before reaching this
+// function; coachId is re-verified here anyway (this generates a
+// working URL to the raw file — worth not trusting the caller alone
+// for). Pass coachId === null for admin's unscoped bypass.
 export async function generateCoachDocumentUrl(
   documentId: string,
+  coachId: string | null,
 ): Promise<string> {
   const doc = await getDocument(documentId);
   if (!doc) {
     throw new Error(`Document ${documentId} not found`);
+  }
+  if (coachId !== null && doc.createdByCoachId !== coachId) {
+    throw new Error(`Document ${documentId} not found`); // non-disclosing
   }
   return generateSignedUrl(doc.storageKey);
 }

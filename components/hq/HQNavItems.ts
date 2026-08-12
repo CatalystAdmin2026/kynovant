@@ -29,7 +29,7 @@ export const HQ_NAV_ITEMS: HQNavItem[] = [
   { icon: Dumbbell, label: "Exercise Library", href: "/hq/exercises" },
   { icon: ClipboardCheck, label: "Check-Ins", href: "/hq/check-ins" },
   { icon: Calendar, label: "Schedule", href: "/hq/schedule" },
-  { icon: Folder, label: "Documents", href: "/hq/documents", comingSoon: true },
+  { icon: Folder, label: "Documents", href: "/hq/documents" },
 ];
 
 export function visibleHQNavItems(): HQNavItem[] {

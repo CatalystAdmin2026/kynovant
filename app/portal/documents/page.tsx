@@ -98,6 +98,14 @@ export default async function DocumentsPage() {
                       )}
                     </div>
                   </div>
+                  <a
+                    href={`/api/portal/documents/${item.assignmentId}/download`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 border border-white/[0.1] rounded-md px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-white/50 hover:text-white hover:border-[#c9a24d]/40 transition-colors"
+                  >
+                    View
+                  </a>
                 </div>
               </li>
             ))}
