@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
 import { Menu, MessageSquare, X } from "lucide-react";
+import HQMobileActions from "./HQMobileActions";
 import HQSignOutButton from "./HQSignOutButton";
 import {
   comingSoonHQNavItems,
@@ -47,25 +48,26 @@ export default function HQMobileNav({
   return (
     <>
       {/* Top bar — mobile only */}
-      <header className="lg:hidden fixed top-0 inset-x-0 z-40 h-12 bg-[#0b0c0d]/95 backdrop-blur-sm border-b border-white/[0.06] flex items-center px-4 gap-3">
+      <header className="lg:hidden fixed top-0 inset-x-0 z-40 h-[calc(3rem+env(safe-area-inset-top))] bg-[#0b0c0d]/95 backdrop-blur-sm border-b border-white/[0.06] flex items-end px-3 pb-1.5 pt-[env(safe-area-inset-top)] gap-1">
         <Image src="/logos/kynovant-mark.png" alt="Kynovant HQ" width={14} height={14} className="opacity-80" />
-        <span className="text-[9px] font-bold tracking-[0.3em] text-[#C9A24D]/80 uppercase flex-1">
+        <span className="min-w-0 flex-1 truncate text-[9px] font-bold tracking-[0.3em] text-[#C9A24D]/80 uppercase">
           Kynovant HQ
         </span>
+        <HQMobileActions />
         <Link
           href="/hq/messages"
           aria-label="Open messages"
-          className="relative text-white/50 hover:text-white/80 transition-colors"
+          className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white/50 transition-colors hover:bg-white/[0.05] hover:text-white/80"
         >
           <MessageSquare size={17} />
           {unreadMessageCount > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[#C9A24D]" />
+            <span className="absolute right-2.5 top-2.5 h-1.5 w-1.5 rounded-full bg-[#C9A24D]" />
           )}
         </Link>
         <button
           onClick={() => setOpen(true)}
           aria-label="Open navigation"
-          className="text-white/50 hover:text-white/80 transition-colors"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white/50 transition-colors hover:bg-white/[0.05] hover:text-white/80"
         >
           <Menu size={18} />
         </button>

@@ -42,7 +42,7 @@ export default function MobilePortalNav() {
   }
 
   return (
-    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#0c0d0e]/95 backdrop-blur-md border-t border-white/[0.05] h-[64px] flex items-stretch">
+    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#0c0d0e]/95 backdrop-blur-md border-t border-white/[0.05] h-[calc(64px+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] flex items-stretch">
       {TABS.map((tab) => {
         const active = isActive(tab);
         const Icon = tab.icon;
