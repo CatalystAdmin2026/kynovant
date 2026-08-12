@@ -27,7 +27,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { getDb } from "./client";
 import { coachOwnsClient } from "@/lib/auth/guards";
 import { users, clientProfiles, coachProfiles, coachingEnrollments } from "./schema";
@@ -63,7 +63,11 @@ export interface ConversationAccess {
 
 export async function resolveDisplayNames(userIds: string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  if (userIds.length === 0) return map;
+  // Dedupe before querying — the same id can legitimately repeat in the
+  // caller's input (e.g. admin's unscoped conversation list can include
+  // the same client across two different coaches' conversations).
+  const uniqueIds = [...new Set(userIds)];
+  if (uniqueIds.length === 0) return map;
   const db = getDb();
 
   const rows = await db
@@ -77,7 +81,7 @@ export async function resolveDisplayNames(userIds: string[]): Promise<Map<string
     .from(users)
     .leftJoin(clientProfiles, eq(clientProfiles.userId, users.id))
     .leftJoin(coachProfiles, eq(coachProfiles.userId, users.id))
-    .where(sql`${users.id} = ANY(${userIds})`);
+    .where(inArray(users.id, uniqueIds));
 
   for (const row of rows) {
     const name = row.clientPreferredName || row.clientFullName || row.coachDisplayName || row.email;
@@ -291,7 +295,10 @@ async function getUnreadCountsByConversation(
   excludeSenderIds: (string | null)[],
 ): Promise<Map<string, number>> {
   const map = new Map<string, number>();
-  if (conversationIds.length === 0) return map;
+  // Dedupe before querying — see resolveDisplayNames's identical comment
+  // above for why the caller's input can legitimately contain repeats.
+  const uniqueConversationIds = [...new Set(conversationIds)];
+  if (uniqueConversationIds.length === 0) return map;
   const db = getDb();
 
   // Single query: unread count per conversation, excluding messages sent
@@ -302,7 +309,7 @@ async function getUnreadCountsByConversation(
       count: sql<number>`count(*)::int`,
     })
     .from(messages)
-    .where(and(sql`${messages.conversationId} = ANY(${conversationIds})`, isNull(messages.readAt)))
+    .where(and(inArray(messages.conversationId, uniqueConversationIds), isNull(messages.readAt)))
     .groupBy(messages.conversationId);
 
   const rawCounts = new Map(rows.map((r) => [r.conversationId, r.count]));
@@ -310,7 +317,8 @@ async function getUnreadCountsByConversation(
   // rawCounts currently counts ALL unread messages regardless of sender.
   // Subtract out any that were sent by the excluded id (the requester's
   // own messages, which are never "unread" from their own perspective).
-  if (conversationIds.some((_, i) => excludeSenderIds[i])) {
+  const uniqueExcludeSenderIds = [...new Set(excludeSenderIds.filter((v): v is string => !!v))];
+  if (uniqueExcludeSenderIds.length > 0) {
     const ownUnreadRows = await db
       .select({
         conversationId: messages.conversationId,
@@ -319,9 +327,9 @@ async function getUnreadCountsByConversation(
       .from(messages)
       .where(
         and(
-          sql`${messages.conversationId} = ANY(${conversationIds})`,
+          inArray(messages.conversationId, uniqueConversationIds),
           isNull(messages.readAt),
-          sql`${messages.senderId} = ANY(${excludeSenderIds.filter((v): v is string => !!v)})`,
+          inArray(messages.senderId, uniqueExcludeSenderIds),
         ),
       )
       .groupBy(messages.conversationId);
