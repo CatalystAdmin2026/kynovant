@@ -106,10 +106,35 @@ export async function syncCoachSubscriptionFromStripeSubscription(
     currentPeriodEnd: item?.current_period_end
       ? new Date(item.current_period_end * 1000)
       : null,
-    cancelAtPeriodEnd: sub.cancel_at_period_end ?? false,
+    cancelAtPeriodEnd: isScheduledToCancelAtPeriodEnd(sub),
     cancelledAt: sub.canceled_at ? new Date(sub.canceled_at * 1000) : null,
     eventId,
   });
 
   return { ok: true, coachId, status };
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROVEN DEFECT (found via a real Stripe test-mode Billing Portal
+// cancellation, replayed against this app's own webhook route):
+// scheduling a cancellation through the Billing Portal does NOT set
+// sub.cancel_at_period_end — Stripe leaves that false and instead sets
+// sub.cancel_at to the period-end timestamp. `cancelAtPeriodEnd:
+// sub.cancel_at_period_end ?? false` therefore stayed false forever for
+// a real, live-scheduled cancellation, so /hq/billing's "scheduled to
+// cancel" notice (app/hq/billing/page.tsx, reads
+// subscription.cancelAtPeriodEnd) could never appear no matter what a
+// coach actually did in the Portal.
+//
+// A subscription is "scheduled to cancel at period end" when EITHER
+// the (still-respected, in case a future/older API shape sets it)
+// legacy boolean is true, OR a future cancel_at timestamp exists on a
+// subscription that hasn't actually been deleted yet — once
+// customer.subscription.deleted arrives, status flips to "canceled"
+// and this correctly reports false again (nothing is still "scheduled"
+// once it has already happened).
+// ─────────────────────────────────────────────────────────────
+function isScheduledToCancelAtPeriodEnd(sub: Stripe.Subscription): boolean {
+  if (sub.cancel_at_period_end) return true;
+  return typeof sub.cancel_at === "number" && sub.status !== "canceled";
 }

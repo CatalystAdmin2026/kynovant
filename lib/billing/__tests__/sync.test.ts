@@ -78,6 +78,7 @@ function fakeSubscription(
       ],
     },
     cancel_at_period_end: false,
+    cancel_at: null,
     canceled_at: null,
   };
 
@@ -166,5 +167,79 @@ describe("syncCoachSubscriptionFromStripeSubscription — real DB", () => {
     expect(rows[0].status).toBe("active");
     expect(rows[0].stripeSubscriptionId).toBe(second.id);
     expect(rows[0].stripeCustomerId).toBe("cus_test_fake_2");
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // PROVEN DEFECT — found via a real Stripe test-mode Billing Portal
+  // cancellation, replayed against the real webhook route end-to-end.
+  // Scheduling a cancellation through the Portal leaves
+  // sub.cancel_at_period_end false and sets sub.cancel_at (a future
+  // timestamp) instead — the exact shape Stripe's real API returns,
+  // reproduced here as a fixture so this doesn't depend on hitting a
+  // live Stripe account to verify.
+  // ─────────────────────────────────────────────────────────────
+  describe("cancelAtPeriodEnd — real Portal-scheduled-cancellation shape", () => {
+    it("is true when Stripe reports it via cancel_at (not cancel_at_period_end) on a still-active subscription — the real shape a Billing Portal cancellation produces", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const sub = fakeSubscription({
+        status: "trialing",
+        cancel_at_period_end: false,
+        cancel_at: now + 10 * 24 * 60 * 60,
+        canceled_at: now,
+      });
+      const result = await syncCoachSubscriptionFromStripeSubscription(sub, `evt_${randomUUID()}`);
+      expect(result.ok).toBe(true);
+
+      const [row] = await db
+        .select({ cancelAtPeriodEnd: coachSubscriptions.cancelAtPeriodEnd })
+        .from(coachSubscriptions)
+        .where(eq(coachSubscriptions.coachId, coach.id))
+        .limit(1);
+      expect(row.cancelAtPeriodEnd).toBe(true);
+    });
+
+    it("is still true when the legacy cancel_at_period_end boolean is set (never regressed by the cancel_at check)", async () => {
+      const sub = fakeSubscription({ status: "active", cancel_at_period_end: true, cancel_at: null });
+      await syncCoachSubscriptionFromStripeSubscription(sub, `evt_${randomUUID()}`);
+
+      const [row] = await db
+        .select({ cancelAtPeriodEnd: coachSubscriptions.cancelAtPeriodEnd })
+        .from(coachSubscriptions)
+        .where(eq(coachSubscriptions.coachId, coach.id))
+        .limit(1);
+      expect(row.cancelAtPeriodEnd).toBe(true);
+    });
+
+    it("is false for an ordinary active subscription with no scheduled cancellation", async () => {
+      const sub = fakeSubscription({ status: "active", cancel_at_period_end: false, cancel_at: null });
+      await syncCoachSubscriptionFromStripeSubscription(sub, `evt_${randomUUID()}`);
+
+      const [row] = await db
+        .select({ cancelAtPeriodEnd: coachSubscriptions.cancelAtPeriodEnd })
+        .from(coachSubscriptions)
+        .where(eq(coachSubscriptions.coachId, coach.id))
+        .limit(1);
+      expect(row.cancelAtPeriodEnd).toBe(false);
+    });
+
+    it("is false once the subscription has actually been deleted (status canceled), even though cancel_at is still populated — nothing is 'still scheduled' once it already happened", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const sub = fakeSubscription({
+        status: "canceled",
+        cancel_at_period_end: false,
+        cancel_at: now - 60,
+        canceled_at: now,
+      });
+      const result = await syncCoachSubscriptionFromStripeSubscription(sub, `evt_${randomUUID()}`, "cancelled");
+      expect(result.ok).toBe(true);
+
+      const [row] = await db
+        .select({ cancelAtPeriodEnd: coachSubscriptions.cancelAtPeriodEnd, status: coachSubscriptions.status })
+        .from(coachSubscriptions)
+        .where(eq(coachSubscriptions.coachId, coach.id))
+        .limit(1);
+      expect(row.status).toBe("cancelled");
+      expect(row.cancelAtPeriodEnd).toBe(false);
+    });
   });
 });
