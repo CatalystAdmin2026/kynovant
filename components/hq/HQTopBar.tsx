@@ -63,6 +63,7 @@ export default function HQTopBar() {
   const [notifications, setNotifications] = useState<CoachNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const hasSearchQuery = query.trim().length >= 2;
@@ -78,6 +79,23 @@ export default function HQTopBar() {
 
   useEffect(() => {
     void loadNotifications();
+  }, []);
+
+  // Simple polling MVP (see lib/db/messaging-service.ts's top-of-file
+  // comment) — no realtime infra for the unread-message badge either.
+  useEffect(() => {
+    async function loadUnreadMessageCount() {
+      try {
+        const res = await fetch("/api/internal/hq/messages/unread-count");
+        const json = await res.json();
+        if (res.ok && json.ok) setUnreadMessageCount(Number(json.unreadCount ?? 0));
+      } catch {
+        // Badge just stays at its last known value — not worth surfacing.
+      }
+    }
+    void loadUnreadMessageCount();
+    const interval = window.setInterval(loadUnreadMessageCount, 20000);
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -253,14 +271,17 @@ export default function HQTopBar() {
         )}
       </div>
 
-      <div
-        role="button" aria-disabled="true"
-        aria-label="Messages unavailable"
-        title="Messages are not available yet"
-        className="flex h-8 w-8 cursor-not-allowed items-center justify-center text-white/25"
+      <Link
+        href="/hq/messages"
+        aria-label="Open messages"
+        title="Messages"
+        className="relative flex h-8 w-8 items-center justify-center text-white/45 transition-colors hover:text-white/70"
       >
         <MessageSquare size={14} />
-      </div>
+        {unreadMessageCount > 0 && (
+          <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[#C9A24D]" />
+        )}
+      </Link>
 
       <div className="w-px h-5 bg-white/[0.05] mx-1" />
 

@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Calendar, FileText, Layers, LayoutDashboard, Utensils } from "lucide-react";
+import { Activity, Calendar, FileText, Layers, LayoutDashboard, MessageSquare, Utensils } from "lucide-react";
 
 const TABS = [
   { icon: LayoutDashboard, label: "Today",     href: "/portal",           exact: true },
@@ -10,11 +11,30 @@ const TABS = [
   { icon: Activity,        label: "Progress",  href: "/portal/progress"               },
   { icon: Calendar,        label: "Check-Ins", href: "/portal/check-ins"              },
   { icon: Utensils,        label: "Nutrition", href: "/portal/nutrition"              },
+  { icon: MessageSquare,   label: "Msgs",      href: "/portal/messages"               },
   { icon: FileText,        label: "Docs",      href: "/portal/documents"              },
 ];
 
 export default function MobilePortalNav() {
   const pathname = usePathname();
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+
+  // Simple polling MVP — mirrors PortalSidebar's own badge fetch (the
+  // desktop sidebar is `hidden lg:flex`, so mobile needs its own).
+  useEffect(() => {
+    async function loadUnreadMessageCount() {
+      try {
+        const res = await fetch("/api/portal/messages/unread-count");
+        const json = await res.json();
+        if (res.ok && json.ok) setUnreadMessageCount(Number(json.unreadCount ?? 0));
+      } catch {
+        // Badge just stays at its last known value.
+      }
+    }
+    void loadUnreadMessageCount();
+    const interval = window.setInterval(loadUnreadMessageCount, 20000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   function isActive(tab: (typeof TABS)[number]): boolean {
     if (tab.exact) return pathname === tab.href;
@@ -37,7 +57,12 @@ export default function MobilePortalNav() {
             {active && (
               <div className="absolute top-0 left-3 right-3 h-[1.5px] bg-[#c9a24d]/80" aria-hidden />
             )}
-            <Icon size={19} className={active ? "text-white/80" : "text-white/30"} />
+            <span className="relative">
+              <Icon size={19} className={active ? "text-white/80" : "text-white/30"} />
+              {tab.href === "/portal/messages" && unreadMessageCount > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[#c9a24d]" />
+              )}
+            </span>
             <span className="text-[9px] font-medium tracking-wide">{tab.label}</span>
           </Link>
         );

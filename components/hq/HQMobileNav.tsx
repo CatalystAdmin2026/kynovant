@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
-import { Menu, X } from "lucide-react";
+import { Menu, MessageSquare, X } from "lucide-react";
 import HQSignOutButton from "./HQSignOutButton";
 import {
   comingSoonHQNavItems,
@@ -17,9 +17,27 @@ export default function HQMobileNav({
   coachName: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const pathname = usePathname();
   const mainNav = visibleHQNavItems();
   const comingSoonNav = comingSoonHQNavItems();
+
+  // Simple polling MVP — mirrors HQTopBar's own badge fetch (the
+  // desktop top bar is `hidden lg:flex`, so mobile needs its own).
+  useEffect(() => {
+    async function loadUnreadMessageCount() {
+      try {
+        const res = await fetch("/api/internal/hq/messages/unread-count");
+        const json = await res.json();
+        if (res.ok && json.ok) setUnreadMessageCount(Number(json.unreadCount ?? 0));
+      } catch {
+        // Badge just stays at its last known value.
+      }
+    }
+    void loadUnreadMessageCount();
+    const interval = window.setInterval(loadUnreadMessageCount, 20000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   function isActive(href: string, exact = false): boolean {
     if (exact) return pathname === href;
@@ -34,6 +52,16 @@ export default function HQMobileNav({
         <span className="text-[9px] font-bold tracking-[0.3em] text-[#C9A24D]/80 uppercase flex-1">
           Kynovant HQ
         </span>
+        <Link
+          href="/hq/messages"
+          aria-label="Open messages"
+          className="relative text-white/50 hover:text-white/80 transition-colors"
+        >
+          <MessageSquare size={17} />
+          {unreadMessageCount > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[#C9A24D]" />
+          )}
+        </Link>
         <button
           onClick={() => setOpen(true)}
           aria-label="Open navigation"

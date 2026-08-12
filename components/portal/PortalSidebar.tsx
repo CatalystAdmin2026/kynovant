@@ -1,9 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Calendar, FileText, LayoutDashboard, Layers, Utensils } from "lucide-react";
+import { Activity, Calendar, FileText, LayoutDashboard, Layers, MessageSquare, Utensils } from "lucide-react";
 import LogoutButton from "./LogoutButton";
 
 interface NavItem {
@@ -19,6 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { icon: Activity,        label: "Progress",   href: "/portal/progress"               },
   { icon: Calendar,        label: "Check-Ins",  href: "/portal/check-ins"              },
   { icon: Utensils,        label: "Nutrition",  href: "/portal/nutrition"              },
+  { icon: MessageSquare,   label: "Messages",   href: "/portal/messages"               },
   { icon: FileText,        label: "Documents",  href: "/portal/documents"              },
 ];
 
@@ -28,6 +30,24 @@ interface Props {
 
 export default function PortalSidebar({ clientName }: Props) {
   const pathname = usePathname();
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+
+  // Simple polling MVP (see lib/db/messaging-service.ts's top-of-file
+  // comment) — no realtime infra for the unread badge either.
+  useEffect(() => {
+    async function loadUnreadMessageCount() {
+      try {
+        const res = await fetch("/api/portal/messages/unread-count");
+        const json = await res.json();
+        if (res.ok && json.ok) setUnreadMessageCount(Number(json.unreadCount ?? 0));
+      } catch {
+        // Badge just stays at its last known value.
+      }
+    }
+    void loadUnreadMessageCount();
+    const interval = window.setInterval(loadUnreadMessageCount, 20000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   function isActive(item: NavItem): boolean {
     if (item.exact) return pathname === item.href;
@@ -80,6 +100,11 @@ export default function PortalSidebar({ clientName }: Props) {
                 className={active ? "text-white/70" : "text-white/25"}
               />
               {item.label}
+              {item.href === "/portal/messages" && unreadMessageCount > 0 && (
+                <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-[#c9a24d] px-1 text-[9px] font-bold text-black">
+                  {unreadMessageCount > 99 ? "99+" : unreadMessageCount}
+                </span>
+              )}
             </Link>
           );
         })}
