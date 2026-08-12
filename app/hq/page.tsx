@@ -5,11 +5,8 @@
 //
 // Design intent: answer one question — "what deserves my attention
 // right now?" — with no hero banner and no greeting copy. Every
-// section below is either real data (mission control, check-ins,
-// AI generation drafts) or a clearly-labeled "Coming Soon"
-// placeholder for backend that doesn't exist yet (coach-facing
-// notifications, scheduled/upcoming sessions). Nothing here is
-// fabricated to fill space.
+// section below is real data. Nothing here is fabricated to fill
+// space.
 // ─────────────────────────────────────────────────────────────
 
 import Link from "next/link";
@@ -32,6 +29,8 @@ import { getCoachMissionControl } from "@/lib/db/coach-dashboard-service";
 import { listCoachCheckIns } from "@/lib/db/coach-check-in-service";
 import { listAttentionDrafts } from "@/lib/db/program-generation-service";
 import { listProgramTemplates } from "@/lib/db/program-builder-service";
+import { listCoachNotifications } from "@/lib/db/coach-notification-service";
+import { listUpcomingAppointments } from "@/lib/db/schedule-service";
 import AddClientButton from "@/components/hq/clients/AddClientButton";
 import HQPageHeader from "@/components/hq/HQPageHeader";
 import { Badge, type BadgeVariant } from "@/components/ui";
@@ -216,28 +215,25 @@ function MetricTile({
   );
 }
 
-// Deliberately distinct from the real-data cards elsewhere on this
-// page — dashed border, no severity dot, explicit "Coming Soon" chip
-// — so a coach never mistakes "not built yet" for "nothing's happening".
-function PlaceholderCard({
+function SummaryCard({
   icon,
   title,
-  body,
+  action,
+  children,
 }: {
   icon: React.ReactNode;
   title: string;
-  body: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="border border-dashed border-white/[0.08] bg-[#0d0e0f] p-5">
+    <div className="border border-white/[0.06] bg-[#0d0e0f] p-5">
       <div className="mb-3 flex items-center gap-2.5">
         <span className="text-white/25">{icon}</span>
         <p className="text-[9px] font-semibold uppercase tracking-[0.3em] text-white/35">{title}</p>
-        <span className="ml-auto shrink-0 border border-white/10 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.15em] text-white/30">
-          Coming Soon
-        </span>
+        {action && <span className="ml-auto shrink-0">{action}</span>}
       </div>
-      <p className="text-xs leading-relaxed text-white/35">{body}</p>
+      {children}
     </div>
   );
 }
@@ -251,16 +247,22 @@ export default async function OverviewPage() {
   const scope = resolveTenantScope(dbUser);
   const { coachId } = scope;
 
-  const [data, attentionDrafts, checkInRows, programTemplates] = await Promise.all([
-    getCoachMissionControl(coachId),
-    listAttentionDrafts(scope),
-    listCoachCheckIns({
-      coachId,
-      status: ["submitted", "in_review", "reviewed"],
-      limit: 50,
-    }),
-    listProgramTemplates(coachId),
-  ]);
+  const [data, attentionDrafts, checkInRows, programTemplates, notificationSummary, upcomingAppointments] =
+    await Promise.all([
+      getCoachMissionControl(coachId),
+      listAttentionDrafts(scope),
+      listCoachCheckIns({
+        coachId,
+        status: ["submitted", "in_review", "reviewed"],
+        limit: 50,
+      }),
+      listProgramTemplates(coachId),
+      // Both are per-coach-only tables — admin (coachId === null) has no
+      // personal notifications or appointments of their own, same
+      // posture as app/hq/billing/page.tsx's "nothing to show them".
+      coachId ? listCoachNotifications(coachId, 5) : Promise.resolve({ notifications: [], unreadCount: 0 }),
+      coachId ? listUpcomingAppointments(coachId, 5) : Promise.resolve([]),
+    ]);
 
   // ── Onboarding: contextual, not a separate page. Each row hides
   // itself the moment its own condition is met; the whole card
@@ -634,16 +636,40 @@ export default async function OverviewPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-        <PlaceholderCard
-          icon={<Bell size={16} />}
-          title="Unread Notifications"
-          body="Coach-facing notifications aren't wired up yet — this will surface unread client activity once the delivery layer ships."
-        />
-        <PlaceholderCard
+        <SummaryCard icon={<Bell size={16} />} title="Unread Notifications">
+          {notificationSummary.unreadCount === 0 ? (
+            <p className="text-xs leading-relaxed text-white/35">You&apos;re all caught up — no unread notifications.</p>
+          ) : (
+            <>
+              <p className="text-2xl font-bold tabular-nums leading-none text-white">
+                {notificationSummary.unreadCount}
+              </p>
+              <p className="mt-2 truncate text-xs leading-relaxed text-white/35">
+                {notificationSummary.notifications[0]?.title}
+              </p>
+            </>
+          )}
+        </SummaryCard>
+        <SummaryCard
           icon={<CalendarClock size={16} />}
           title="Upcoming Sessions"
-          body="Session scheduling isn't tracked ahead of time yet — this will show what's on each client's calendar for the days ahead."
-        />
+          action={
+            <Link href="/hq/schedule" className="text-[9px] font-semibold uppercase tracking-[0.15em] text-white/35 transition-colors hover:text-white/60">
+              View →
+            </Link>
+          }
+        >
+          {upcomingAppointments.length === 0 ? (
+            <p className="text-xs leading-relaxed text-white/35">Nothing scheduled in the next 90 days.</p>
+          ) : (
+            <>
+              <p className="text-2xl font-bold tabular-nums leading-none text-white">{upcomingAppointments.length}</p>
+              <p className="mt-2 truncate text-xs leading-relaxed text-white/35">
+                Next: {upcomingAppointments[0].title || "Session"} — {fmtDateTime(upcomingAppointments[0].startsAt)}
+              </p>
+            </>
+          )}
+        </SummaryCard>
       </div>
     </div>
   );
