@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Bell,
   Check,
@@ -44,6 +45,27 @@ function resultKindLabel(kind: SearchResult["kind"]) {
   return "Exercise";
 }
 
+// Where each notification's own detail page lives, keyed by the
+// resourceType its producer set (see coach-notification-service.ts).
+// coach_subscription has no per-subscription page — /hq/billing is the
+// closest useful destination. Anything unrecognized renders inert
+// rather than link to a guessed, possibly-wrong URL.
+function notificationHref(notification: CoachNotification): string | null {
+  if (!notification.resourceId) return null;
+  switch (notification.resourceType) {
+    case "conversation":
+      return `/hq/messages/${notification.resourceId}`;
+    case "program_draft":
+      return `/hq/programs/generate/${notification.resourceId}`;
+    case "check_in":
+      return `/hq/check-ins/${notification.resourceId}`;
+    case "coach_subscription":
+      return "/hq/billing";
+    default:
+      return null;
+  }
+}
+
 function fmtRelative(value: string): string {
   const diffMs = Date.now() - new Date(value).getTime();
   const min = Math.floor(diffMs / 60000);
@@ -55,6 +77,7 @@ function fmtRelative(value: string): string {
 }
 
 export default function HQTopBar() {
+  const router = useRouter();
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -177,6 +200,24 @@ export default function HQTopBar() {
     }
   }
 
+  function handleNotificationClick(notification: CoachNotification) {
+    const href = notificationHref(notification);
+    if (!href) return;
+    setNotificationsOpen(false);
+    if (!notification.readAt) {
+      setNotifications((current) =>
+        current.map((n) => (n.id === notification.id ? { ...n, readAt: new Date().toISOString() } : n)),
+      );
+      setUnreadCount((count) => Math.max(0, count - 1));
+      void fetch("/api/internal/hq/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [notification.id] }),
+      });
+    }
+    router.push(href);
+  }
+
   return (
     <header className="hidden lg:flex fixed top-0 left-64 right-0 z-20 h-12 bg-[#0b0c0d]/90 backdrop-blur-sm border-b border-white/[0.05] items-center justify-end px-6 gap-1">
       <button
@@ -237,29 +278,45 @@ export default function HQTopBar() {
                   Loading notifications
                 </div>
               ) : notifications.length > 0 ? (
-                notifications.map((notification) => (
-                  <div
-                    key={notification.id}
-                    className={`border px-3 py-3 ${
-                      notification.readAt
-                        ? "border-white/[0.045] bg-white/[0.015]"
-                        : "border-[#C9A24D]/20 bg-[#C9A24D]/[0.045]"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-white/75">{notification.title}</p>
-                        {notification.body && (
-                          <p className="mt-1 text-xs leading-relaxed text-white/35">{notification.body}</p>
-                        )}
+                notifications.map((notification) => {
+                  const href = notificationHref(notification);
+                  return (
+                    <div
+                      key={notification.id}
+                      role={href ? "button" : undefined}
+                      tabIndex={href ? 0 : undefined}
+                      onClick={href ? () => handleNotificationClick(notification) : undefined}
+                      onKeyDown={
+                        href
+                          ? (event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                handleNotificationClick(notification);
+                              }
+                            }
+                          : undefined
+                      }
+                      className={`border px-3 py-3 ${href ? "cursor-pointer hover:border-[#C9A24D]/30" : ""} ${
+                        notification.readAt
+                          ? "border-white/[0.045] bg-white/[0.015]"
+                          : "border-[#C9A24D]/20 bg-[#C9A24D]/[0.045]"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white/75">{notification.title}</p>
+                          {notification.body && (
+                            <p className="mt-1 text-xs leading-relaxed text-white/35">{notification.body}</p>
+                          )}
+                        </div>
+                        {!notification.readAt && <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[#C9A24D]" />}
                       </div>
-                      {!notification.readAt && <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[#C9A24D]" />}
+                      <p className="mt-2 text-[10px] uppercase tracking-[0.18em] text-white/22">
+                        {notification.eventType.replace(/_/g, " ")} · {fmtRelative(notification.createdAt)}
+                      </p>
                     </div>
-                    <p className="mt-2 text-[10px] uppercase tracking-[0.18em] text-white/22">
-                      {notification.eventType.replace(/_/g, " ")} · {fmtRelative(notification.createdAt)}
-                    </p>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="border border-dashed border-white/[0.08] px-4 py-8 text-center">
                   <p className="text-sm text-white/45">No notifications yet</p>
