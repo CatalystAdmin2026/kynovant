@@ -169,10 +169,14 @@ export function computeCompliancePct(completedLast30d: number, skippedLast30d: n
 }
 
 // Week 1 starts on program start date; advances every 7 days.
+// Returns 0 when the start date is still in the future (program hasn't
+// started yet) — callers treat 0 as "not started" rather than clamping
+// every future-dated assignment to a false "Week 1" / non-zero progress.
 export function computeCurrentWeek(startDateStr: string): number {
   const startDate = new Date(startDateStr + "T00:00:00Z");
   const diffDays = Math.floor((Date.now() - startDate.getTime()) / (1000 * 60 * 60 * 24));
-  return Math.max(1, Math.floor(diffDays / 7) + 1);
+  if (diffDays < 0) return 0;
+  return Math.floor(diffDays / 7) + 1;
 }
 
 const ATTENTION_ORDER: Record<AttentionLevel, number> = {
