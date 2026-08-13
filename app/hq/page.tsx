@@ -355,7 +355,7 @@ export default async function OverviewPage() {
   const headerSubtitle =
     priorities.length === 0
       ? "Nothing urgent — your coaching queue is clear."
-      : `${priorities.length} item${priorities.length === 1 ? "" : "s"} need your attention.`;
+      : `${priorities.length} item${priorities.length === 1 ? "" : "s"} need${priorities.length === 1 ? "s" : ""} your attention.`;
 
   return (
     <div className="space-y-8">
