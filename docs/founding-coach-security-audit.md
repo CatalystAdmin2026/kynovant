@@ -44,11 +44,11 @@
 **Evidence:** `components/AdminGate.tsx:13-14`:
 ```ts
 const SESSION_KEY    = "catalyst_admin_access";
-const ADMIN_PASSWORD = "Catalyst2026!";
+const ADMIN_PASSWORD = "[redacted shared admin password]";
 ```
 The file's own top-of-file comment (lines 3-9) already flags this as "security-by-obscurity only." It wraps every page under `/admin` (`app/admin/page.tsx:1825`, `app/admin/programs/page.tsx:103`, `app/admin/blueprints/page.tsx:101`, `app/admin/programs/[id]/page.tsx:55`, `app/admin/blueprints/[id]/page.tsx:47`).
 
-**Exploit / failure scenario:** `/admin/layout.tsx` does run a real server-side check (`requireCoachOrAdminPage`) before the page renders, so an anonymous internet user cannot reach the page itself. But the password string is compiled into a **public, unauthenticated static JS chunk** under `/_next/static/chunks/*.js` — Next.js serves client-component bundles as static assets regardless of route auth. Anyone who has ever been issued a coach account (all 10 founding coaches will be) can open browser devtools, find the chunk, and read `Catalyst2026!` in cleartext. Combined with finding #3, that single shared password is effectively the master key to the full business Command Center (all leads, all coaches' pipeline, Stripe/DocuSign config panel) for every coach on the platform, and it cannot be rotated per-user or revoked for one coach without changing it for all ten.
+**Exploit / failure scenario:** `/admin/layout.tsx` does run a real server-side check (`requireCoachOrAdminPage`) before the page renders, so an anonymous internet user cannot reach the page itself. But the password string is compiled into a **public, unauthenticated static JS chunk** under `/_next/static/chunks/*.js` — Next.js serves client-component bundles as static assets regardless of route auth. Anyone who has ever been issued a coach account (all 10 founding coaches will be) can open browser devtools and find the shared password in cleartext. Combined with finding #3, that single shared password is effectively the master key to the full business Command Center (all leads, all coaches' pipeline, Stripe/DocuSign config panel) for every coach on the platform, and it cannot be rotated per-user or revoked for one coach without changing it for all ten.
 
 **Fix:** Delete `AdminGate` entirely — the real access control is already `requireCoachOrAdminPage()` in `app/admin/layout.tsx`. If a second factor is genuinely wanted for `/admin`, it needs to be a server-verified check (signed cookie, TOTP, etc.), never a client-side string comparison.
 

@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { toggleExerciseFavorite } from "@/lib/db/exercise-service";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, authorizeExerciseView } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +11,8 @@ export async function POST(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeExerciseView(guard.dbUser, id);
+  if (deny) return deny;
 
   try {
     const result = await toggleExerciseFavorite(id, guard.dbUser.id);

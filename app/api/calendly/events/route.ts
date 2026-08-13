@@ -10,6 +10,7 @@
 // All invitee fetches run in parallel per category.
 
 import { NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -145,6 +146,9 @@ async function fetchEventsWithInvitees(
 // ─── Route handler ────────────────────────────────────────────
 
 export async function GET() {
+  const guard = await requireAdmin();
+  if (!guard.ok) return guard.response;
+
   const token = process.env.CALENDLY_PERSONAL_ACCESS_TOKEN;
   const userUri = process.env.CALENDLY_USER_URI;
 

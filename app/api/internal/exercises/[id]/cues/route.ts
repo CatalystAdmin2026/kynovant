@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { getExerciseCues } from "@/lib/db/exercise-service";
 import { addExerciseCue } from "@/lib/db/exercise-admin-service";
 import type { ExerciseCueType } from "@/lib/db/schema-exercise";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, authorizeExerciseMutation, authorizeExerciseView } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,8 @@ export async function GET(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeExerciseView(guard.dbUser, id);
+  if (deny) return deny;
   const cues = await getExerciseCues(id, false); // coaches see all cues including non-public
   return NextResponse.json({ ok: true, cues });
 }
@@ -24,6 +26,8 @@ export async function POST(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeExerciseMutation(guard.dbUser, id);
+  if (deny) return deny;
 
   try {
     const body = await req.json() as { cueType?: string; content?: string; isPublic?: boolean };

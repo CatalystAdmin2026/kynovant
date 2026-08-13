@@ -10,6 +10,7 @@
 // can be auto-populated from real application and onboarding submissions.
 
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/auth/guards";
 
 type SheetKey =
   | "applications"
@@ -47,6 +48,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ sheet: string }> },
 ) {
+  const guard = await requireAdmin();
+  if (!guard.ok) return guard.response;
+
   const { sheet } = await params;
 
   if (!VALID_SHEETS.has(sheet)) {

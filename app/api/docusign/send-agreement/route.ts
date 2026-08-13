@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/auth/guards";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,9 @@ async function sendEnvelope(
 // ── Route handler ──────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (!guard.ok) return guard.response;
+
   // Validate body
   let body: SendAgreementBody;
   try {

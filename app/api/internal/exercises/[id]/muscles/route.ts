@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { getExerciseMuscles } from "@/lib/db/exercise-service";
 import { addExerciseMuscle } from "@/lib/db/exercise-admin-service";
 import type { MuscleGroup, MuscleRole } from "@/lib/db/schema-exercise";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, authorizeExerciseMutation, authorizeExerciseView } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,8 @@ export async function GET(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeExerciseView(guard.dbUser, id);
+  if (deny) return deny;
   const muscles = await getExerciseMuscles(id);
   return NextResponse.json({ ok: true, muscles });
 }
@@ -24,6 +26,8 @@ export async function POST(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeExerciseMutation(guard.dbUser, id);
+  if (deny) return deny;
 
   try {
     const body = await req.json() as { muscleGroup?: string; role?: string; emphasisPercent?: number };

@@ -1,6 +1,6 @@
-import { requireCoachOrAdminPage } from "@/lib/auth/guards";
+import { requireAdminPage } from "@/lib/auth/guards";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  await requireCoachOrAdminPage();
+  await requireAdminPage();
   return <>{children}</>;
 }

@@ -30,7 +30,7 @@ import { getDb } from "@/lib/db/client";
 import { users, coachingEnrollments, programTemplates, workoutTemplates } from "@/lib/db/schema";
 import { workoutSessions, programWeeks } from "@/lib/db/schema-program";
 import { weeklyCheckIns } from "@/lib/db/schema-check-in";
-import { workoutTemplateSections, workoutTemplateExercises } from "@/lib/db/schema-exercise";
+import { exercises, workoutTemplateSections, workoutTemplateExercises } from "@/lib/db/schema-exercise";
 import { documents } from "@/lib/db/schema-documents";
 import { getCoachEntitlement, type CoachEntitlement } from "@/lib/db/coach-subscription-service";
 import type { User } from "@supabase/supabase-js";
@@ -735,4 +735,61 @@ export async function authorizeCoachDocumentMutation(
 ): Promise<NextResponse | null> {
   const result = await assertCoachOwnsDocument(dbUser, documentId);
   return result.ok ? null : denyNotFound();
+}
+
+// ─────────────────────────────────────────────────────────────
+// EXERCISE LIBRARY VISIBILITY / MUTATION
+//
+// Admin can view and mutate all Exercise Library rows. Coaches can view
+// shared platform rows plus their own coach-scoped rows. Coaches can
+// mutate only their own coach-scoped rows; canonical system/org rows
+// are edited through reviewed admin data flows, not direct coach PATCH
+// calls.
+// ─────────────────────────────────────────────────────────────
+
+export async function authorizeExerciseView(
+  dbUser: PublicUser,
+  exerciseId: string,
+): Promise<NextResponse | null> {
+  if (dbUser.role === "admin") return null;
+
+  const db = getDb();
+  const rows = await db
+    .select({ id: exercises.id })
+    .from(exercises)
+    .where(
+      and(
+        eq(exercises.id, exerciseId),
+        or(
+          eq(exercises.scope, "system"),
+          eq(exercises.scope, "organization"),
+          and(eq(exercises.scope, "coach"), eq(exercises.createdBy, dbUser.id)),
+        )!,
+      ),
+    )
+    .limit(1);
+
+  return rows.length > 0 ? null : denyNotFound();
+}
+
+export async function authorizeExerciseMutation(
+  dbUser: PublicUser,
+  exerciseId: string,
+): Promise<NextResponse | null> {
+  if (dbUser.role === "admin") return null;
+
+  const db = getDb();
+  const rows = await db
+    .select({ id: exercises.id })
+    .from(exercises)
+    .where(
+      and(
+        eq(exercises.id, exerciseId),
+        eq(exercises.scope, "coach"),
+        eq(exercises.createdBy, dbUser.id),
+      ),
+    )
+    .limit(1);
+
+  return rows.length > 0 ? null : denyNotFound();
 }

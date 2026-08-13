@@ -133,6 +133,15 @@ export async function searchExercises(
     } else if (statuses.length > 1) {
       conditions.push(inArray(exercises.status, statuses as ExerciseStatus[]));
     }
+    if (coachId) {
+      conditions.push(
+        or(
+          eq(exercises.scope, "system"),
+          eq(exercises.scope, "organization"),
+          and(eq(exercises.scope, "coach"), eq(exercises.createdBy, coachId)),
+        )!,
+      );
+    }
     if (scope) conditions.push(eq(exercises.scope, scope));
     if (movementPattern) conditions.push(eq(exercises.movementPattern, movementPattern));
     if (classification) conditions.push(eq(exercises.classification, classification));
@@ -330,6 +339,7 @@ export async function getExerciseWithDetails(
     accessConditions.push(
       or(
         eq(exercises.scope, "system"),
+        eq(exercises.scope, "organization"),
         and(eq(exercises.scope, "coach"), eq(exercises.createdBy, viewer.id)),
       )!,
     );

@@ -4,6 +4,7 @@
 
 import crypto from "crypto";
 import { NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/auth/guards";
 
 // ── JWT auth helpers (self-contained copy — do not import from send-agreement) ──
 
@@ -144,6 +145,9 @@ function flattenRecipientGroup(
 // ── Route ──────────────────────────────────────────────────────────────────
 
 export async function GET() {
+  const guard = await requireAdmin();
+  if (!guard.ok) return guard.response;
+
   const {
     DOCUSIGN_INTEGRATION_KEY: integrationKey,
     DOCUSIGN_USER_ID:         userId,

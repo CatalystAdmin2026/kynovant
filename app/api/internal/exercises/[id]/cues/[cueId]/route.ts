@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { updateExerciseCue, deleteExerciseCue } from "@/lib/db/exercise-admin-service";
 import type { ExerciseCueType } from "@/lib/db/schema-exercise";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, authorizeExerciseMutation } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +12,8 @@ export async function PATCH(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id, cueId } = await params;
+  const deny = await authorizeExerciseMutation(guard.dbUser, id);
+  if (deny) return deny;
 
   try {
     const body = await req.json() as { content?: string; cueType?: string; isPublic?: boolean };
@@ -35,6 +37,8 @@ export async function DELETE(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id, cueId } = await params;
+  const deny = await authorizeExerciseMutation(guard.dbUser, id);
+  if (deny) return deny;
   await deleteExerciseCue(cueId, id);
   return NextResponse.json({ ok: true });
 }

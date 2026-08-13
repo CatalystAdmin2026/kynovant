@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
         statuses: ["active"],
         limit,
       },
-      guard.dbUser.id,
+      guard.dbUser.role === "admin" ? undefined : guard.dbUser.id,
     );
     return NextResponse.json({ ok: true, exercises: results });
   } catch (err) {

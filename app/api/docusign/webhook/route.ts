@@ -309,7 +309,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
   } else {
-    console.warn("[DocuSign Webhook] DocuSign webhook secret not configured — accepting unauthenticated request");
+    console.error("[DocuSign Webhook] DOCUSIGN_WEBHOOK_SECRET is not configured — rejecting request");
+    return NextResponse.json({ ok: false, error: "Webhook not configured" }, { status: 503 });
   }
 
   // ── Parse body from the already-read raw string ────────────────────────────

@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getExerciseWithDetails } from "@/lib/db/exercise-service";
 import { updateExercise, publishExercise, archiveExercise, restoreExercise, deleteExercise } from "@/lib/db/exercise-admin-service";
-import { requireCoachOrAdmin } from "@/lib/auth/guards";
+import { requireCoachOrAdmin, authorizeExerciseMutation } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +37,8 @@ export async function PATCH(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeExerciseMutation(guard.dbUser, id);
+  if (deny) return deny;
 
   try {
     const body = await req.json() as { action?: string } & Record<string, unknown>;
@@ -77,6 +79,8 @@ export async function DELETE(
   const guard = await requireCoachOrAdmin();
   if (!guard.ok) return guard.response;
   const { id } = await params;
+  const deny = await authorizeExerciseMutation(guard.dbUser, id);
+  if (deny) return deny;
   const result = await deleteExercise(id);
   if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 409 });
   return NextResponse.json({ ok: true });
