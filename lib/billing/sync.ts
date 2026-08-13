@@ -27,6 +27,7 @@
 import "server-only";
 import type Stripe from "stripe";
 import { strOrNull } from "@/lib/stripe";
+import { kynovantStripe } from "./stripe-client";
 import {
   upsertCoachSubscriptionFromStripe,
   type StripeSubscriptionSync,
@@ -112,6 +113,53 @@ export async function syncCoachSubscriptionFromStripeSubscription(
   });
 
   return { ok: true, coachId, status };
+}
+
+// ─────────────────────────────────────────────────────────────
+// LIVE REFRESH — fixes a real gap found via a genuine Stripe test-mode
+// Billing Portal cancellation walked through end-to-end: unlike
+// Checkout (app/account-status's synchronous fast path, using the
+// Checkout Session's own {CHECKOUT_SESSION_ID}), the Billing Portal's
+// return_url (${origin}/hq/billing — see lib/billing/actions.ts)
+// carries no session token to resync from, so nothing synchronous ever
+// ran on return from the Portal. In an environment where the webhook
+// endpoint isn't reachable (no public URL — true of any local/preview
+// deployment, and construction is possible even in production if
+// delivery is merely delayed relative to how fast the coach clicks
+// back), a coach who just scheduled or undid a cancellation in the
+// Portal would see stale data on /hq/billing until a webhook happened
+// to arrive. Proven: scheduled a real cancellation via the Portal,
+// confirmed via Stripe's own API that cancel_at was set on the
+// subscription, and confirmed coach_subscriptions was never updated —
+// no webhook had reached this environment.
+//
+// This re-fetches the subscription directly from Stripe and re-syncs
+// it through the exact same, already-idempotent
+// syncCoachSubscriptionFromStripeSubscription() used by both the
+// webhook and the Checkout fast path — no new sync logic, just another
+// caller of it. Safe to call on every /hq/billing render: a single
+// Stripe API read, and the eventId it's tagged with is never used for
+// dedup gating (see upsertCoachSubscriptionFromStripe) — only stored
+// for traceability — so calling this repeatedly is exactly as safe as
+// receiving the same webhook event multiple times.
+//
+// Returns null (never throws) on any lookup failure — the caller falls
+// back to whatever's already in coach_subscriptions, same fallback
+// behavior as the Checkout fast path.
+// ─────────────────────────────────────────────────────────────
+export async function refreshCoachSubscriptionFromStripe(
+  stripeSubscriptionId: string,
+): Promise<SyncCoachSubscriptionResult | null> {
+  try {
+    const sub = await kynovantStripe().subscriptions.retrieve(stripeSubscriptionId);
+    return await syncCoachSubscriptionFromStripeSubscription(sub, `hq_billing_refresh_${Date.now()}`);
+  } catch (err) {
+    console.error(
+      "[Billing] refreshCoachSubscriptionFromStripe failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

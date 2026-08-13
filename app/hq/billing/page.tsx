@@ -15,6 +15,7 @@ import { getDb } from "@/lib/db/client";
 import { coachSubscriptions } from "@/lib/db/schema-billing";
 import { eq } from "drizzle-orm";
 import { openBillingPortalAction } from "@/lib/billing/actions";
+import { refreshCoachSubscriptionFromStripe } from "@/lib/billing/sync";
 import HQPageHeader from "@/components/hq/HQPageHeader";
 
 export const dynamic = "force-dynamic";
@@ -50,11 +51,33 @@ export default async function BillingPage() {
   }
 
   const db = getDb();
-  const [subscription] = await db
+  const [initialSubscription] = await db
     .select()
     .from(coachSubscriptions)
     .where(eq(coachSubscriptions.coachId, dbUser.id))
     .limit(1);
+
+  // Re-sync from Stripe directly before rendering — this is the page a
+  // coach lands on immediately after the Billing Portal's return_url,
+  // and unlike Checkout's success_url there's no session token to
+  // synchronously resync from there, only the webhook. Re-fetching here
+  // means this page never shows stale cancellation/plan-change state
+  // just because a webhook hasn't arrived yet (or, in a local/preview
+  // deployment with no reachable webhook endpoint, never will). See
+  // lib/billing/sync.ts's refreshCoachSubscriptionFromStripe() for the
+  // full rationale. No-op for a manually_activated coach (no real
+  // subscription to refresh) or one with none yet.
+  if (initialSubscription?.stripeSubscriptionId) {
+    await refreshCoachSubscriptionFromStripe(initialSubscription.stripeSubscriptionId);
+  }
+
+  const [subscription] = initialSubscription?.stripeSubscriptionId
+    ? await db
+        .select()
+        .from(coachSubscriptions)
+        .where(eq(coachSubscriptions.coachId, dbUser.id))
+        .limit(1)
+    : [initialSubscription];
 
   const hasStripeCustomer = Boolean(subscription?.stripeCustomerId);
 
