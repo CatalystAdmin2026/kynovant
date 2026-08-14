@@ -59,14 +59,14 @@ export default function StartTrialPage() {
       <section className="pt-36 pb-12 px-6 bg-[#0c0e0f] border-b border-white/5">
         <div className="max-w-3xl mx-auto text-center">
           <p className="text-[#C9A24D] text-[11px] font-semibold tracking-[0.45em] mb-3 uppercase">
-            Kynovant for Coaches
+            Kynovant for Trainers and Coaches
           </p>
           <h1 className="font-headline text-4xl sm:text-5xl md:text-6xl font-bold uppercase text-white mb-4 leading-none">
             <span className="block sm:inline">Start Your</span>{" "}
             <span className="block sm:inline">14-Day Free Trial</span>
           </h1>
           <p className="text-gray-500 max-w-[280px] sm:max-w-xl mx-auto text-sm leading-relaxed">
-            Create your coach workspace now. No application, no demo call, no
+            Create your Kynovant workspace now. No application, no demo call, no
             waiting on anyone. Full pricing is shown before you&apos;re ever
             charged.
           </p>

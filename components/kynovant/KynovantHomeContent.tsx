@@ -171,20 +171,20 @@ function Hero() {
           <div className="inline-flex items-center gap-2 rounded-full border border-mkt-border bg-mkt-surface-raised px-3.5 py-1.5 mb-8">
             <Sparkles className="w-3.5 h-3.5 text-gold" />
             <span className="text-[11px] font-medium tracking-wide text-white/60">
-              Coaching operations, run on software
+              Training and coaching operations, run on software
             </span>
           </div>
 
           <h1 className="max-w-[320px] text-3xl leading-[1.08] sm:max-w-none sm:text-[2.6rem] md:text-6xl md:leading-[1.03] font-semibold tracking-tight text-white">
             <span className="block sm:inline">The operating system</span>{" "}
-            <span className="block sm:inline">for online coaching</span>{" "}
-            <span className="block sm:inline">businesses.</span>
+            <span className="block sm:inline">for personal trainers</span>{" "}
+            <span className="block sm:inline">and online coaches.</span>
           </h1>
 
           <p className="mt-7 max-w-[320px] text-base leading-relaxed text-white/55 sm:max-w-xl sm:text-lg">
-            Kynovant replaces the spreadsheets, PDFs, and scattered DMs coaches patch together
-            with one workspace — programming, AI-assisted program building, check-ins,
-            nutrition targets, scheduling, messaging, and documents.
+            Kynovant replaces the spreadsheets, PDFs, and scattered DMs trainers and coaches
+            patch together with one workspace — programming, AI-assisted program building,
+            check-ins, nutrition targets, scheduling, messaging, and documents.
           </p>
 
           <div className="mt-10 flex flex-col items-start gap-4 sm:flex-row sm:flex-wrap sm:items-center">
@@ -289,15 +289,15 @@ function Hero() {
 
 const AUDIENCES = [
   {
-    title: "Independent online coaches",
-    body: "Running your own book of 1:1 clients and ready to stop rebuilding the same spreadsheet every month.",
+    title: "Independent personal trainers",
+    body: "Training clients on the floor, online, or both — and ready to stop rebuilding the same spreadsheet every month.",
   },
   {
-    title: "Coaches scaling past a handful of clients",
+    title: "Online coaches scaling past a handful of clients",
     body: "The DM-and-PDF workflow that worked at 5 clients breaks at 25. Kynovant is built to hold the load.",
   },
   {
-    title: "Coaches who want software that looks the part",
+    title: "Trainers and coaches who want software that looks the part",
     body: "Your programming is professional. Your tools should feel that way too — for you and your clients.",
   },
 ];
@@ -337,15 +337,16 @@ function PromiseSection() {
               Your clients made the promise. Help them keep it.
             </h2>
             <p className="mt-8 max-w-3xl text-base leading-relaxed text-white/55 md:text-lg">
-              Every client who hires a coach is trying to follow through on something that
-              matters. Kynovant was built around a simple belief: great coaching is not only
-              writing the right program. It is the structure, accountability, communication,
-              and context that help a person keep going when motivation is no longer enough.
+              Every client who hires a trainer or coach is trying to follow through on
+              something that matters. Kynovant was built around a simple belief: great
+              coaching is not only writing the right program. It is the structure,
+              accountability, communication, and context that help a person keep going when
+              motivation is no longer enough.
             </p>
             <p className="mt-6 max-w-2xl text-sm leading-relaxed text-white/38">
               Programming gives the commitment a plan. Check-ins keep it visible. Messaging
-              keeps the relationship connected. Client context helps the coach remember what
-              matters to the person behind the plan.
+              keeps the relationship connected. Client context helps you remember what matters
+              to the person behind the plan.
             </p>
           </div>
         </div>
@@ -366,7 +367,7 @@ function PlatformShowcase() {
         <SectionHeading
           eyebrow="The Platform"
           title="One workspace for the entire coaching operation."
-          body="Coach HQ replaces the spreadsheet-plus-app-stack most coaches run today. Clients, programs, check-ins, nutrition, scheduling, messaging, and documents — in one place, built around how coaching work actually happens week to week."
+          body="Coach HQ replaces the spreadsheet-plus-app-stack most trainers and coaches run today. Clients, programs, check-ins, nutrition, scheduling, messaging, and documents — in one place, built around how client work actually happens week to week."
         />
 
         <div className="mt-14 grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -745,8 +746,8 @@ function FinalCTA() {
           Build the system behind the follow-through.
         </h2>
         <p className="mt-5 text-base leading-relaxed text-white/50 max-w-xl mx-auto">
-          Kynovant Professional is $99/month with a 14-day free trial. Get started in minutes —
-          no demo call required to see how it works.
+          Kynovant Professional is $99/month with a 14-day free trial for personal trainers
+          and online coaches. Get started in minutes — no demo call required to see how it works.
         </p>
         <div className="mt-9 flex flex-wrap items-center justify-center gap-4">
           <Link

@@ -10,7 +10,7 @@ import {
 export const metadata: Metadata = {
   title: "Features - Kynovant",
   description:
-    "A factual overview of Kynovant's shipped coach-facing product: AI-assisted program drafting, Exercise Library, clients, check-ins, messaging, documents, schedule, search, notifications, billing, client portal, and PWA experience.",
+    "A factual overview of Kynovant's shipped product for personal trainers and coaches: AI-assisted program drafting, Exercise Library, clients, check-ins, messaging, documents, schedule, search, notifications, billing, client portal, and PWA experience.",
 };
 
 export default function FeaturesPage() {
@@ -26,10 +26,10 @@ export default function FeaturesPage() {
               What Kynovant actually does.
             </h1>
             <p className="mt-6 max-w-3xl text-base leading-relaxed text-white/50 md:text-lg">
-              Kynovant is coaching operations software for professional coaches who need one
-              place to manage programming, client context, weekly review, documents,
-              communication, scheduling, and billing. This page describes shipped product
-              behavior, not roadmap promises.
+              Kynovant is coaching operations software for professional personal trainers
+              and online coaches who need one place to manage programming, client context,
+              weekly review, documents, communication, scheduling, and billing. This page
+              describes shipped product behavior, not roadmap promises.
             </p>
           </div>
 

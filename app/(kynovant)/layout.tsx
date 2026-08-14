@@ -9,11 +9,11 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://kynovant.com"),
   title: "Kynovant — Coaching Business Software",
   description:
-    "The system built to run a real coaching practice — programming, check-ins, nutrition, and client progress.",
+    "The system built for personal trainers and online coaches to run client programming, check-ins, nutrition, and progress.",
   openGraph: {
     title: "Kynovant — Coaching Business Software",
     description:
-      "The system built to run a real coaching practice — programming, check-ins, nutrition, and client progress.",
+      "The system built for personal trainers and online coaches to run client programming, check-ins, nutrition, and progress.",
     url: "https://kynovant.com",
     siteName: "Kynovant",
     images: [{ url: "/kynovant_primary.png", width: 1254, height: 1254 }],

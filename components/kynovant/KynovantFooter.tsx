@@ -73,9 +73,10 @@ export default function KynovantFooter() {
 
         <div className="flex flex-col md:flex-row justify-between gap-5 text-xs text-white/35 leading-relaxed">
           <p className="max-w-xl">
-            Kynovant is coaching operations software for client management, AI-assisted program
-            building, check-in review, internal scheduling, messaging, documents, billing, and
-            progress context. Kynovant does not provide medical advice, diagnoses, or treatment.
+            Kynovant is coaching operations software for personal trainers and online coaches:
+            client management, AI-assisted program building, check-in review, internal
+            scheduling, messaging, documents, billing, and progress context. Kynovant does not
+            provide medical advice, diagnoses, or treatment.
           </p>
           <p className="md:text-right shrink-0 text-white/25">
             © {year} Kynovant.

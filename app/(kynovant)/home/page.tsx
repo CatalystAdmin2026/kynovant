@@ -8,9 +8,9 @@ import KynovantHomeContent from "@/components/kynovant/KynovantHomeContent";
 // KynovantHomeContent, so every "/" visitor sees identical content
 // regardless of which host or route resolved them here.
 export const metadata: Metadata = {
-  title: "Kynovant — The Operating System for Online Coaching Businesses",
+  title: "Kynovant — The Operating System for Personal Trainers and Online Coaches",
   description:
-    "Kynovant replaces spreadsheets, PDFs, and scattered DMs with one platform for programming, AI-assisted program building, check-ins, nutrition, scheduling, messaging, and documents.",
+    "Kynovant replaces spreadsheets, PDFs, and scattered DMs with one platform for personal trainers and online coaches to manage programming, check-ins, nutrition, scheduling, messaging, and documents.",
 };
 
 export default function KynovantHomeRoute() {

@@ -81,4 +81,19 @@ describe("Kynovant public feature content", () => {
     expect(homepage).toContain("The Reason Behind The Software");
     expect(homepage).toContain("Build the system behind the follow-through.");
   });
+
+  it("positions Kynovant for personal trainers and online coaches on public entry points", () => {
+    const homepage = source("components/kynovant/KynovantHomeContent.tsx");
+    const startTrial = source("app/(kynovant)/start-trial/page.tsx");
+    const features = source("app/(kynovant)/features/page.tsx");
+    const pricing = source("app/(kynovant)/pricing/page.tsx");
+
+    expect(homepage).toContain("for personal trainers");
+    expect(homepage).toContain("and online coaches");
+    expect(homepage).toContain("Independent personal trainers");
+    expect(homepage).toContain("Online coaches scaling past a handful of clients");
+    expect(startTrial).toContain("Kynovant for Trainers and Coaches");
+    expect(features).toContain("professional personal trainers");
+    expect(pricing).toContain("personal trainers");
+  });
 });

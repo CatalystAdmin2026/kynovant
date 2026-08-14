@@ -5,7 +5,7 @@ import { ArrowRight, Check } from "lucide-react";
 export const metadata: Metadata = {
   title: "Pricing - Kynovant",
   description:
-    "Kynovant Professional is $99/month with a 14-day free trial. One plan for Coach HQ, AI-assisted programming, client portal, messaging, scheduling, documents, and billing.",
+    "Kynovant Professional is $99/month with a 14-day free trial. One plan for personal trainers and online coaches using Coach HQ, AI-assisted programming, client portal, messaging, scheduling, documents, and billing.",
 };
 
 const included = [
@@ -32,8 +32,9 @@ export default function PricingPage() {
               One plan. Everything included.
             </h1>
             <p className="mt-6 text-base leading-relaxed text-white/50">
-              Start Kynovant Professional with a 14-day free trial. No tiers to compare,
-              no required demo, and no application before trying the product.
+              Start Kynovant Professional with a 14-day free trial for personal trainers
+              and online coaches. No tiers to compare, no required demo, and no application
+              before trying the product.
             </p>
           </div>
 
