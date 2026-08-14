@@ -89,6 +89,18 @@ export interface OverwatchMetrics {
   };
 }
 
+export async function getOverwatchFounderFirstName(userId: string): Promise<string | null> {
+  const db = getDb();
+  const [profile] = await db
+    .select({ displayName: coachProfiles.displayName })
+    .from(coachProfiles)
+    .where(eq(coachProfiles.userId, userId))
+    .limit(1);
+
+  const first = profile?.displayName?.trim().split(/\s+/)[0];
+  return first && first.length > 0 ? first : null;
+}
+
 function toNumber(value: unknown): number {
   if (typeof value === "number") return value;
   if (typeof value === "string") return Number.parseFloat(value) || 0;

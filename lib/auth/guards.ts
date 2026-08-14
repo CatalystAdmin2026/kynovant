@@ -258,6 +258,17 @@ export async function requireAdminPage(): Promise<AuthedUser> {
   return { authUser: resolved.authUser, dbUser: resolved.dbUser };
 }
 
+export async function requireOverwatchAdminPage(): Promise<AuthedUser> {
+  const resolved = await resolveSession();
+  if (!resolved.ok) {
+    redirect("/overwatch/login?error=authentication_required&next=/overwatch");
+  }
+  if (resolved.dbUser.role !== "admin") {
+    redirect("/overwatch/login?error=forbidden");
+  }
+  return { authUser: resolved.authUser, dbUser: resolved.dbUser };
+}
+
 // ─────────────────────────────────────────────────────────────
 // OBJECT-LEVEL AUTHORIZATION
 // ─────────────────────────────────────────────────────────────

@@ -86,6 +86,7 @@ const KYNOVANT_ONLY_PREFIXES = [
   "/portal",
   "/account",
   "/admin",
+  "/overwatch",
 ];
 
 function matchesPrefix(pathname: string, prefixes: string[]): boolean {
@@ -122,7 +123,7 @@ function resolveBrand(request: NextRequest): Brand {
 // token-refresh-before-render treatment as every other protected path,
 // and the pre-login redirect below, instead of relying solely on the
 // page's own guard.
-const PROTECTED_PATHS = ["/portal", "/account", "/account-status", "/hq", "/admin"];
+const PROTECTED_PATHS = ["/portal", "/account", "/account-status", "/hq", "/admin", "/overwatch"];
 const AUTH_RELEVANT_PATHS = [...PROTECTED_PATHS, "/login", "/auth"];
 
 export async function proxy(request: NextRequest) {
@@ -188,14 +189,17 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isProtected = matchesPrefix(pathname, PROTECTED_PATHS);
+  const isOverwatchLogin = pathname === "/overwatch/login";
+  const isProtected = matchesPrefix(pathname, PROTECTED_PATHS) && !isOverwatchLogin;
 
   if (isProtected && !user) {
     const loginUrl = request.nextUrl.clone();
-    loginUrl.pathname = "/login";
+    loginUrl.pathname = pathname === "/overwatch" || pathname.startsWith("/overwatch/")
+      ? "/overwatch/login"
+      : "/login";
     // Preserve the intended destination for post-login redirect.
     // Validated against an allowlist in the auth callback.
-    loginUrl.searchParams.set("next", pathname);
+    loginUrl.searchParams.set("next", pathname + request.nextUrl.search);
     return NextResponse.redirect(loginUrl);
   }
 

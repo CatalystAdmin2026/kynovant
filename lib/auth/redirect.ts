@@ -4,7 +4,7 @@
 // Pure functions — no server-only imports, safe to test directly.
 //
 // Access matrix (which next= prefixes each role may use):
-//   admin  → /admin, /hq, /account
+//   admin  → /admin, /hq, /account, /overwatch
 //   coach  → /hq, /account
 //   client → /portal, /account
 //
@@ -31,7 +31,7 @@ const ROLE_FALLBACK: Record<UserRole, string> = {
 
 // Route prefixes each role may reach via the next param.
 const ROLE_ALLOWED_PREFIXES: Record<UserRole, string[]> = {
-  admin: ["/admin", "/hq", "/account"],
+  admin: ["/admin", "/hq", "/account", "/overwatch"],
   coach: ["/hq", "/account"],
   client: ["/portal", "/account"],
 };

@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
   const code = url.searchParams.get("code");
   const next = url.searchParams.get("next");
   const type = url.searchParams.get("type"); // "recovery" | "invite" | "email" | null
+  const overwatch = url.searchParams.get("overwatch");
   const origin = url.origin;
 
   if (!code) {
@@ -102,6 +103,12 @@ export async function GET(request: NextRequest) {
   }
   if (type === "invite") {
     return NextResponse.redirect(`${origin}/setup-password`);
+  }
+  if (overwatch === "1") {
+    const destination = next ?? "/overwatch";
+    return NextResponse.redirect(
+      `${origin}/auth/overwatch-redirect?next=${encodeURIComponent(destination)}`,
+    );
   }
 
   const role = dbUser?.role ?? "client";

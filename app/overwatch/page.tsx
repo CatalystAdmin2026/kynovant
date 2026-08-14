@@ -10,8 +10,12 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
-import { requireAdminPage } from "@/lib/auth/guards";
-import { getOverwatchMetrics, type OverwatchCoachRow } from "@/lib/db/overwatch-service";
+import { requireOverwatchAdminPage } from "@/lib/auth/guards";
+import {
+  getOverwatchFounderFirstName,
+  getOverwatchMetrics,
+  type OverwatchCoachRow,
+} from "@/lib/db/overwatch-service";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +42,12 @@ function fmtDate(date: Date | null): string {
 function fmtPercent(value: number | null): string {
   if (value === null) return "Not enough data";
   return new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 }).format(value);
+}
+
+function greetingForNow(name: string | null): string {
+  const hour = new Date().getHours();
+  const daypart = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  return name ? `Good ${daypart}, ${name}.` : `Good ${daypart}.`;
 }
 
 function statusTone(value: string | null | undefined): string {
@@ -132,9 +142,12 @@ export default async function OverwatchPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  const { dbUser } = await requireAdminPage();
+  const { dbUser } = await requireOverwatchAdminPage();
   const search = await searchParams;
-  const data = await getOverwatchMetrics();
+  const [data, founderName] = await Promise.all([
+    getOverwatchMetrics(),
+    getOverwatchFounderFirstName(dbUser.id),
+  ]);
   const accounts = filterAndSortAccounts(data.accounts, search);
   const funnel = [
     ["Started signup", data.acquisition.startedSignup],
@@ -171,10 +184,10 @@ export default async function OverwatchPage({
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.34em] text-[#D8B867]/65">Executive Overview</p>
             <h1 className="mt-3 max-w-4xl text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-              Kynovant SaaS business visibility.
+              {greetingForNow(founderName)}
             </h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-white/46">
-              Account-level founder operations across acquisition, coach subscriptions, and platform load. Client identities and health records are intentionally excluded.
+              Kynovant SaaS business visibility across acquisition, coach subscriptions, and platform load. Client identities and health records are intentionally excluded.
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">

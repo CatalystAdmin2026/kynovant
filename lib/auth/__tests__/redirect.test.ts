@@ -21,6 +21,7 @@ describe("resolvePostLoginRedirect — authorized next param", () => {
     expect(resolvePostLoginRedirect("/hq/clients", "coach")).toBe("/hq/clients");
     expect(resolvePostLoginRedirect("/account", "coach")).toBe("/account");
     expect(resolvePostLoginRedirect("/admin/coaches", "admin")).toBe("/admin/coaches");
+    expect(resolvePostLoginRedirect("/overwatch", "admin")).toBe("/overwatch");
   });
 
   it("matches an exact prefix (no trailing slash) as authorized", () => {
@@ -32,10 +33,12 @@ describe("resolvePostLoginRedirect — privilege boundaries (coach cannot reach 
   it("rejects a coach's next param pointing at /admin and falls back to /hq", () => {
     expect(resolvePostLoginRedirect("/admin", "coach")).toBe("/hq");
     expect(resolvePostLoginRedirect("/admin/coaches", "coach")).toBe("/hq");
+    expect(resolvePostLoginRedirect("/overwatch", "coach")).toBe("/hq");
   });
 
   it("rejects a client's next param pointing at /hq and falls back to /portal", () => {
     expect(resolvePostLoginRedirect("/hq", "client")).toBe("/portal");
+    expect(resolvePostLoginRedirect("/overwatch", "client")).toBe("/portal");
   });
 
   it("does not treat a prefix-only match without a boundary as authorized (e.g. /hqxyz for coach is not /hq)", () => {
