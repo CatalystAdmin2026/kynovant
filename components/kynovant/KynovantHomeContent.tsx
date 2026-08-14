@@ -88,7 +88,7 @@ function DeviceFrame({
 }) {
   return (
     <div
-      className={`rounded-xl border border-mkt-border bg-mkt-surface-raised shadow-[0_40px_100px_-30px_rgba(0,0,0,0.7)] overflow-hidden ${className}`}
+      className={`w-full max-w-full rounded-xl border border-mkt-border bg-mkt-surface-raised shadow-[0_40px_100px_-30px_rgba(0,0,0,0.7)] overflow-hidden ${className}`}
     >
       <div className="flex items-center gap-1.5 px-4 py-3 border-b border-mkt-border bg-mkt-surface">
         <span className="w-2.5 h-2.5 rounded-full bg-white/15" />
@@ -174,27 +174,29 @@ function Hero() {
             </span>
           </div>
 
-          <h1 className="text-[2.6rem] leading-[1.05] md:text-6xl md:leading-[1.03] font-semibold tracking-tight text-white">
-            The operating system for online coaching businesses.
+          <h1 className="max-w-[320px] text-3xl leading-[1.08] sm:max-w-none sm:text-[2.6rem] md:text-6xl md:leading-[1.03] font-semibold tracking-tight text-white">
+            <span className="block sm:inline">The operating system</span>{" "}
+            <span className="block sm:inline">for online coaching</span>{" "}
+            <span className="block sm:inline">businesses.</span>
           </h1>
 
-          <p className="mt-7 text-lg leading-relaxed text-white/55 max-w-xl">
+          <p className="mt-7 max-w-[320px] text-base leading-relaxed text-white/55 sm:max-w-xl sm:text-lg">
             Kynovant replaces the spreadsheets, PDFs, and scattered DMs coaches patch together
             with one workspace — programming, AI-assisted program building, check-ins,
             nutrition targets, scheduling, messaging, and documents.
           </p>
 
-          <div className="mt-10 flex flex-wrap items-center gap-4">
+          <div className="mt-10 flex flex-col items-start gap-4 sm:flex-row sm:flex-wrap sm:items-center">
             <Link
               href="/start-trial"
-              className="group inline-flex items-center gap-2 rounded-md bg-white px-6 py-3.5 text-sm font-semibold text-[#0d0f11] hover:bg-white/90 transition-colors"
+              className="group inline-flex max-w-full items-center justify-center gap-2 rounded-md bg-white px-6 py-3.5 text-sm font-semibold text-[#0d0f11] hover:bg-white/90 transition-colors sm:justify-start"
             >
               Start 14-Day Free Trial
               <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
             </Link>
             <Link
               href="#platform"
-              className="inline-flex items-center gap-2 rounded-md border border-mkt-border-strong px-6 py-3.5 text-sm font-semibold text-white/80 hover:text-white hover:border-white/30 transition-colors"
+              className="inline-flex max-w-full items-center justify-center gap-2 rounded-md border border-mkt-border-strong px-6 py-3.5 text-sm font-semibold text-white/80 hover:text-white hover:border-white/30 transition-colors sm:justify-start"
             >
               See the Platform
             </Link>
@@ -233,8 +235,8 @@ function Hero() {
               ))}
             </aside>
 
-            <div className="p-6 md:p-8">
-              <div className="flex items-center justify-between mb-6">
+            <div className="min-w-0 p-6 md:p-8">
+              <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-[11px] uppercase tracking-[0.18em] text-white/35">Coach HQ</p>
                   <h3 className="text-lg font-semibold text-white mt-1">Overview</h3>
@@ -244,7 +246,7 @@ function Hero() {
                 </StatusPill>
               </div>
 
-              <div className="grid grid-cols-3 gap-3 mb-6">
+              <div className="grid grid-cols-1 gap-3 mb-6 sm:grid-cols-3">
                 {[
                   { label: "Healthy", value: "Live", tone: "ok" as const },
                   { label: "Needs Attention", value: "Review", tone: "caution" as const },

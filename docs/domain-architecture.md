@@ -26,7 +26,7 @@ below.
 
 | Path | Domain | Notes |
 |---|---|---|
-| `/` | **Both — different content** | Rewritten per domain. Catalyst domain: serves `app/(site)/page.tsx` normally. Kynovant domain: rewritten (not redirected — URL bar stays `/`) to `/home` (`app/(kynovant)/home/page.tsx`), the redesigned Kynovant SaaS homepage. (Prior to the homepage redesign, this rewrote to `/for-coaches` instead — see git history if that context is ever needed.) |
+| `/` | **Both — different content** | Rewritten/redirected per domain. Catalyst domain: redirected to `/about` so the dormant personal-coaching domain never renders the Kynovant SaaS homepage. Kynovant domain: rewritten (not redirected — URL bar stays `/`) to `/home` (`app/(kynovant)/home/page.tsx`), the redesigned Kynovant SaaS homepage. (Prior to the homepage redesign, this rewrote to `/for-coaches` instead — see git history if that context is ever needed.) |
 | `/about`, `/programs` | Catalyst | Unchanged, untouched. |
 | `/apply` | Catalyst | Jermaine's personal coaching-client application. Reverted to its original GAS-direct submission in a prior change — never touches the `applications` table. |
 | `/enroll/*`, `/onboarding`, `/onboarding-complete`, `/executive-onboarding`, `/executive-performance-confirmed`, `/payment-confirmed`, `/thank-you` | Catalyst | Enrollment/payment funnel. Untouched. |
@@ -88,6 +88,8 @@ Two concerns, kept separate for performance:
    all pages, not just protected ones):
    - `kynovant.com` + `/` → **rewrite** (not redirect — URL stays `/`)
      to `/home`.
+   - `catalystcoachingelite.com` + `/` → **308 redirect** to `/about`
+     on `catalystcoachingelite.com`.
    - `kynovant.com` + a Catalyst-only path → **308 redirect** to the
      same path on `catalystcoachingelite.com`.
    - `catalystcoachingelite.com` + a Kynovant-only path → **308

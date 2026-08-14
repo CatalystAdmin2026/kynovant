@@ -99,6 +99,10 @@ function resolveBrand(request: NextRequest): Brand {
   const fromHost = hostBrand(request.nextUrl.hostname);
   if (fromHost) return fromHost;
 
+  const hostHeader = request.headers.get("host");
+  const fromHostHeader = hostHeader ? hostBrand(hostHeader) : null;
+  if (fromHostHeader) return fromHostHeader;
+
   const override = request.nextUrl.searchParams.get("__brand");
   if (override === "kynovant" || override === "catalyst") return override;
 
@@ -135,6 +139,10 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(target, 308);
     }
   } else if (brand === "catalyst") {
+    if (pathname === "/") {
+      const target = new URL("/about" + request.nextUrl.search, CATALYST_URL);
+      return NextResponse.redirect(target, 308);
+    }
     if (matchesPrefix(pathname, KYNOVANT_ONLY_PREFIXES)) {
       const target = new URL(pathname + request.nextUrl.search, KYNOVANT_URL);
       return NextResponse.redirect(target, 308);

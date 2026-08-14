@@ -14,6 +14,16 @@ describe("production security release gates", () => {
     expect(layout).not.toContain("requireCoachOrAdminPage");
   });
 
+  it("keeps Catalyst root from rendering the Kynovant SaaS homepage", () => {
+    const proxy = source("proxy.ts");
+    const domainRouting = source("lib/domain-routing.ts");
+
+    expect(proxy).toContain('request.headers.get("host")');
+    expect(proxy).toMatch(/brand === "catalyst"[\s\S]*pathname === "\/"[\s\S]*new URL\("\/about"/);
+    expect(proxy.indexOf('pathname === "/"')).toBeLessThan(proxy.indexOf("matchesPrefix(pathname, KYNOVANT_ONLY_PREFIXES)"));
+    expect(domainRouting).toContain('split(":")[0]');
+  });
+
   it("does not ship a client-side admin password gate", () => {
     const gate = source("components/AdminGate.tsx");
 

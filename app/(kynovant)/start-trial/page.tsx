@@ -54,17 +54,18 @@ export default function StartTrialPage() {
     "block text-[11px] font-semibold tracking-[0.1em] uppercase text-gray-500 mb-2";
 
   return (
-    <main>
+    <main className="overflow-x-hidden">
       {/* ── PAGE HEADER ──────────────────────────────────── */}
       <section className="pt-36 pb-12 px-6 bg-[#0c0e0f] border-b border-white/5">
         <div className="max-w-3xl mx-auto text-center">
           <p className="text-[#C9A24D] text-[11px] font-semibold tracking-[0.45em] mb-3 uppercase">
             Kynovant for Coaches
           </p>
-          <h1 className="font-headline text-5xl md:text-6xl font-bold uppercase text-white mb-4">
-            Start Your 14-Day Free Trial
+          <h1 className="font-headline text-4xl sm:text-5xl md:text-6xl font-bold uppercase text-white mb-4 leading-none">
+            <span className="block sm:inline">Start Your</span>{" "}
+            <span className="block sm:inline">14-Day Free Trial</span>
           </h1>
-          <p className="text-gray-500 max-w-xl mx-auto text-sm leading-relaxed">
+          <p className="text-gray-500 max-w-[280px] sm:max-w-xl mx-auto text-sm leading-relaxed">
             Create your coach workspace now. No application, no demo call, no
             waiting on anyone. Full pricing is shown before you&apos;re ever
             charged.
@@ -104,9 +105,9 @@ export default function StartTrialPage() {
                     <span className="font-headline text-2xl font-bold text-[#C9A24D]/25 leading-none mt-0.5 shrink-0 w-8">
                       {step.num}
                     </span>
-                    <div>
+                    <div className="min-w-0">
                       <p className="text-white font-semibold text-sm mb-1">{step.title}</p>
-                      <p className="text-gray-600 text-sm leading-relaxed">{step.body}</p>
+                      <p className="max-w-[250px] text-gray-600 text-sm leading-relaxed sm:max-w-none">{step.body}</p>
                     </div>
                   </div>
                 ))}

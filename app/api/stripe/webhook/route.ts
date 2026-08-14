@@ -613,6 +613,10 @@ function resolveWebhookBrand(req: NextRequest): Brand {
   const fromHost = hostBrand(req.nextUrl.hostname);
   if (fromHost) return fromHost;
 
+  const hostHeader = req.headers.get("host");
+  const fromHostHeader = hostHeader ? hostBrand(hostHeader) : null;
+  if (fromHostHeader) return fromHostHeader;
+
   // No real DNS in local dev / preview deployments — mirrors proxy.ts's
   // own ?__brand= override for the identical problem on page routes.
   const override = req.nextUrl.searchParams.get("__brand");

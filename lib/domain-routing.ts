@@ -20,7 +20,7 @@ const CATALYST_HOSTS = new Set(["catalystcoachingelite.com", "www.catalystcoachi
 /** Classifies a request hostname. Unrecognized hosts (localhost, preview
  *  deployments) return null — callers decide their own fallback. */
 export function hostBrand(hostname: string): Brand {
-  const host = hostname.toLowerCase();
+  const host = hostname.toLowerCase().split(":")[0];
   if (KYNOVANT_HOSTS.has(host)) return "kynovant";
   if (CATALYST_HOSTS.has(host)) return "catalyst";
   return null;
