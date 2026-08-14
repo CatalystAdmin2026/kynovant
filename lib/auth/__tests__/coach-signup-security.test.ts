@@ -47,7 +47,7 @@ describe("self-service coach signup security gates", () => {
     const route = source("app/api/coach-signup/route.ts");
 
     expect(route).toContain('existing.role === "client"');
-    expect(route).toMatch(/existing\.role === "client"[\s\S]{0,400}status:\s*409/);
+    expect(route).toMatch(/existing\.role === "client"[\s\S]{0,900}status:\s*409/);
   });
 
   it("rate-limits the public endpoint by IP and by email using a DB-backed ledger", () => {

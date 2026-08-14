@@ -1,379 +1,335 @@
 import Link from "next/link";
+import type React from "react";
 import {
   Activity,
-  ArrowUpRight,
-  BarChart3,
-  BellRing,
-  BriefcaseBusiness,
-  CheckCircle2,
+  ArrowUpDown,
   CircleDollarSign,
-  ClipboardList,
+  Clock3,
   Database,
-  Dumbbell,
-  Gauge,
-  LineChart,
-  Lock,
-  MailPlus,
-  ServerCog,
   ShieldCheck,
-  Sparkles,
+  TrendingUp,
   Users,
 } from "lucide-react";
 import { requireAdminPage } from "@/lib/auth/guards";
-import { getOverwatchMetrics } from "@/lib/db/overwatch-service";
+import { getOverwatchMetrics, type OverwatchCoachRow } from "@/lib/db/overwatch-service";
 
 export const dynamic = "force-dynamic";
+
+type Search = {
+  status?: string;
+  subscription?: string;
+  sort?: string;
+};
+
+function labelize(value: string | null | undefined): string {
+  if (!value) return "None";
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
 function fmtNumber(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 }
 
 function fmtDate(date: Date | null): string {
-  if (!date) return "No activity";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
+  if (!date) return "None";
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date);
 }
 
-function labelize(value: string): string {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+function fmtPercent(value: number | null): string {
+  if (value === null) return "Not enough data";
+  return new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 }).format(value);
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="min-h-screen bg-[#050607] text-[#F3F1EA]">
-      <div className="fixed inset-x-0 top-0 z-20 border-b border-white/[0.07] bg-[#050607]/90 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-[1440px] items-center justify-between px-5 sm:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-7 w-7 items-center justify-center border border-[#C9A24D]/25 bg-[#C9A24D]/10">
-              <ShieldCheck size={15} className="text-[#C9A24D]" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-[0.42em] text-[#C9A24D]/80">Overwatch</p>
-              <p className="hidden text-[10px] uppercase tracking-[0.28em] text-white/28 sm:block">Kynovant Executive Control</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden items-center gap-1.5 border border-emerald-500/20 bg-emerald-500/[0.04] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.24em] text-emerald-300/75 sm:inline-flex">
-              <Lock size={11} />
-              Admin Only
-            </span>
-            <Link
-              href="/admin"
-              className="inline-flex items-center gap-1.5 border border-white/[0.08] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/40 transition-colors hover:border-white/[0.16] hover:text-white/70"
-            >
-              Legacy Admin
-              <ArrowUpRight size={12} />
-            </Link>
-          </div>
-        </div>
-      </div>
-      <main className="mx-auto max-w-[1440px] px-5 pb-16 pt-24 sm:px-8">
-        {children}
-      </main>
-    </div>
-  );
+function statusTone(value: string | null | undefined): string {
+  if (value === "active" || value === "trialing" || value === "manually_activated") {
+    return "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200";
+  }
+  if (value === "past_due" || value === "invited") {
+    return "border-amber-300/25 bg-amber-300/[0.07] text-amber-100";
+  }
+  if (value === "cancelled" || value === "suspended") {
+    return "border-red-300/20 bg-red-300/[0.06] text-red-100";
+  }
+  return "border-white/[0.08] bg-white/[0.035] text-white/46";
 }
 
-function StatCard({
+function MetricCard({
   icon: Icon,
   label,
   value,
   detail,
-  tone = "neutral",
 }: {
   icon: React.ComponentType<{ size?: number; className?: string }>;
   label: string;
   value: string | number;
   detail: string;
-  tone?: "neutral" | "gold" | "green" | "blue";
 }) {
-  const toneClass = {
-    neutral: "text-white/50 border-white/[0.08] bg-white/[0.025]",
-    gold: "text-[#C9A24D] border-[#C9A24D]/20 bg-[#C9A24D]/[0.045]",
-    green: "text-emerald-300/80 border-emerald-500/20 bg-emerald-500/[0.04]",
-    blue: "text-sky-300/80 border-sky-500/20 bg-sky-500/[0.04]",
-  }[tone];
-
   return (
-    <div className="border border-white/[0.07] bg-white/[0.025] p-4 sm:p-5">
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <div className={`flex h-8 w-8 items-center justify-center border ${toneClass}`}>
-          <Icon size={15} />
+    <div className="border border-white/[0.08] bg-[#101113] p-4">
+      <div className="mb-5 flex items-center justify-between">
+        <div className="flex h-8 w-8 items-center justify-center border border-[#C9A24D]/25 bg-[#C9A24D]/10 text-[#D8B867]">
+          <Icon size={16} />
         </div>
-        <span className="text-[10px] uppercase tracking-[0.26em] text-white/22">Live</span>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/24">Authoritative</span>
       </div>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/28">{label}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-white/30">{label}</p>
       <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{value}</p>
-      <p className="mt-2 min-h-8 text-xs leading-relaxed text-white/35">{detail}</p>
+      <p className="mt-2 min-h-8 text-xs leading-relaxed text-white/42">{detail}</p>
     </div>
   );
 }
 
-function ComingOnlineCard({
-  icon: Icon,
-  title,
-  detail,
-}: {
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  title: string;
-  detail: string;
-}) {
-  return (
-    <div className="border border-dashed border-white/[0.1] bg-white/[0.018] p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div className="flex h-8 w-8 items-center justify-center border border-white/[0.08] bg-black/20 text-white/24">
-          <Icon size={15} />
-        </div>
-        <span className="text-[9px] font-semibold uppercase tracking-[0.24em] text-white/22">Coming Online</span>
-      </div>
-      <p className="text-sm font-semibold text-white/70">{title}</p>
-      <p className="mt-2 text-xs leading-relaxed text-white/32">{detail}</p>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  eyebrow,
+function FilterLink({
+  href,
+  active,
   children,
 }: {
-  title: string;
-  eyebrow: string;
+  href: string;
+  active: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-4">
-      <div>
-        <p className="text-[10px] font-semibold uppercase tracking-[0.36em] text-[#C9A24D]/55">{eyebrow}</p>
-        <h2 className="mt-2 text-xl font-semibold text-white">{title}</h2>
-      </div>
+    <Link
+      href={href}
+      className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] transition-colors ${
+        active
+          ? "border-[#C9A24D]/45 bg-[#C9A24D]/10 text-[#E3C778]"
+          : "border-white/[0.08] bg-white/[0.025] text-white/38 hover:border-white/[0.16] hover:text-white/70"
+      }`}
+    >
       {children}
-    </section>
+    </Link>
   );
 }
 
-export default async function OverwatchPage() {
+function filterAndSortAccounts(accounts: OverwatchCoachRow[], search: Search): OverwatchCoachRow[] {
+  const filtered = accounts.filter((coach) => {
+    const statusOk = !search.status || search.status === "all" || coach.accountStatus === search.status;
+    const subOk =
+      !search.subscription ||
+      search.subscription === "all" ||
+      (search.subscription === "none" ? !coach.subscriptionStatus : coach.subscriptionStatus === search.subscription);
+    return statusOk && subOk;
+  });
+
+  return filtered.sort((a, b) => {
+    switch (search.sort) {
+      case "clients":
+        return b.activeClientCount - a.activeClientCount;
+      case "name":
+        return (a.displayName ?? a.email).localeCompare(b.displayName ?? b.email);
+      case "subscription":
+        return labelize(a.subscriptionStatus).localeCompare(labelize(b.subscriptionStatus));
+      case "newest":
+      default:
+        return b.createdAt.getTime() - a.createdAt.getTime();
+    }
+  });
+}
+
+export default async function OverwatchPage({
+  searchParams,
+}: {
+  searchParams: Promise<Search>;
+}) {
   const { dbUser } = await requireAdminPage();
+  const search = await searchParams;
   const data = await getOverwatchMetrics();
-  const recentCoachRows = data.coaches.slice(0, 7);
-  const maxDistribution = Math.max(1, ...data.coaching.clientDistribution.map((bucket) => bucket.coaches));
+  const accounts = filterAndSortAccounts(data.accounts, search);
+  const funnel = [
+    ["Started signup", data.acquisition.startedSignup],
+    ["Invite sent", data.acquisition.inviteSent],
+    ["Account activated", data.acquisition.accountActivated],
+    ["Trial started", data.acquisition.trialStarted],
+    ["Paid / active", data.acquisition.paidActive],
+    ["Cancelled / churned", data.acquisition.cancelledChurned],
+  ];
+  const maxFunnel = Math.max(1, ...funnel.map(([, value]) => value as number));
 
   return (
-    <Shell>
-      <div className="mb-10 grid gap-6 lg:grid-cols-[1.35fr_0.65fr]">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.42em] text-[#C9A24D]/60">Executive Overview</p>
-          <h1 className="mt-3 max-w-4xl text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-            Platform command center for Kynovant operations.
-          </h1>
-          <p className="mt-4 max-w-2xl text-sm leading-7 text-white/42">
-            Aggregate-only visibility across growth, coach supply, content inventory, platform health, and revenue instrumentation. No coach client records are exposed here.
-          </p>
-        </div>
-        <div className="border border-white/[0.07] bg-white/[0.025] p-5">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-white/28">Executive Session</p>
-          <p className="mt-3 truncate text-sm text-white/70">{dbUser.email}</p>
-          <div className="mt-5 grid grid-cols-2 gap-3 text-xs">
-            <div className="border border-white/[0.06] bg-black/15 p-3">
-              <p className="text-white/25">Admin users</p>
-              <p className="mt-1 text-lg font-semibold text-white">{data.users.admins}</p>
+    <main className="min-h-screen bg-[#080909] text-[#F3F1EA]">
+      <header className="border-b border-white/[0.07] bg-[#080909]/95">
+        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-5 py-4 sm:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center border border-[#C9A24D]/30 bg-[#C9A24D]/10 text-[#D8B867]">
+              <ShieldCheck size={16} />
             </div>
-            <div className="border border-white/[0.06] bg-black/15 p-3">
-              <p className="text-white/25">Platform users</p>
-              <p className="mt-1 text-lg font-semibold text-white">{data.users.total}</p>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.42em] text-[#D8B867]/80">Overwatch</p>
+              <p className="text-[11px] text-white/34">Founder command center</p>
             </div>
           </div>
+          <div className="hidden min-w-0 text-right sm:block">
+            <p className="truncate text-sm text-white/64">{dbUser.email}</p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-200/55">Admin-only session</p>
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard icon={Users} label="Coaches" value={data.users.coaches} detail={`${data.users.activeCoaches} active, ${data.users.invitedCoaches} invited seats.`} tone="gold" />
-        <StatCard icon={BriefcaseBusiness} label="Applications" value={data.growth.applicationsTotal} detail={`${data.growth.applicationsNew} new and ${data.growth.applicationsQualified} qualified in the coach pipeline.`} tone="blue" />
-        <StatCard icon={ClipboardList} label="Programs" value={data.library.programsTotal} detail={`${data.library.programsActive} published, ${data.library.programsDraft} draft Program templates.`} />
-        <StatCard icon={Dumbbell} label="Exercise Library" value={data.library.exercisesTotal} detail={`${data.library.exercisesActive} active exercises across system, organization, and coach scopes.`} tone="green" />
-      </div>
-
-      <div className="mt-10 grid gap-8 xl:grid-cols-[1fr_380px]">
-        <div className="space-y-10">
-          <Section eyebrow="Growth" title="Coach Acquisition">
-            <div className="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
-              <div className="border border-white/[0.07] bg-white/[0.025] p-5">
-                <div className="mb-5 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-white">Applications</p>
-                    <p className="mt-1 text-xs text-white/32">Pipeline status from the coach application table.</p>
-                  </div>
-                  <Link href="/admin/growth/applications" className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[#C9A24D]/70 hover:text-[#C9A24D]">
-                    Open
-                  </Link>
-                </div>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                  {[
-                    ["New", data.growth.applicationsNew],
-                    ["Qualified", data.growth.applicationsQualified],
-                    ["Demo Scheduled", data.growth.demosScheduled],
-                    ["Demo Complete", data.growth.demosComplete],
-                    ["Accepted", data.growth.accepted],
-                    ["Declined", data.growth.declined],
-                  ].map(([label, value]) => (
-                    <div key={label} className="border border-white/[0.06] bg-black/15 p-3">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/24">{label}</p>
-                      <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="border border-white/[0.07] bg-white/[0.025] p-5">
-                <p className="text-sm font-semibold text-white">Recent Applications</p>
-                <div className="mt-4 space-y-2">
-                  {data.growth.recentApplications.length > 0 ? data.growth.recentApplications.map((app) => (
-                    <div key={app.id} className="flex items-center justify-between gap-3 border border-white/[0.055] bg-black/15 p-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-white/75">{app.name}</p>
-                        <p className="mt-1 text-[11px] text-white/28">{app.businessStage ?? "Stage unavailable"} - {fmtDate(app.createdAt)}</p>
-                      </div>
-                      <span className="shrink-0 border border-white/[0.08] px-2 py-1 text-[9px] uppercase tracking-[0.18em] text-white/35">
-                        {labelize(app.status)}
-                      </span>
-                    </div>
-                  )) : (
-                    <p className="border border-dashed border-white/[0.08] p-4 text-sm text-white/32">No coach applications have arrived yet.</p>
-                  )}
-                </div>
-              </div>
+      <div className="mx-auto max-w-[1500px] space-y-10 px-5 py-8 sm:px-8">
+        <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.34em] text-[#D8B867]/65">Executive Overview</p>
+            <h1 className="mt-3 max-w-4xl text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+              Kynovant SaaS business visibility.
+            </h1>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-white/46">
+              Account-level founder operations across acquisition, coach subscriptions, and platform load. Client identities and health records are intentionally excluded.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="border border-white/[0.08] bg-[#101113] p-4">
+              <p className="text-[10px] uppercase tracking-[0.24em] text-white/30">New Coaches</p>
+              <p className="mt-2 text-3xl font-semibold text-white">{data.overview.newCoachAccounts30d}</p>
+              <p className="mt-1 text-xs text-white/40">{data.overview.newCoachAccounts7d} in the last 7 days</p>
             </div>
-          </Section>
-
-          <Section eyebrow="Supply" title="Coach Directory">
-            <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-              <div className="overflow-x-auto border border-white/[0.07] bg-white/[0.025]">
-                <div className="min-w-[680px]">
-                  <div className="grid grid-cols-[1.4fr_0.6fr_0.5fr_0.5fr] border-b border-white/[0.06] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/26">
-                    <span>Coach</span>
-                    <span>Status</span>
-                    <span>Role</span>
-                    <span className="text-right">Active Clients</span>
-                  </div>
-                  {recentCoachRows.length > 0 ? recentCoachRows.map((coach) => (
-                    <div key={coach.id} className="grid grid-cols-[1.4fr_0.6fr_0.5fr_0.5fr] items-center border-b border-white/[0.045] px-4 py-3 last:border-b-0">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-white/75">{coach.displayName ?? coach.email}</p>
-                        <p className="truncate text-[11px] text-white/25">{coach.email}</p>
-                      </div>
-                      <span className="text-xs text-white/42">{labelize(coach.status)}</span>
-                      <span className="text-xs text-white/42">{labelize(coach.role)}</span>
-                      <span className="text-right text-sm font-semibold text-white">{coach.activeClientCount}</span>
-                    </div>
-                  )) : (
-                    <p className="p-5 text-sm text-white/32">No coach seats exist yet.</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="border border-white/[0.07] bg-white/[0.025] p-5">
-                <p className="text-sm font-semibold text-white">Client-count Distribution</p>
-                <p className="mt-1 text-xs text-white/32">Aggregated active enrollment counts by coach.</p>
-                <div className="mt-5 space-y-3">
-                  {data.coaching.clientDistribution.map((bucket) => (
-                    <div key={bucket.label}>
-                      <div className="mb-1 flex justify-between text-xs">
-                        <span className="text-white/35">{bucket.label}</span>
-                        <span className="text-white/55">{bucket.coaches}</span>
-                      </div>
-                      <div className="h-1.5 bg-white/[0.06]">
-                        <div className="h-full bg-[#C9A24D]/70" style={{ width: `${(bucket.coaches / maxDistribution) * 100}%` }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-5 border-t border-white/[0.06] pt-4">
-                  <p className="text-[10px] uppercase tracking-[0.24em] text-white/24">Average Clients / Coach</p>
-                  <p className="mt-1 text-2xl font-semibold text-white">{fmtNumber(data.coaching.averageClientsPerCoach)}</p>
-                </div>
-              </div>
+            <div className="border border-white/[0.08] bg-[#101113] p-4">
+              <p className="text-[10px] uppercase tracking-[0.24em] text-white/30">Trial to Paid</p>
+              <p className="mt-2 text-3xl font-semibold text-white">{fmtPercent(data.acquisition.conversionRateTrialToPaid)}</p>
+              <p className="mt-1 text-xs text-white/40">Only from recorded subscription states</p>
             </div>
-          </Section>
+          </div>
+        </section>
 
-          <Section eyebrow="Product" title="Programs and Exercise Intelligence">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <StatCard icon={Sparkles} label="Programs Created 30d" value={data.generatedPrograms.createdLast30d} detail="Real Program template creation count. AI attribution is not persisted yet." tone="gold" />
-              <StatCard icon={ClipboardList} label="Blueprints" value={data.library.blueprintsTotal} detail={`${data.library.blueprintsActive} active reusable single-workout templates.`} />
-              <StatCard icon={Database} label="Prescriptions" value={data.library.exercisePrescriptions} detail={`${data.library.blueprintSections} Blueprint sections support workout structure.`} />
-              <StatCard icon={Gauge} label="Library Gaps" value={data.library.missingFatigueCost + data.library.missingMuscleGroup} detail={`${data.library.missingFatigueCost} missing fatigue cost, ${data.library.missingMuscleGroup} missing primary muscle.`} tone="blue" />
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard icon={Users} label="Coach Accounts" value={data.overview.totalCoachAccounts} detail={`${data.overview.activeCoachAccounts} active, ${data.overview.invitedCoachAccounts} invited.`} />
+          <MetricCard icon={CircleDollarSign} label="Subscriptions" value={data.overview.activeSubscriptions} detail={`${data.overview.trialingSubscriptions} trialing, ${data.overview.pastDueSubscriptions} past due, ${data.overview.cancelledSubscriptions} cancelled/suspended.`} />
+          <MetricCard icon={TrendingUp} label="Active Clients" value={data.overview.totalActiveClients} detail={`${fmtNumber(data.overview.averageClientsPerCoach)} average active clients per coach.`} />
+          <MetricCard icon={Activity} label="Workouts 7d" value={data.product.completedWorkoutsLast7d} detail="Completed workout sessions across the platform." />
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+          <div className="border border-white/[0.08] bg-[#101113] p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-[#D8B867]/62">Acquisition</p>
+                <h2 className="mt-2 text-xl font-semibold text-white">Signup Funnel</h2>
+              </div>
+              <span className="border border-white/[0.08] px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] text-white/34">No attempt ledger</span>
             </div>
-          </Section>
-        </div>
-
-        <aside className="space-y-6">
-          <Section eyebrow="Revenue" title="Subscription Metrics">
             <div className="space-y-3">
-              <ComingOnlineCard icon={CircleDollarSign} title="MRR" detail="Stripe subscription records are not yet normalized into platform billing tables." />
-              <ComingOnlineCard icon={LineChart} title="Trial Conversions" detail="Trial lifecycle events need a product billing pipeline before conversion rates can be calculated honestly." />
-              <ComingOnlineCard icon={BarChart3} title="Revenue Cohorts" detail="Reserved for plan mix, expansion, contraction, churn, and net revenue retention." />
-              <div className="border border-white/[0.07] bg-white/[0.025] p-4">
-                <p className="text-sm font-semibold text-white">Stripe Instrumentation</p>
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <div className="border border-white/[0.06] bg-black/15 p-3">
-                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/24">Identities</p>
-                    <p className="mt-1 text-xl font-semibold text-white">{data.integrations.stripeIdentities}</p>
+              {funnel.map(([label, value]) => (
+                <div key={label}>
+                  <div className="mb-1.5 flex items-center justify-between text-xs">
+                    <span className="text-white/50">{label}</span>
+                    <span className="font-semibold text-white">{value}</span>
                   </div>
-                  <div className="border border-white/[0.06] bg-black/15 p-3">
-                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/24">Subscriptions</p>
-                    <p className="mt-1 text-xl font-semibold text-white">{data.integrations.stripeSubscriptions}</p>
+                  <div className="h-2 bg-white/[0.06]">
+                    <div className="h-full bg-[#C9A24D]" style={{ width: `${((value as number) / maxFunnel) * 100}%` }} />
                   </div>
                 </div>
-              </div>
+              ))}
             </div>
-          </Section>
+          </div>
 
-          <Section eyebrow="Health" title="Platform Health">
-            <div className="space-y-3">
-              <div className="border border-emerald-500/20 bg-emerald-500/[0.04] p-4">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 size={15} className="text-emerald-300/80" />
-                  <p className="text-sm font-semibold text-white">Database Reachable</p>
-                </div>
-                <p className="mt-2 text-xs leading-relaxed text-white/35">Overwatch loaded aggregate data through the server-side database client.</p>
+          <div className="overflow-x-auto border border-white/[0.08] bg-[#101113]">
+            <div className="min-w-[760px]">
+              <div className="grid grid-cols-[1.25fr_1fr_0.7fr_0.8fr_0.8fr] border-b border-white/[0.07] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/30">
+                <span>Lead</span>
+                <span>Email</span>
+                <span>Invite</span>
+                <span>Account</span>
+                <span>Subscription</span>
               </div>
-              <div className="border border-white/[0.07] bg-white/[0.025] p-4">
-                <p className="text-sm font-semibold text-white">Recent Platform Activity</p>
-                <div className="mt-4 space-y-2">
-                  {data.activity.length > 0 ? data.activity.map((item) => (
-                    <div key={item.eventType} className="flex items-center justify-between gap-3 border border-white/[0.055] bg-black/15 p-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm text-white/65">{labelize(item.eventType)}</p>
-                        <p className="text-[11px] text-white/28">{fmtDate(item.lastOccurredAt)}</p>
-                      </div>
-                      <span className="text-sm font-semibold text-white">{item.count}</span>
-                    </div>
-                  )) : (
-                    <p className="border border-dashed border-white/[0.08] p-4 text-sm text-white/32">No aggregate timeline activity in the last 7 days.</p>
-                  )}
+              {data.acquisition.recentLeads.length > 0 ? data.acquisition.recentLeads.map((lead) => (
+                <div key={lead.id} className="grid grid-cols-[1.25fr_1fr_0.7fr_0.8fr_0.8fr] items-center border-b border-white/[0.045] px-4 py-3 last:border-b-0">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-white/78">{lead.submittedName}</p>
+                    <p className="text-[11px] text-white/30">{fmtDate(lead.firstSignupAt)}</p>
+                  </div>
+                  <p className="truncate text-xs text-white/42">{lead.normalizedEmail}</p>
+                  <span className={`mr-3 border px-2 py-1 text-[10px] ${statusTone(lead.inviteStatus)}`}>{labelize(lead.inviteStatus)}</span>
+                  <span className={`mr-3 border px-2 py-1 text-[10px] ${statusTone(lead.accountStatus)}`}>{labelize(lead.accountStatus)}</span>
+                  <span className={`mr-3 border px-2 py-1 text-[10px] ${statusTone(lead.subscriptionStatus)}`}>{labelize(lead.subscriptionStatus)}</span>
                 </div>
-              </div>
-              <ComingOnlineCard icon={ServerCog} title="Background Jobs" detail="Reserved for queue depth, retry rate, stale jobs, and last-success timestamps once workers are registered." />
-              <ComingOnlineCard icon={BellRing} title="Incident Signals" detail="Reserved for alert routing, webhook failures, billing sync errors, and service degradation notices." />
-              <div className="grid grid-cols-2 gap-3">
-                <div className="border border-white/[0.07] bg-white/[0.025] p-4">
-                  <Activity size={15} className="text-[#C9A24D]/70" />
-                  <p className="mt-3 text-[10px] uppercase tracking-[0.22em] text-white/24">Workouts 7d</p>
-                  <p className="mt-1 text-xl font-semibold text-white">{data.coaching.completedWorkoutsLast7d}</p>
-                </div>
-                <div className="border border-white/[0.07] bg-white/[0.025] p-4">
-                  <MailPlus size={15} className="text-[#C9A24D]/70" />
-                  <p className="mt-3 text-[10px] uppercase tracking-[0.22em] text-white/24">Invites</p>
-                  <p className="mt-1 text-xl font-semibold text-white">{data.users.invitedCoaches}</p>
-                </div>
-              </div>
+              )) : (
+                <p className="p-5 text-sm text-white/36">No acquisition leads have been recorded yet. Apply migration 0026 before relying on this funnel.</p>
+              )}
             </div>
-          </Section>
-        </aside>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-[#D8B867]/62">Accounts</p>
+              <h2 className="mt-2 text-xl font-semibold text-white">Coach and Trainer Accounts</h2>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <FilterLink href="/overwatch?status=all" active={!search.status || search.status === "all"}>All</FilterLink>
+              <FilterLink href="/overwatch?status=active" active={search.status === "active"}>Active</FilterLink>
+              <FilterLink href="/overwatch?status=invited" active={search.status === "invited"}>Invited</FilterLink>
+              <FilterLink href="/overwatch?subscription=trialing" active={search.subscription === "trialing"}>Trialing</FilterLink>
+              <FilterLink href="/overwatch?subscription=active" active={search.subscription === "active"}>Paid</FilterLink>
+              <FilterLink href="/overwatch?subscription=none" active={search.subscription === "none"}>No Billing</FilterLink>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <FilterLink href="/overwatch?sort=newest" active={!search.sort || search.sort === "newest"}><ArrowUpDown className="mr-1 inline" size={12} />Newest</FilterLink>
+            <FilterLink href="/overwatch?sort=clients" active={search.sort === "clients"}><ArrowUpDown className="mr-1 inline" size={12} />Client Count</FilterLink>
+            <FilterLink href="/overwatch?sort=name" active={search.sort === "name"}><ArrowUpDown className="mr-1 inline" size={12} />Name</FilterLink>
+            <FilterLink href="/overwatch?sort=subscription" active={search.sort === "subscription"}><ArrowUpDown className="mr-1 inline" size={12} />Subscription</FilterLink>
+          </div>
+
+          <div className="overflow-x-auto border border-white/[0.08] bg-[#101113]">
+            <div className="min-w-[980px]">
+              <div className="grid grid-cols-[1.35fr_1.15fr_0.65fr_0.85fr_0.9fr_0.55fr] border-b border-white/[0.07] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/30">
+                <span>Coach</span>
+                <span>Email</span>
+                <span>Status</span>
+                <span>Subscription</span>
+                <span>Billing Date</span>
+                <span className="text-right">Clients</span>
+              </div>
+              {accounts.length > 0 ? accounts.map((coach) => (
+                <div key={coach.id} className="grid grid-cols-[1.35fr_1.15fr_0.65fr_0.85fr_0.9fr_0.55fr] items-center border-b border-white/[0.045] px-4 py-3 last:border-b-0">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-white/78">{coach.displayName ?? "Unnamed coach"}</p>
+                    <p className="text-[11px] text-white/30">Joined {fmtDate(coach.createdAt)}</p>
+                  </div>
+                  <p className="truncate text-xs text-white/42">{coach.email}</p>
+                  <span className={`mr-3 border px-2 py-1 text-[10px] ${statusTone(coach.accountStatus)}`}>{labelize(coach.accountStatus)}</span>
+                  <span className={`mr-3 border px-2 py-1 text-[10px] ${statusTone(coach.subscriptionStatus)}`}>{labelize(coach.subscriptionStatus)}</span>
+                  <div className="min-w-0 text-xs text-white/42">
+                    <p>{coach.cancelledAt ? fmtDate(coach.cancelledAt) : fmtDate(coach.currentPeriodEnd)}</p>
+                    {coach.cancelAtPeriodEnd && <p className="text-amber-100/70">Cancels at period end</p>}
+                  </div>
+                  <p className="text-right text-sm font-semibold text-white">{coach.activeClientCount}</p>
+                </div>
+              )) : (
+                <p className="p-5 text-sm text-white/36">No accounts match the current filters.</p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-3">
+          <div className="border border-white/[0.08] bg-[#101113] p-5">
+            <Database size={17} className="text-[#D8B867]" />
+            <p className="mt-4 text-sm font-semibold text-white">Product Inventory</p>
+            <p className="mt-2 text-xs leading-relaxed text-white/42">
+              {data.product.programsActive}/{data.product.programsTotal} programs active, {data.product.blueprintsActive}/{data.product.blueprintsTotal} blueprints active, {data.product.exercisesActive}/{data.product.exercisesTotal} exercises active.
+            </p>
+          </div>
+          <div className="border border-white/[0.08] bg-[#101113] p-5">
+            <Clock3 size={17} className="text-[#D8B867]" />
+            <p className="mt-4 text-sm font-semibold text-white">Recent Activity</p>
+            <p className="mt-2 text-xs leading-relaxed text-white/42">
+              {data.platform.activity.length > 0
+                ? data.platform.activity.map((item) => `${labelize(item.eventType)}: ${item.count}`).join(" · ")
+                : "No aggregate timeline events in the last 7 days."}
+            </p>
+          </div>
+          <div className="border border-white/[0.08] bg-[#101113] p-5">
+            <ShieldCheck size={17} className="text-[#D8B867]" />
+            <p className="mt-4 text-sm font-semibold text-white">Data Minimization</p>
+            <p className="mt-2 text-xs leading-relaxed text-white/42">
+              Overwatch shows account email/name, billing state, dates, and active client counts. Client names, emails, health data, check-ins, messages, documents, and programs are not exposed.
+            </p>
+          </div>
+        </section>
       </div>
-    </Shell>
+    </main>
   );
 }

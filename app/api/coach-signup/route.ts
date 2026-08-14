@@ -61,6 +61,10 @@ import {
   countRecentAttemptsByIp,
   countRecentAttemptsByEmail,
 } from "@/lib/db/coach-signup-service";
+import {
+  markAcquisitionInviteStatus,
+  recordAcquisitionSignup,
+} from "@/lib/db/coach-acquisition-service";
 
 export const dynamic = "force-dynamic";
 
@@ -132,6 +136,12 @@ export async function POST(req: NextRequest) {
       countRecentAttemptsByEmail(normalizedEmail, RATE_LIMIT_WINDOW_MS),
     ]);
     if (byIp >= MAX_ATTEMPTS_PER_IP || byEmail >= MAX_ATTEMPTS_PER_EMAIL) {
+      await markAcquisitionInviteStatus({
+        normalizedEmail,
+        status: "rate_limited",
+      }).catch((err) => {
+        console.error("[CoachSignup] mark rate_limited failed:", err instanceof Error ? err.message : err);
+      });
       return NextResponse.json(
         { ok: false, error: "Too many attempts. Please try again later." },
         { status: 429 },
@@ -141,6 +151,16 @@ export async function POST(req: NextRequest) {
     // Fail open on the rate-limit check itself — a DB hiccup here
     // should not block a legitimate signup.
     console.error("[CoachSignup] rate limit check failed:", err instanceof Error ? err.message : err);
+  }
+
+  try {
+    await recordAcquisitionSignup({
+      normalizedEmail,
+      submittedName: name,
+      source: "start_trial",
+    });
+  } catch (err) {
+    console.error("[CoachSignup] recordAcquisitionSignup failed:", err instanceof Error ? err.message : err);
   }
 
   // Record the attempt regardless of outcome — bounds abuse even when
@@ -157,6 +177,13 @@ export async function POST(req: NextRequest) {
     const existing = await findExistingAccountByEmail(normalizedEmail);
     if (existing) {
       if (existing.role === "client") {
+        await markAcquisitionInviteStatus({
+          normalizedEmail,
+          status: "client_conflict",
+          accountUserId: existing.id,
+        }).catch((err) => {
+          console.error("[CoachSignup] mark client_conflict failed:", err instanceof Error ? err.message : err);
+        });
         return NextResponse.json(
           {
             ok: false,
@@ -172,6 +199,13 @@ export async function POST(req: NextRequest) {
       // inviteUserByEmail() call as a brand-new signup, which Supabase
       // treats as a safe resend for an unconfirmed user.
       if (existing.status !== "invited") {
+        await markAcquisitionInviteStatus({
+          normalizedEmail,
+          status: "already_active",
+          accountUserId: existing.id,
+        }).catch((err) => {
+          console.error("[CoachSignup] mark already_active failed:", err instanceof Error ? err.message : err);
+        });
         return NextResponse.json({ ok: true, status: "already_active" });
       }
     }
@@ -204,8 +238,21 @@ export async function POST(req: NextRequest) {
       // rather than surfacing a raw provider error to the visitor.
       const message = error?.message?.toLowerCase() ?? "";
       if (message.includes("already") || message.includes("registered")) {
+        await markAcquisitionInviteStatus({
+          normalizedEmail,
+          status: "already_invited",
+          accountUserId: data.user?.id ?? null,
+        }).catch((err) => {
+          console.error("[CoachSignup] mark already_invited failed:", err instanceof Error ? err.message : err);
+        });
         return NextResponse.json({ ok: true, status: "already_invited" });
       }
+      await markAcquisitionInviteStatus({
+        normalizedEmail,
+        status: "failed",
+      }).catch((err) => {
+        console.error("[CoachSignup] mark failed invite failed:", err instanceof Error ? err.message : err);
+      });
       console.error("[CoachSignup] inviteUserByEmail failed:", error?.message);
       return NextResponse.json(
         { ok: false, error: "We couldn't start your trial signup. Please try again shortly." },
@@ -214,6 +261,14 @@ export async function POST(req: NextRequest) {
     }
 
     await provisionInvitedCoach({ userId: data.user.id, email, displayName: name });
+    await markAcquisitionInviteStatus({
+      normalizedEmail,
+      status: "sent",
+      accountUserId: data.user.id,
+      inviteSentAt: new Date(),
+    }).catch((err) => {
+      console.error("[CoachSignup] mark sent invite failed:", err instanceof Error ? err.message : err);
+    });
 
     return NextResponse.json({ ok: true, status: "invited" }, { status: 201 });
   } catch (err) {
