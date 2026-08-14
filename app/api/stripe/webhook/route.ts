@@ -64,6 +64,7 @@ import {
 import type { GasStripePayload, NormalizedStripeEvent } from "@/lib/stripe";
 import { kynovantStripe } from "@/lib/billing/stripe-client";
 import { hostBrand, type Brand } from "@/lib/domain-routing";
+import { getCatalystResendConfig } from "@/lib/email/resend-brand-config";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { processedStripeEvents, coachSubscriptions } from "@/lib/db/schema-billing";
@@ -228,19 +229,25 @@ function onboardingUrlForPackage(packageName: string): string {
   return `${SITE_ORIGIN}/onboarding`;
 }
 
-/** Sends the branded welcome email to the new client. */
+/**
+ * Sends the branded welcome email to the new client. Catalyst-only —
+ * only ever called from handleNewEnrollment(), which is only ever
+ * called from handleCatalystWebhook(). Always goes through
+ * getCatalystResendConfig(), never Kynovant's. See
+ * lib/email/resend-brand-config.ts.
+ */
 async function sendClientWelcomeEmail(
   clientName: string,
   clientEmail: string,
   packageName: string,
 ): Promise<void> {
-  const apiKey    = process.env.RESEND_API_KEY;
-  const fromEmail = process.env.RESEND_FROM_EMAIL;
+  const config = getCatalystResendConfig();
 
-  if (!apiKey || !fromEmail) {
+  if (!config) {
     console.warn("[Stripe Webhook] RESEND_API_KEY or RESEND_FROM_EMAIL not configured — skipping welcome email");
     return;
   }
+  const { apiKey, fromEmail } = config;
 
   const firstName    = clientName.split(" ")[0] || clientName;
   const onboardingUrl = onboardingUrlForPackage(packageName);
@@ -345,7 +352,11 @@ async function sendClientWelcomeEmail(
   }
 }
 
-/** Sends an admin notification email to RESEND_ADMIN_EMAIL with enrollment details. */
+/**
+ * Sends an admin notification email with enrollment details.
+ * Catalyst-only — see sendClientWelcomeEmail's header comment for why.
+ * Always goes through getCatalystResendConfig(), never Kynovant's.
+ */
 async function sendAdminNotificationEmail(
   clientName: string,
   clientEmail: string,
@@ -355,14 +366,13 @@ async function sendAdminNotificationEmail(
   customerId: string | null,
   subscriptionId: string | null,
 ): Promise<void> {
-  const apiKey      = process.env.RESEND_API_KEY;
-  const fromEmail   = process.env.RESEND_FROM_EMAIL;
-  const adminEmail  = process.env.RESEND_ADMIN_EMAIL;
+  const config = getCatalystResendConfig();
 
-  if (!apiKey || !fromEmail || !adminEmail) {
+  if (!config) {
     console.warn("[Stripe Webhook] RESEND_API_KEY, RESEND_FROM_EMAIL, or RESEND_ADMIN_EMAIL not configured — skipping admin notification");
     return;
   }
+  const { apiKey, fromEmail, adminEmail } = config;
 
   const amountStr = amountCents !== null
     ? `$${(amountCents / 100).toFixed(2)} ${(currency ?? "usd").toUpperCase()}`

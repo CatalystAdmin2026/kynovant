@@ -23,13 +23,16 @@
 //   4. Non-fatal: mirror the same fields to the Coach Applications
 //      Google Sheet (COACH_APPLICATIONS_GAS_URL) — optional; skipped
 //      silently if unset, per env.local.example.
-//   5. Non-fatal: email RESEND_ADMIN_EMAIL so an admin knows a new
-//      coach application arrived, instead of relying on someone
+//   5. Non-fatal: email the Kynovant admin inbox so an admin knows a
+//      new coach application arrived, instead of relying on someone
 //      checking /admin/growth/applications or the sheet manually.
+//      Sent via Kynovant's own Resend account/domain — see
+//      lib/email/resend-brand-config.ts's getKynovantResendConfig().
+//      Never Catalyst's.
 //
 // Steps 4 and 5 never block or fail the response — the applicant
 // only needs step 3 to succeed. Failures are logged, not thrown.
-// Secrets (COACH_APPLICATIONS_GAS_URL, RESEND_*) are read from
+// Secrets (COACH_APPLICATIONS_GAS_URL, KYNOVANT_RESEND_*) are read from
 // process.env only, inside this server-only route file, and never
 // echoed back in a response body — only server-side console logs
 // reference them on failure.
@@ -48,6 +51,7 @@ import {
   countRecentApplicationsByIp,
   type NewApplicationInput,
 } from "@/lib/db/application-service";
+import { getKynovantResendConfig } from "@/lib/email/resend-brand-config";
 
 export const dynamic = "force-dynamic";
 
@@ -181,19 +185,21 @@ async function mirrorToSheet(
 }
 
 // ─────────────────────────────────────────────────────────────
-// ADMIN NOTIFICATION EMAIL — non-fatal, same Resend config already
-// used for sendAdminNotificationEmail in the Stripe webhook.
+// ADMIN NOTIFICATION EMAIL — non-fatal. This is a Kynovant-only send
+// (Kynovant's own coach-application intake) — always goes through
+// getKynovantResendConfig(), never the generic/Catalyst RESEND_* vars
+// the Stripe webhook and DocuSign webhook use for Catalyst's own
+// sends. See lib/email/resend-brand-config.ts.
 // ─────────────────────────────────────────────────────────────
 
 async function notifyAdmin(applicationId: string, body: ApplicationPayload): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY;
-  const fromEmail = process.env.RESEND_FROM_EMAIL;
-  const adminEmail = process.env.RESEND_ADMIN_EMAIL;
+  const config = getKynovantResendConfig();
 
-  if (!apiKey || !fromEmail || !adminEmail) {
-    console.warn("[Applications] RESEND_API_KEY, RESEND_FROM_EMAIL, or RESEND_ADMIN_EMAIL not configured — skipping admin notification");
+  if (!config) {
+    console.warn("[Applications] KYNOVANT_RESEND_API_KEY, KYNOVANT_RESEND_FROM_EMAIL, or KYNOVANT_RESEND_ADMIN_EMAIL not configured — skipping admin notification");
     return;
   }
+  const { apiKey, fromEmail, adminEmail } = config;
 
   const row = (label: string, value: string) => `
     <tr>

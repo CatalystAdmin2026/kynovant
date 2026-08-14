@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { Resend } from "resend";
 import { NextRequest, NextResponse } from "next/server";
 import { PACKAGE_ENROLL_PATHS } from "@/lib/enrollment";
+import { getCatalystResendConfig } from "@/lib/email/resend-brand-config";
 
 // ── DocuSign Connect payload types (JSON format) ───────────────────────────
 //
@@ -121,13 +122,17 @@ async function sendActivateCoachingEmail(
   packageName: string,
   enrollPath: string,
 ): Promise<void> {
-  const apiKey   = process.env.RESEND_API_KEY;
-  const fromEmail = process.env.RESEND_FROM_EMAIL;
+  // DocuSign handles Catalyst's client coaching agreement only — see
+  // the SITE_ORIGIN note above. Always goes through
+  // getCatalystResendConfig(), never Kynovant's. See
+  // lib/email/resend-brand-config.ts.
+  const config = getCatalystResendConfig();
 
-  if (!apiKey || !fromEmail) {
+  if (!config) {
     console.warn("[DocuSign Webhook] RESEND_API_KEY or RESEND_FROM_EMAIL not configured — skipping activate email");
     return;
   }
+  const { apiKey, fromEmail } = config;
 
   const enrollUrl = `${SITE_ORIGIN}${enrollPath}`;
   const firstName = clientName.split(" ")[0] || clientName;
