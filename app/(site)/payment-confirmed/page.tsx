@@ -105,7 +105,7 @@ export default async function PaymentConfirmedPage({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {steps.map((step, i) => (
+            {steps.map((step) => (
               <div
                 key={step.num}
                 className="relative p-8 border border-white/5 bg-[#141618]"

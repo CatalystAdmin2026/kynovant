@@ -51,7 +51,7 @@ export default function ThankYouPage() {
         </p>
 
         <p className="text-gray-600 text-sm leading-relaxed">
-          Check your inbox for a confirmation. If you don't see it, check
+          Check your inbox for a confirmation. If you don&apos;t see it, check
           your spam folder.
         </p>
       </div>
