@@ -181,7 +181,7 @@ function Hero() {
           <p className="mt-7 text-lg leading-relaxed text-white/55 max-w-xl">
             Kynovant replaces the spreadsheets, PDFs, and scattered DMs coaches patch together
             with one workspace — programming, AI-assisted program building, check-ins,
-            nutrition, scheduling, messaging, and documents.
+            nutrition targets, scheduling, messaging, and documents.
           </p>
 
           <div className="mt-10 flex flex-wrap items-center gap-4">
@@ -589,7 +589,7 @@ function MobileSection() {
         <div>
           <SectionHeading
             eyebrow="Mobile"
-            title="Full access on mobile. Installable as an app."
+            title="Full access on mobile. Installable to the home screen."
             body="Coaches and clients both work from their phones day to day. Kynovant runs in the browser and can be installed to the home screen as a PWA where the platform supports it."
           />
           <ul className="mt-7 space-y-3.5">

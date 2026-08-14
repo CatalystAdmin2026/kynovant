@@ -8,6 +8,7 @@ import {
   visibleHQNavItems,
   type HQNavItem,
 } from "./HQNavItems";
+import InstallKynovant from "@/components/pwa/InstallKynovant";
 
 export default function HQSidebar({
   coachName,
@@ -104,6 +105,7 @@ export default function HQSidebar({
 
       {/* Coach identity */}
       <div className="px-4 py-4 border-t border-white/[0.06] shrink-0">
+        <InstallKynovant variant="card" className="mb-3" />
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-sm bg-[#C9A24D]/15 border border-[#C9A24D]/25 flex items-center justify-center shrink-0">
             <span className="text-[9px] font-bold text-[#C9A24D] leading-none">{initials}</span>

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
 import { Menu, MessageSquare, X } from "lucide-react";
+import InstallKynovant from "@/components/pwa/InstallKynovant";
 import HQMobileActions from "./HQMobileActions";
 import HQSignOutButton from "./HQSignOutButton";
 import {
@@ -124,6 +125,7 @@ export default function HQMobileNav({
 
             <div className="px-4 py-3 border-t border-white/[0.06]">
               <p className="text-[10px] text-white/30 truncate">{coachName}</p>
+              <InstallKynovant variant="card" className="mt-3" />
               <div className="mt-3">
                 <HQSignOutButton compact />
               </div>

@@ -29,9 +29,9 @@ function isSuppressedPath(pathname: string): boolean {
 }
 
 const FOOTER_LINKS = [
-  { label: "Platform", href: "/#platform" },
+  { label: "Features", href: "/features" },
   { label: "AI Programming", href: "/#ai-programming" },
-  { label: "Pricing", href: "/#pricing" },
+  { label: "Pricing", href: "/pricing" },
   { label: "Start Free Trial", href: "/start-trial" },
   { label: "Login", href: "/login" },
 ] as const;

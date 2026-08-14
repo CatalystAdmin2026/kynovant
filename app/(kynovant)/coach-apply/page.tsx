@@ -111,6 +111,7 @@ export default function CoachApplyPage() {
                   alt="Kynovant"
                   width={20}
                   height={20}
+                  className="h-5 w-5"
                 />
                 <span className="text-[10px] tracking-[0.3em] font-semibold text-white/50 uppercase">
                   Kynovant

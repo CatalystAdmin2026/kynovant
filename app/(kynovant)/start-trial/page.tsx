@@ -115,7 +115,7 @@ export default function StartTrialPage() {
 
             <div className="border border-white/5 bg-[#141618] p-6">
               <div className="flex items-center gap-3 mb-4">
-                <Image src="/logos/kynovant-mark.png" alt="Kynovant" width={20} height={20} />
+                <Image src="/logos/kynovant-mark.png" alt="Kynovant" width={20} height={20} className="h-5 w-5" />
                 <span className="text-[10px] tracking-[0.3em] font-semibold text-white/50 uppercase">
                   Kynovant
                 </span>

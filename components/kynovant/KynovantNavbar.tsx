@@ -8,11 +8,12 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import InstallKynovant from "@/components/pwa/InstallKynovant";
 
 const NAV_LINKS = [
-  { label: "Platform", href: "/#platform" },
+  { label: "Features", href: "/features" },
   { label: "AI Programming", href: "/#ai-programming" },
-  { label: "Pricing", href: "/#pricing" },
+  { label: "Pricing", href: "/pricing" },
 ] as const;
 
 function isSuppressedPath(pathname: string): boolean {
@@ -85,6 +86,7 @@ export default function KynovantNavbar() {
           >
             Login
           </Link>
+          <InstallKynovant variant="nav" />
           <Link
             href="/start-trial"
             className="rounded-md bg-white px-5 py-2.5 text-sm font-semibold tracking-wide text-[#0d0f11] transition-colors hover:bg-white/90"
@@ -139,6 +141,7 @@ export default function KynovantNavbar() {
           >
             Login
           </Link>
+          <InstallKynovant variant="menu" />
           <div className="pt-3">
             <Link
               href="/start-trial"

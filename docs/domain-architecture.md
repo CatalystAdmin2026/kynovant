@@ -7,8 +7,9 @@ domain.
 ## The two businesses
 
 - **kynovant.com** — Kynovant SaaS. Software homepage, features,
-  pricing, coach application/demo, login, HQ (coach workspace), client
-  portal. This is the active, growing product.
+  pricing, self-service coach trial signup, legacy coach application,
+  login, HQ (coach workspace), and client portal. This is the active,
+  growing product.
 - **catalystcoachingelite.com** — Catalyst Coaching Elite, Jermaine's
   personal physique-coaching business. Biography, coaching programs,
   personal coaching application, enrollment/payment pages. **Dormant**,
@@ -31,9 +32,10 @@ below.
 | `/enroll/*`, `/onboarding`, `/onboarding-complete`, `/executive-onboarding`, `/executive-performance-confirmed`, `/payment-confirmed`, `/thank-you` | Catalyst | Enrollment/payment funnel. Untouched. |
 | `/home` | Kynovant | **New.** The actual Kynovant homepage content — exists as its own route because Next.js route groups can't both own `/` (see the `/` row above). Not meant to be linked directly; reached via the `/` rewrite. |
 | `/for-coaches` | Kynovant | Redirects to `/` — its content (the old `EnrollmentPage`-based pitch, gold/black Catalyst-styled) is now superseded by `/home`. Kept as a route only because it's still linked from `app/(site)/page.tsx` and listed below in `KYNOVANT_ONLY_PREFIXES`. |
-| `/coach-apply` | Kynovant | Moved the same way as `/for-coaches` originally was. Posts to `POST /api/applications` (unchanged). |
-| `/features`, `/pricing` | Kynovant | `/features` redirects to `/#platform`. `/pricing` is a real page again — now states the $99/month, 14-day-trial price directly instead of "Private access, apply to see pricing." |
-| `/login`, `/forgot-password`, `/reset-password`, `/setup-password`, `/auth/*` | Kynovant | Already Kynovant-branded content; already never rendered Catalyst's nav (see below). Now also domain-gated. |
+| `/start-trial` | Kynovant | Public self-service signup route for new coaches. Posts to `POST /api/coach-signup`, sends the Supabase invite/setup email, and does not create a Stripe customer or subscription before authenticated trial activation. |
+| `/coach-apply` | Kynovant | Legacy/inbound application route. Posts to `POST /api/applications` (unchanged). Preserved, but not the primary acquisition funnel. |
+| `/features`, `/pricing` | Kynovant | Real public buyer pages. `/features` summarizes shipped product capabilities and claim boundaries. `/pricing` states Kynovant Professional at $99/month with a 14-day free trial. |
+| `/login`, `/forgot-password`, `/reset-password`, `/setup-password`, `/account-status`, `/auth/*` | Kynovant | Kynovant-branded authentication and account-status flow. `/account-status` is the authenticated post-setup gate where coaches explicitly activate the Stripe trial. |
 | `/hq/*` | Kynovant | Coach workspace. |
 | `/portal/*` | Kynovant | Client portal. |
 | `/account` | Kynovant | |
@@ -63,23 +65,15 @@ existed in `components/hq/`, `components/portal/`, `app/login/`,
 - **New:** `app/(kynovant)/layout.tsx`,
   `components/kynovant/KynovantNavbar.tsx`,
   `components/kynovant/KynovantFooter.tsx` — a real, separate nav
-  surface (Features / Pricing / For Coaches / Login), with no Catalyst
+  surface (Features / AI Programming / Pricing / Login), with no Catalyst
   links, as required.
-- **New but deliberately not "real" pages yet:** `/features` and
-  `/pricing` are nav destinations that currently `redirect()` to
-  `/for-coaches`. No dedicated Features or Pricing page exists —
-  `/for-coaches` already covers features (`FOUNDING_COACH_INCLUDES`),
-  pricing (`FOUNDING_COACH_PRICE`), and the application CTA in one
-  page. Writing two new standalone marketing pages would mean
-  inventing product copy that doesn't exist anywhere in this codebase
-  — deliberately not done. The nav is fully functional today; building
-  out dedicated pages is real, disclosed future work, not a gap this
-  document is hiding.
-- **Reused, untouched:** `components/EnrollmentPage.tsx` (shared by
-  both `/for-coaches` and Catalyst's `/enroll/*` pages) was not
-  modified — it's a brand-agnostic, prop-driven template. Touching it
-  would have risked "improving" Catalyst's enrollment pages, which is
-  explicitly out of scope.
+- **New:** `/features`, `/pricing`, and `/start-trial` are real
+  Kynovant public routes. `/features` uses audited product-truth
+  content, `/pricing` presents the launch plan, and `/start-trial`
+  starts the self-service coach signup flow.
+- **Reused, untouched:** `components/EnrollmentPage.tsx` still supports
+  Catalyst's `/enroll/*` pages. `/for-coaches` no longer renders it;
+  the route redirects to the redesigned Kynovant homepage.
 - **Reused, untouched:** `components/Navbar.tsx`, `components/Footer.tsx`,
   and every page under `app/(site)/` — see "Known remaining
   cross-brand reference" below for the one thing this leaves
@@ -93,7 +87,7 @@ Two concerns, kept separate for performance:
    Supabase call, runs on every page request (the matcher now covers
    all pages, not just protected ones):
    - `kynovant.com` + `/` → **rewrite** (not redirect — URL stays `/`)
-     to `/for-coaches`.
+     to `/home`.
    - `kynovant.com` + a Catalyst-only path → **308 redirect** to the
      same path on `catalystcoachingelite.com`.
    - `catalystcoachingelite.com` + a Kynovant-only path → **308
@@ -102,11 +96,11 @@ Two concerns, kept separate for performance:
      every route reachable, exactly as before this change. Add
      `?__brand=kynovant` or `?__brand=catalyst` to the URL to preview
      either domain's routing behavior without real DNS.
-2. **Auth session refresh + protected-path enforcement** — unchanged
-   logic, but now explicitly scoped to only `/portal`, `/account`,
-   `/hq`, `/admin`, `/login`, `/auth/*` (`AUTH_RELEVANT_PATHS`) even
-   though the outer matcher is broader, so marketing-page views don't
-   pay for a Supabase round-trip they don't need.
+2. **Auth session refresh + protected-path enforcement** — explicitly
+   scoped to only `/portal`, `/account`, `/account-status`, `/hq`,
+   `/admin`, `/login`, `/auth/*` (`AUTH_RELEVANT_PATHS`) even though
+   the outer matcher is broader, so marketing-page views don't pay for
+   a Supabase round-trip they don't need.
 
 **Choice made for requirement "redirect safely... OR return a
 deliberate not-found page":** this implementation always redirects.
