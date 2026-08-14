@@ -130,7 +130,7 @@ export const KYNOVANT_FEATURE_GROUPS = [
     proofPoints: [
       "Checkout creates a hosted Stripe subscription session with a 14-day trial.",
       "Billing status and Stripe portal access live inside Coach HQ for entitled coaches.",
-      "Kynovant Stripe configuration is separate from Catalyst billing configuration.",
+      "Kynovant billing uses its own Stripe configuration, separate from legacy coaching-business billing.",
     ],
   },
 ] as const;
