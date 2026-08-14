@@ -37,6 +37,8 @@ describe("Catalyst public brand isolation", () => {
       const text = source(file);
       expect(text, file).not.toMatch(/\bKynovant\b/);
       expect(text, file).not.toMatch(/Start (Free|14-Day Free) Trial/);
+      expect(text, file).not.toContain("Your clients made the promise. Help them keep it.");
+      expect(text, file).not.toContain("The Reason Behind The Software");
       expect(text, file).not.toContain("Install Kynovant");
       expect(text, file).not.toContain('href="/start-trial"');
       expect(text, file).not.toContain('href="/pricing"');

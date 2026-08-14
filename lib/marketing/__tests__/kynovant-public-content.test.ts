@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   KYNOVANT_FEATURE_GROUPS,
@@ -5,6 +7,10 @@ import {
   KYNOVANT_PROFESSIONAL_PRICE,
   KYNOVANT_PUBLIC_CTA,
 } from "../kynovant-public-content";
+
+function source(file: string) {
+  return readFileSync(resolve(process.cwd(), file), "utf8");
+}
 
 const promotionalCopy = [
   KYNOVANT_PROFESSIONAL_PRICE.planName,
@@ -66,5 +72,13 @@ describe("Kynovant public feature content", () => {
     );
     expect(KYNOVANT_NOT_CLAIMED).toContain("External calendar synchronization.");
     expect(KYNOVANT_NOT_CLAIMED).toContain("Native iOS or Android app store apps.");
+  });
+
+  it("includes the Kynovant Promise brand layer on the public homepage", () => {
+    const homepage = source("components/kynovant/KynovantHomeContent.tsx");
+
+    expect(homepage).toContain("Your clients made the promise. Help them keep it.");
+    expect(homepage).toContain("The Reason Behind The Software");
+    expect(homepage).toContain("Build the system behind the follow-through.");
   });
 });

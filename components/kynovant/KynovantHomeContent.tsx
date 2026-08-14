@@ -128,6 +128,7 @@ export default function KynovantHomeContent() {
     <main className="bg-ink">
       <Hero />
       <WhoItsFor />
+      <PromiseSection />
       <PlatformShowcase />
       <AIProgramming />
       <ClientOperations />
@@ -319,6 +320,40 @@ function WhoItsFor() {
   );
 }
 
+/* ── Brand promise ────────────────────────────────────────── */
+
+function PromiseSection() {
+  return (
+    <section className="border-t border-mkt-border px-6 py-28 md:py-32">
+      <div className="mx-auto max-w-6xl">
+        <div className="grid grid-cols-1 gap-12 lg:grid-cols-[0.78fr_1.22fr] lg:items-end">
+          <div>
+            <Eyebrow>The Reason Behind The Software</Eyebrow>
+            <div className="mt-8 hidden h-px w-28 bg-gradient-to-r from-gold/70 to-transparent lg:block" />
+          </div>
+
+          <div className="max-w-4xl">
+            <h2 className="max-w-[720px] text-4xl font-semibold leading-[1.03] tracking-tight text-white sm:text-5xl md:text-[4.5rem]">
+              Your clients made the promise. Help them keep it.
+            </h2>
+            <p className="mt-8 max-w-3xl text-base leading-relaxed text-white/55 md:text-lg">
+              Every client who hires a coach is trying to follow through on something that
+              matters. Kynovant was built around a simple belief: great coaching is not only
+              writing the right program. It is the structure, accountability, communication,
+              and context that help a person keep going when motivation is no longer enough.
+            </p>
+            <p className="mt-6 max-w-2xl text-sm leading-relaxed text-white/38">
+              Programming gives the commitment a plan. Check-ins keep it visible. Messaging
+              keeps the relationship connected. Client context helps the coach remember what
+              matters to the person behind the plan.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /* ── Platform showcase ────────────────────────────────────── */
 /* Mirrors app/hq/page.tsx (Coach HQ Overview): client severity
    buckets (Healthy / Needs Attention / Critical) and the AI-draft
@@ -465,7 +500,7 @@ function ClientOperations() {
         <SectionHeading
           eyebrow="Client Operations"
           title="See exactly which clients need you this week."
-          body="Check-ins queue by status, so review time goes to the clients who need it — with last week's context surfaced automatically instead of you digging for it."
+          body="Check-ins queue by status, so review time goes to the clients who need it — with last week's context surfaced automatically, helping follow-through stay visible instead of buried."
         />
 
         <div className="mt-12">
@@ -707,7 +742,7 @@ function FinalCTA() {
     <section className="px-6 py-28 border-t border-mkt-border">
       <div className="max-w-3xl mx-auto text-center">
         <h2 className="text-3xl md:text-[2.75rem] font-semibold tracking-tight text-white leading-[1.08]">
-          Software as serious as your coaching.
+          Build the system behind the follow-through.
         </h2>
         <p className="mt-5 text-base leading-relaxed text-white/50 max-w-xl mx-auto">
           Kynovant Professional is $99/month with a 14-day free trial. Get started in minutes —
