@@ -15,6 +15,11 @@ interface EnrollmentPageProps {
   pricePeriod?: string;
   priceNote?: string;
   privateNote?: string;
+  /** Label above privateNote. Defaults to "Private Rate" — the correct
+   * framing for the Catalyst enroll pages (custom/negotiated pricing).
+   * Kynovant's for-coaches page overrides this — a self-service 14-day
+   * trial is not a private/negotiated rate. */
+  priceLabel?: string;
   ctaLabel: string;
   ctaUrl: string;
   ctaFootnote?: string;
@@ -33,6 +38,7 @@ export default function EnrollmentPage({
   pricePeriod = "/mo",
   priceNote,
   privateNote,
+  priceLabel = "Private Rate",
   ctaLabel,
   ctaUrl,
   ctaFootnote = "Secure checkout · Powered by Stripe",
@@ -117,7 +123,7 @@ export default function EnrollmentPage({
 
                   {privateNote && (
                     <div className="bg-[#C9A24D]/[0.05] border border-[#C9A24D]/15 px-4 py-3 mb-6">
-                      <p className="text-[#C9A24D] text-[10px] tracking-[0.3em] uppercase font-semibold mb-1">Private Rate</p>
+                      <p className="text-[#C9A24D] text-[10px] tracking-[0.3em] uppercase font-semibold mb-1">{priceLabel}</p>
                       <p className="text-gray-500 text-xs leading-relaxed">{privateNote}</p>
                     </div>
                   )}

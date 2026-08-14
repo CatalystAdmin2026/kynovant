@@ -8,12 +8,22 @@
 // Uses the Supabase service-role key, which bypasses RLS and can
 // perform privileged Auth Admin operations (inviteUserByEmail,
 // deleting users, etc). Only call this from trusted, guarded
-// server code — every call site must sit behind an explicit
-// role guard (requireAdmin / requireCoachOrAdmin) before this
-// module is ever reached.
+// server code — every call site must sit behind an explicit role
+// guard (requireAdmin / requireCoachOrAdmin) before this module is
+// ever reached, with ONE deliberate, reviewed exception: self-service
+// coach signup (app/api/coach-signup/route.ts) is intentionally
+// public/unauthenticated — that's the whole point of self-service.
+// Its safety comes from what it does with this client, not from a
+// role guard in front of it: it only ever calls inviteUserByEmail()
+// with a server-hardcoded role ("coach", never client input) via
+// lib/db/coach-provisioning-service.ts, and it's rate-limited by IP
+// and by email (lib/db/coach-signup-service.ts). See that route's
+// header comment for the full reasoning.
 //
 // Currently used for:
-//   - Admin inviting a new coach account (app/admin/coaches)
+//   - Admin inviting a new coach account (app/api/admin/coaches)
+//   - Self-service coach signup (app/api/coach-signup) — public,
+//     rate-limited, hardcoded role — see above
 //   - A coach creating their first client from HQ onboarding
 //     (app/api/internal/clients POST)
 // ─────────────────────────────────────────────────────────────

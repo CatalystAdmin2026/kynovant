@@ -7,7 +7,7 @@ const included = [
   "Client portal access",
   "Weekly check-in review workflow",
   "Nutrition target management",
-  "Founding Coach onboarding conversation",
+  "14-day free trial, no commitment",
 ];
 
 export default function PricingPage() {
@@ -20,12 +20,12 @@ export default function PricingPage() {
         <div className="grid grid-cols-1 gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
           <div>
             <h1 className="font-headline text-5xl font-bold uppercase leading-[0.9] tracking-tight text-white md:text-[74px]">
-              Private access for coaching teams.
+              One plan for coaching teams.
             </h1>
             <p className="mt-6 text-base leading-relaxed text-gray-500">
-              Kynovant access is handled through a coach application and demo
-              conversation. Pricing is confirmed during that process so scope
-              and onboarding needs are clear before any commitment.
+              Start a 14-day free trial in minutes — no application, no demo
+              call required. Exact pricing is shown at checkout, inside your
+              own workspace, before anything is charged.
             </p>
           </div>
 
@@ -36,11 +36,11 @@ export default function PricingPage() {
                 Founding Coach Access
               </p>
               <p className="font-headline text-5xl font-bold uppercase leading-none text-white">
-                Private
+                14 Days Free
               </p>
               <p className="mt-3 text-sm leading-relaxed text-gray-500">
-                Apply first. If Kynovant is a fit, pricing and onboarding are
-                reviewed before you decide.
+                Create your account now. Full pricing is shown at checkout
+                before your trial starts — cancel anytime.
               </p>
 
               <div className="my-8 h-px bg-white/[0.06]" />
@@ -55,10 +55,10 @@ export default function PricingPage() {
               </div>
 
               <Link
-                href="/coach-apply"
+                href="/start-trial"
                 className="mt-9 block bg-[#C9A24D] px-8 py-4 text-center text-[11px] font-bold uppercase tracking-[0.18em] text-black transition-colors hover:bg-[#D4B56A]"
               >
-                Request Demo / Apply
+                Start 14-Day Free Trial
               </Link>
             </div>
           </div>

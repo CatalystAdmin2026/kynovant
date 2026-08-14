@@ -26,8 +26,8 @@ const TRUST_INDICATORS = [
     body: "Month-to-month. Cancel anytime — no cancellation fees, no buried terms.",
   },
   {
-    label: "Personally Onboarded",
-    body: "Founding Coach access includes guided setup so your first workspace does not start from a blank page.",
+    label: "Self-Service Setup",
+    body: "Create your account and start your 14-day trial in minutes — no call required to get started.",
   },
 ] as const;
 
@@ -38,13 +38,14 @@ export default function ForCoachesPage() {
       headline="Run Your Coaching"
       headlineGold="Business on Kynovant"
       subheadline="The same system built to run a real coaching practice — programming, check-ins, nutrition, and client progress — now available to a small first group of coaches."
-      body="Founding Coach access is handled through an application and demo conversation so onboarding can match the way your coaching business actually runs."
-      price="Private"
+      body="Create your account and start a 14-day free trial today. No application, no demo call — full pricing is shown at checkout, inside your own workspace, before anything is charged."
+      price="14 Days Free"
       pricePeriod=""
-      privateNote="Pricing is reviewed during the application process before any commitment is required."
-      ctaLabel="Request Demo / Apply"
-      ctaUrl="/coach-apply"
-      ctaFootnote="No payment required to apply"
+      priceLabel="Trial Details"
+      privateNote="Full pricing is shown at checkout, before your trial starts."
+      ctaLabel="Start 14-Day Free Trial"
+      ctaUrl="/start-trial"
+      ctaFootnote="No payment required to start"
       includes={FOUNDING_COACH_INCLUDES}
       trustIndicators={TRUST_INDICATORS}
       coachQuote="Kynovant is built for the practical work coaches repeat every week: programming, review, context, and follow-through."

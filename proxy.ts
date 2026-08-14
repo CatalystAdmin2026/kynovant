@@ -72,12 +72,14 @@ const CATALYST_ONLY_PREFIXES = [
 const KYNOVANT_ONLY_PREFIXES = [
   "/for-coaches",
   "/coach-apply",
+  "/start-trial",
   "/features",
   "/pricing",
   "/login",
   "/forgot-password",
   "/reset-password",
   "/setup-password",
+  "/account-status",
   "/auth",
   "/hq",
   "/portal",
@@ -106,7 +108,16 @@ function resolveBrand(request: NextRequest): Brand {
 // AUTH — unchanged scope from before domain routing existed
 // ─────────────────────────────────────────────────────────────
 
-const PROTECTED_PATHS = ["/portal", "/account", "/hq", "/admin"];
+// /account-status added here alongside /portal, /account, /hq, /admin:
+// it's an authenticated-only page (requireAuthenticatedPage() in
+// lib/auth/guards.ts) that is now a core, high-traffic step in the
+// self-service coach signup funnel (every new coach lands here right
+// after setup-password to start their trial) — not just an edge case
+// reached by admin-invited coaches. Listing it here gets it the same
+// token-refresh-before-render treatment as every other protected path,
+// and the pre-login redirect below, instead of relying solely on the
+// page's own guard.
+const PROTECTED_PATHS = ["/portal", "/account", "/account-status", "/hq", "/admin"];
 const AUTH_RELEVANT_PATHS = [...PROTECTED_PATHS, "/login", "/auth"];
 
 export async function proxy(request: NextRequest) {

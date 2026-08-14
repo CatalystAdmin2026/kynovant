@@ -241,9 +241,12 @@ function LoginContent() {
             </div>
 
             <p className="text-[10px] text-white/22 text-center leading-relaxed">
-              Access is by invitation only.
+              Client access is by coach invitation.
               <br />
-              No public account registration.
+              New coach?{" "}
+              <Link href="/start-trial" className="text-white/40 hover:text-white/60 transition-colors">
+                Start your free trial
+              </Link>
             </p>
           </form>
         ) : (
@@ -289,9 +292,12 @@ function LoginContent() {
             </div>
 
             <p className="text-[10px] text-white/22 text-center leading-relaxed">
-              Access is by invitation only.
+              Client access is by coach invitation.
               <br />
-              No public account registration.
+              New coach?{" "}
+              <Link href="/start-trial" className="text-white/40 hover:text-white/60 transition-colors">
+                Start your free trial
+              </Link>
             </p>
           </form>
         )}

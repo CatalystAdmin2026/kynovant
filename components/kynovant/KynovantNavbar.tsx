@@ -80,10 +80,10 @@ export default function KynovantNavbar() {
             Login
           </Link>
           <Link
-            href="/coach-apply"
+            href="/start-trial"
             className="text-sm bg-[#C9A24D] text-black px-6 py-2.5 font-semibold tracking-wide hover:bg-[#D4B56A] transition-colors"
           >
-            Apply
+            Start Free Trial
           </Link>
         </nav>
 
@@ -133,10 +133,10 @@ export default function KynovantNavbar() {
           </Link>
           <div className="pt-3">
             <Link
-              href="/coach-apply"
+              href="/start-trial"
               className="block bg-[#C9A24D] text-black py-3 text-center font-semibold text-sm tracking-wide hover:bg-[#D4B56A] transition-colors"
             >
-              Apply for Founding Coach Access
+              Start 14-Day Free Trial
             </Link>
           </div>
         </nav>

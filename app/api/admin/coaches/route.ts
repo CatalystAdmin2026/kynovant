@@ -6,9 +6,15 @@
 // by a plain coach account.
 //
 // POST invites a new coach via Supabase Auth Admin, then grants the
-// 'coach' role and creates their coach_profiles row directly — the
+// 'coach' role and creates their coach_profiles row via
+// provisionInvitedCoach() (lib/db/coach-provisioning-service.ts) — the
 // role is never taken from request input or Supabase user_metadata,
 // consistent with the invariant documented in lib/auth/guards.ts.
+//
+// provisionInvitedCoach() is shared with the self-service signup path
+// (app/api/coach-signup/route.ts) — same idempotent upsert logic,
+// same hardcoded role, different (admin-guarded vs. public/rate-
+// limited) entry point.
 // ─────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
@@ -17,6 +23,7 @@ import { requireAdmin } from "@/lib/auth/guards";
 import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin";
 import { getDb } from "@/lib/db/client";
 import { users, coachProfiles } from "@/lib/db/schema";
+import { provisionInvitedCoach } from "@/lib/db/coach-provisioning-service";
 
 export const dynamic = "force-dynamic";
 
@@ -85,7 +92,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const db = getDb();
     const newUserId = data.user.id;
 
     // The on_auth_user_created trigger already inserted a public.users row
@@ -93,27 +99,7 @@ export async function POST(req: NextRequest) {
     // drizzle/0001_catalyst_auth.sql). Promote it to 'coach' here, in the
     // same server-side path that already validated the requester is an
     // admin — never via user_metadata or client input.
-    await db
-      .insert(users)
-      .values({
-        id: newUserId,
-        email,
-        normalizedEmail: email,
-        role: "coach",
-        status: "invited",
-      })
-      .onConflictDoUpdate({
-        target: users.id,
-        set: { role: "coach" },
-      });
-
-    await db
-      .insert(coachProfiles)
-      .values({ userId: newUserId, displayName })
-      .onConflictDoUpdate({
-        target: coachProfiles.userId,
-        set: { displayName },
-      });
+    await provisionInvitedCoach({ userId: newUserId, email, displayName });
 
     return NextResponse.json({ ok: true, coachId: newUserId }, { status: 201 });
   } catch (err) {
