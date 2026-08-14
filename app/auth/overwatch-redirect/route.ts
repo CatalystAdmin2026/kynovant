@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}/overwatch/login?error=forbidden`);
   }
 
-  if (dbUser.status === "suspended" || dbUser.status === "archived") {
+  if (dbUser.status !== "active") {
     await supabase.auth.signOut();
     return NextResponse.redirect(`${origin}/overwatch/login?error=inactive`);
   }

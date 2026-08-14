@@ -263,6 +263,9 @@ export async function requireOverwatchAdminPage(): Promise<AuthedUser> {
   if (!resolved.ok) {
     redirect("/overwatch/login?error=authentication_required&next=/overwatch");
   }
+  if (resolved.dbUser.status !== "active") {
+    redirect("/overwatch/login?error=inactive");
+  }
   if (resolved.dbUser.role !== "admin") {
     redirect("/overwatch/login?error=forbidden");
   }

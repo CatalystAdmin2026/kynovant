@@ -16,6 +16,7 @@ describe("Overwatch founder dashboard security and privacy", () => {
     expect(page).not.toContain("requireCoachOrAdminPage");
     expect(guards).toContain("requireOverwatchAdminPage");
     expect(guards).toContain('redirect("/overwatch/login?error=authentication_required&next=/overwatch")');
+    expect(guards).toContain('resolved.dbUser.status !== "active"');
     expect(guards).toContain('resolved.dbUser.role !== "admin"');
   });
 
@@ -87,6 +88,7 @@ describe("Overwatch founder dashboard security and privacy", () => {
     expect(client).toContain("overwatch=1");
     expect(callback).toContain('overwatch === "1"');
     expect(verifier).toContain('dbUser.role !== "admin"');
+    expect(verifier).toContain('dbUser.status !== "active"');
     expect(verifier).toContain("await supabase.auth.signOut()");
   });
 });

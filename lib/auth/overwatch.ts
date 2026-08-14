@@ -38,7 +38,7 @@ export async function getOverwatchLoginState(): Promise<OverwatchLoginState> {
     };
   }
 
-  if (dbUser.status === "suspended" || dbUser.status === "archived") {
+  if (dbUser.status !== "active") {
     return { status: "forbidden", email: dbUser.email, reason: "inactive" };
   }
 
