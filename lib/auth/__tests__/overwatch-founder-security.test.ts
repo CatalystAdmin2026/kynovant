@@ -91,4 +91,21 @@ describe("Overwatch founder dashboard security and privacy", () => {
     expect(verifier).toContain('dbUser.status !== "active"');
     expect(verifier).toContain("await supabase.auth.signOut()");
   });
+
+  it("handles Supabase implicit recovery links without leaking to the generic login", () => {
+    const callback = source("app/auth/callback/route.ts");
+    const fragmentCallback = source("app/auth/fragment-callback/page.tsx");
+    const resetPassword = source("app/reset-password/page.tsx");
+    const overwatchLogin = source("app/overwatch/login/OverwatchLoginClient.tsx");
+
+    expect(callback).toContain("/auth/fragment-callback");
+    expect(fragmentCallback).toContain("window.location.hash");
+    expect(fragmentCallback).toContain("supabase.auth.setSession");
+    expect(fragmentCallback).toContain('type === "recovery"');
+    expect(fragmentCallback).toContain("overwatch=1");
+    expect(fragmentCallback).toContain("/reset-password?overwatch=1");
+    expect(resetPassword).toContain("/auth/overwatch-redirect");
+    expect(overwatchLogin).toContain("resetPasswordForEmail");
+    expect(overwatchLogin).toContain("type=recovery&overwatch=1");
+  });
 });

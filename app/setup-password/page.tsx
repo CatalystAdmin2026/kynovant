@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 type State = "idle" | "loading" | "done" | "error";
@@ -20,11 +21,21 @@ function meetsAllRequirements(password: string): boolean {
   return REQUIREMENTS.every((r) => r.test(password));
 }
 
-export default function SetupPasswordPage() {
+function safeOverwatchNext(next: string | null): string {
+  if (!next) return "/overwatch";
+  if (!next.startsWith("/") || next.startsWith("//") || next.includes("://")) return "/overwatch";
+  if (next === "/overwatch" || next.startsWith("/overwatch?")) return next;
+  return "/overwatch";
+}
+
+function SetupPasswordContent() {
+  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [state, setState] = useState<State>("idle");
   const [error, setError] = useState<string | null>(null);
+  const isOverwatch = searchParams.get("overwatch") === "1";
+  const nextPath = safeOverwatchNext(searchParams.get("next"));
 
   const passwordValid = meetsAllRequirements(password);
   const confirmMatch = password === confirm && confirm.length > 0;
@@ -48,9 +59,9 @@ export default function SetupPasswordPage() {
 
     setState("done");
     setTimeout(() => {
-      // Role-aware redirect — a newly-activated coach lands in /hq, a
-      // client lands in /portal. See app/auth/role-redirect/route.ts.
-      window.location.href = "/auth/role-redirect";
+      window.location.href = isOverwatch
+        ? `/auth/overwatch-redirect?next=${encodeURIComponent(nextPath)}`
+        : "/auth/role-redirect";
     }, 1500);
   }
 
@@ -86,7 +97,7 @@ export default function SetupPasswordPage() {
             <div className="flex flex-col gap-2">
               <p className="text-sm font-semibold text-white/85">Account ready</p>
               <p className="text-xs text-white/40 leading-relaxed">
-                Taking you in…
+                {isOverwatch ? "Taking you to Overwatch…" : "Taking you in…"}
               </p>
             </div>
           </div>
@@ -184,5 +195,13 @@ export default function SetupPasswordPage() {
         <div className="h-px w-full bg-[#c9a24d]/8" />
       </div>
     </div>
+  );
+}
+
+export default function SetupPasswordPage() {
+  return (
+    <Suspense fallback={null}>
+      <SetupPasswordContent />
+    </Suspense>
   );
 }

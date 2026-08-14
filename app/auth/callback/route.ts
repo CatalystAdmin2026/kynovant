@@ -35,9 +35,11 @@ export async function GET(request: NextRequest) {
   const origin = url.origin;
 
   if (!code) {
-    // No code param — malformed link or direct URL access.
+    // Supabase can issue either PKCE links (?code=...) or implicit links
+    // (#access_token=...). URL fragments are never sent to the server, so
+    // hand the browser to a client callback that can consume the fragment.
     return NextResponse.redirect(
-      `${origin}/login?error=auth_callback_failed`,
+      `${origin}/auth/fragment-callback${url.search}`,
     );
   }
 
@@ -99,10 +101,16 @@ export async function GET(request: NextRequest) {
   // recovery → password reset screen (session is established, user sets new password)
   // invite   → first-time password setup screen
   if (type === "recovery") {
-    return NextResponse.redirect(`${origin}/reset-password`);
+    const destination = overwatch === "1"
+      ? `/reset-password?overwatch=1&next=${encodeURIComponent(next ?? "/overwatch")}`
+      : "/reset-password";
+    return NextResponse.redirect(`${origin}${destination}`);
   }
   if (type === "invite") {
-    return NextResponse.redirect(`${origin}/setup-password`);
+    const destination = overwatch === "1"
+      ? `/setup-password?overwatch=1&next=${encodeURIComponent(next ?? "/overwatch")}`
+      : "/setup-password";
+    return NextResponse.redirect(`${origin}${destination}`);
   }
   if (overwatch === "1") {
     const destination = next ?? "/overwatch";

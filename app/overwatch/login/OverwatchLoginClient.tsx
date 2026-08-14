@@ -80,6 +80,30 @@ export default function OverwatchLoginClient({
     setState("sent");
   }
 
+  async function handleRecoveryLink() {
+    if (!email.trim() || state === "loading") return;
+
+    setState("loading");
+    setErrorMessage(null);
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+      redirectTo: `${window.location.origin}/auth/callback?type=recovery&overwatch=1&next=${encodeURIComponent(nextPath)}`,
+    });
+
+    if (error) {
+      setState("error");
+      setErrorMessage(
+        error.code === "over_email_send_rate_limit"
+          ? "Too many password setup links requested. Wait a while and try again."
+          : "Unable to send a founder password setup link for that account.",
+      );
+      return;
+    }
+
+    setState("sent");
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#080909] px-5 py-12 text-[#f3f1ea]">
       <section className="grid w-full max-w-5xl gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
@@ -196,6 +220,15 @@ export default function OverwatchLoginClient({
                 className="w-full border border-white/[0.08] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-white/44 transition-colors hover:border-white/[0.16] hover:text-white/70 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Email Secure Link
+              </button>
+
+              <button
+                type="button"
+                disabled={state === "loading" || !email.trim()}
+                onClick={handleRecoveryLink}
+                className="w-full border border-white/[0.08] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-white/44 transition-colors hover:border-white/[0.16] hover:text-white/70 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Email Password Setup Link
               </button>
             </form>
           )}

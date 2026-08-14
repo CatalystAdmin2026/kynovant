@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 type State = "idle" | "loading" | "done" | "error";
@@ -20,11 +21,21 @@ function meetsAllRequirements(password: string): boolean {
   return REQUIREMENTS.every((r) => r.test(password));
 }
 
-export default function ResetPasswordPage() {
+function safeOverwatchNext(next: string | null): string {
+  if (!next) return "/overwatch";
+  if (!next.startsWith("/") || next.startsWith("//") || next.includes("://")) return "/overwatch";
+  if (next === "/overwatch" || next.startsWith("/overwatch?")) return next;
+  return "/overwatch";
+}
+
+function ResetPasswordContent() {
+  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [state, setState] = useState<State>("idle");
   const [error, setError] = useState<string | null>(null);
+  const isOverwatch = searchParams.get("overwatch") === "1";
+  const nextPath = safeOverwatchNext(searchParams.get("next"));
 
   const passwordValid = meetsAllRequirements(password);
   const confirmMatch = password === confirm && confirm.length > 0;
@@ -49,9 +60,10 @@ export default function ResetPasswordPage() {
     }
 
     setState("done");
-    // Redirect to login with success message after a brief delay.
     setTimeout(() => {
-      window.location.href = "/login?message=password_updated";
+      window.location.href = isOverwatch
+        ? `/auth/overwatch-redirect?next=${encodeURIComponent(nextPath)}`
+        : "/login?message=password_updated";
     }, 1800);
   }
 
@@ -87,7 +99,7 @@ export default function ResetPasswordPage() {
             <div className="flex flex-col gap-2">
               <p className="text-sm font-semibold text-white/85">Password updated</p>
               <p className="text-xs text-white/40 leading-relaxed">
-                Redirecting you to sign in…
+                {isOverwatch ? "Taking you to Overwatch…" : "Redirecting you to sign in…"}
               </p>
             </div>
           </div>
@@ -162,7 +174,7 @@ export default function ResetPasswordPage() {
               <div className="px-4 py-3 bg-red-950/40 border border-red-800/30 rounded-sm">
                 <p className="text-xs text-red-400 leading-relaxed">{error}</p>
                 <a
-                  href="/forgot-password"
+                  href={isOverwatch ? "/overwatch/login" : "/forgot-password"}
                   className="text-[10px] text-red-300 hover:text-red-200 mt-1 inline-block"
                 >
                   Request a new reset link →
@@ -183,5 +195,13 @@ export default function ResetPasswordPage() {
         <div className="h-px w-full bg-[#c9a24d]/8" />
       </div>
     </div>
+  );
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={null}>
+      <ResetPasswordContent />
+    </Suspense>
   );
 }
