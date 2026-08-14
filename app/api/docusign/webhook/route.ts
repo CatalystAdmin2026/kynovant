@@ -144,7 +144,7 @@ async function sendActivateCoachingEmail(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Activate Your Kynovant Membership</title>
+  <title>Activate Your Catalyst Coaching Elite Membership</title>
 </head>
 <body style="margin:0;padding:0;background:#080909;font-family:Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#080909;padding:48px 24px;">
@@ -161,7 +161,7 @@ async function sendActivateCoachingEmail(
           <tr>
             <td style="background:#0d0e0f;padding:36px 40px 28px;">
               <p style="margin:0 0 4px;font-size:10px;letter-spacing:0.45em;text-transform:uppercase;color:#C9A24D;font-weight:600;">
-                Kynovant
+                Catalyst Coaching Elite
               </p>
               <h1 style="margin:0;font-size:28px;font-weight:700;color:#ffffff;text-transform:uppercase;letter-spacing:0.02em;line-height:1.1;">
                 Agreement Complete.
@@ -176,7 +176,7 @@ async function sendActivateCoachingEmail(
                 Hi ${firstName},
               </p>
               <p style="margin:0 0 20px;font-size:15px;color:#d1d5db;line-height:1.6;">
-                Your Kynovant agreement is fully executed. The final step is activating your
+                Your Catalyst Coaching Elite agreement is fully executed. The final step is activating your
                 <strong style="color:#ffffff;">${packageName}</strong> coaching membership.
               </p>
               <p style="margin:0 0 32px;font-size:15px;color:#d1d5db;line-height:1.6;">
@@ -221,7 +221,7 @@ async function sendActivateCoachingEmail(
                 Founder &amp; Head Coach
               </p>
               <p style="margin:0;font-size:11px;color:#4b5563;letter-spacing:0.05em;">
-                Kynovant
+                Catalyst Coaching Elite
               </p>
             </td>
           </tr>
@@ -248,9 +248,9 @@ async function sendActivateCoachingEmail(
 </html>`;
 
   const { error } = await resend.emails.send({
-    from:    `Kynovant <${fromEmail}>`,
+    from:    `Catalyst Coaching Elite <${fromEmail}>`,
     to:      clientEmail,
-    subject: "Your Kynovant Agreement Is Complete",
+    subject: "Your Catalyst Coaching Elite Agreement Is Complete",
     html,
   });
 

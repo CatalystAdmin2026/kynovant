@@ -63,6 +63,30 @@ describe("Catalyst's send paths never reference Kynovant's config", () => {
   });
 });
 
+describe("Catalyst transactional emails do not use Kynovant-facing copy", () => {
+  it("keeps Catalyst Stripe client-payment email subjects and visible copy Catalyst-branded", () => {
+    const route = source("app/api/stripe/webhook/route.ts");
+
+    expect(route).not.toContain("<title>Welcome to Kynovant</title>");
+    expect(route).not.toContain("Welcome to Kynovant — your membership is active.");
+    expect(route).not.toContain("Kynovant Elite");
+    expect(route).not.toContain("from:    `Kynovant <${fromEmail}>`");
+    expect(route).not.toContain('subject: "Welcome to Kynovant"');
+    expect(route).not.toContain("<title>New Client Payment — Kynovant</title>");
+    expect(route).not.toContain("Kynovant — Admin Notification");
+    expect(route).not.toContain('subject: "New Kynovant Client Payment Received"');
+  });
+
+  it("keeps Catalyst DocuSign activation email subjects and visible copy Catalyst-branded", () => {
+    const route = source("app/api/docusign/webhook/route.ts");
+
+    expect(route).not.toContain("<title>Activate Your Kynovant Membership</title>");
+    expect(route).not.toContain("Your Kynovant agreement is fully executed.");
+    expect(route).not.toContain("from:    `Kynovant <${fromEmail}>`");
+    expect(route).not.toContain('subject: "Your Kynovant Agreement Is Complete"');
+  });
+});
+
 describe("lib/email/resend-brand-config.ts — the two getters cannot cross-read each other's vars", () => {
   it("getKynovantResendConfig's body only references KYNOVANT_RESEND_* env var names", () => {
     const config = source("lib/email/resend-brand-config.ts");
