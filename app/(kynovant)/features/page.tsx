@@ -1,10 +1,9 @@
 import { redirect } from "next/navigation";
 
-// Dedicated nav destination per the Kynovant public navigation
-// requirement, but no separate Features page has been authored yet —
-// /for-coaches already covers features, pricing, and the application
-// CTA in one page. Redirecting here rather than fabricating new
-// marketing copy. Revisit once a standalone Features page is written.
+// No separate Features page is authored — the homepage
+// (app/(kynovant)/home/page.tsx) covers the product surface in depth
+// with the "Platform" and "AI Programming" sections. Redirecting to
+// that section rather than fabricating a duplicate marketing page.
 export default function FeaturesPage() {
-  redirect("/for-coaches");
+  redirect("/#platform");
 }

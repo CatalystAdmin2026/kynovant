@@ -25,13 +25,14 @@ below.
 
 | Path | Domain | Notes |
 |---|---|---|
-| `/` | **Both — different content** | Rewritten per domain. Catalyst domain: serves `app/(site)/page.tsx` normally. Kynovant domain: rewritten (not redirected — URL bar stays `/`) to `/for-coaches`, which currently serves as the Kynovant homepage/features/pricing/CTA page combined. |
+| `/` | **Both — different content** | Rewritten per domain. Catalyst domain: serves `app/(site)/page.tsx` normally. Kynovant domain: rewritten (not redirected — URL bar stays `/`) to `/home` (`app/(kynovant)/home/page.tsx`), the redesigned Kynovant SaaS homepage. (Prior to the homepage redesign, this rewrote to `/for-coaches` instead — see git history if that context is ever needed.) |
 | `/about`, `/programs` | Catalyst | Unchanged, untouched. |
 | `/apply` | Catalyst | Jermaine's personal coaching-client application. Reverted to its original GAS-direct submission in a prior change — never touches the `applications` table. |
 | `/enroll/*`, `/onboarding`, `/onboarding-complete`, `/executive-onboarding`, `/executive-performance-confirmed`, `/payment-confirmed`, `/thank-you` | Catalyst | Enrollment/payment funnel. Untouched. |
-| `/for-coaches` | Kynovant | Moved from `app/(site)/for-coaches` to `app/(kynovant)/for-coaches` — same content, new route group so it no longer inherits Catalyst's nav. |
-| `/coach-apply` | Kynovant | Moved the same way. Posts to `POST /api/applications` (unchanged). |
-| `/features`, `/pricing` | Kynovant | **New.** Both redirect to `/for-coaches` today — see "What's genuinely new vs. reused" below. |
+| `/home` | Kynovant | **New.** The actual Kynovant homepage content — exists as its own route because Next.js route groups can't both own `/` (see the `/` row above). Not meant to be linked directly; reached via the `/` rewrite. |
+| `/for-coaches` | Kynovant | Redirects to `/` — its content (the old `EnrollmentPage`-based pitch, gold/black Catalyst-styled) is now superseded by `/home`. Kept as a route only because it's still linked from `app/(site)/page.tsx` and listed below in `KYNOVANT_ONLY_PREFIXES`. |
+| `/coach-apply` | Kynovant | Moved the same way as `/for-coaches` originally was. Posts to `POST /api/applications` (unchanged). |
+| `/features`, `/pricing` | Kynovant | `/features` redirects to `/#platform`. `/pricing` is a real page again — now states the $99/month, 14-day-trial price directly instead of "Private access, apply to see pricing." |
 | `/login`, `/forgot-password`, `/reset-password`, `/setup-password`, `/auth/*` | Kynovant | Already Kynovant-branded content; already never rendered Catalyst's nav (see below). Now also domain-gated. |
 | `/hq/*` | Kynovant | Coach workspace. |
 | `/portal/*` | Kynovant | Client portal. |

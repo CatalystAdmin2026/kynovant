@@ -104,6 +104,31 @@
   font-family: var(--font-barlow), "Barlow Condensed", system-ui, sans-serif;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   Marketing-site-only tokens (kynovant.com public pages)
+   ─────────────────────────────────────────────────────────────
+   Purely additive — nothing here is referenced by Coach HQ, the
+   Client Portal, or any authenticated surface, so none of it can
+   change how the product itself looks. Scoped to give the public
+   site its own premium-software identity (a second, cooler accent
+   alongside --color-gold, plus a few surface/elevation steps) that
+   is independent of the gold-forward admin chrome. See
+   components/kynovant/* and app/(kynovant)/page.tsx.
+   ───────────────────────────────────────────────────────────── */
+@theme {
+  /* "Signal" — a restrained steel-cyan used for AI/intelligence
+     moments so the marketing site isn't monochrome gold-on-black.
+     Deliberately desaturated: not a neon/violet "AI startup" hue. */
+  --color-signal: #4fa8c9;
+  --color-signal-soft: #4fa8c91f;
+
+  --color-mkt-surface: #0d0f11;
+  --color-mkt-surface-raised: #14171b;
+  --color-mkt-surface-elevated: #191d22;
+  --color-mkt-border: #ffffff14;
+  --color-mkt-border-strong: #ffffff24;
+}
+
 /* ── Base ──────────────────────────────────────── */
 body {
   background: var(--ink);

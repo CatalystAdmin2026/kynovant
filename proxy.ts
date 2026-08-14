@@ -70,6 +70,7 @@ const CATALYST_ONLY_PREFIXES = [
 
 // Kynovant SaaS — software marketing, coach auth, HQ, client portal.
 const KYNOVANT_ONLY_PREFIXES = [
+  "/home",
   "/for-coaches",
   "/coach-apply",
   "/start-trial",
@@ -127,7 +128,7 @@ export async function proxy(request: NextRequest) {
   // ── 1. Domain-aware routing ──
   if (brand === "kynovant") {
     if (pathname === "/") {
-      return NextResponse.rewrite(new URL("/for-coaches", request.url));
+      return NextResponse.rewrite(new URL("/home", request.url));
     }
     if (matchesPrefix(pathname, CATALYST_ONLY_PREFIXES)) {
       const target = new URL(pathname + request.nextUrl.search, CATALYST_URL);

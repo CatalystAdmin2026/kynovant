@@ -1,3 +1,3 @@
-import KynovantPublicNav from "@/components/marketing/KynovantPublicNav";
+import KynovantNavbar from "@/components/kynovant/KynovantNavbar";
 
-export default KynovantPublicNav;
+export default KynovantNavbar;

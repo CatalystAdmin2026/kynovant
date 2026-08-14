@@ -1,29 +1,33 @@
 "use client";
 
-// ─────────────────────────────────────────────────────────────
-// Kynovant SaaS — Public Navigation
-//
-// Dedicated to the Kynovant software marketing surface (kynovant.com):
-// Features, Pricing, For Coaches, Login. Deliberately does NOT link to
-// any Catalyst Coaching Elite route (About, Programs, Apply, Enroll) —
-// those are a separate, dormant business served from its own domain.
-// See docs/domain-architecture.md.
-//
-// This is a new, separate component from components/Navbar.tsx (the
-// existing Catalyst site nav) — not a variant of it. Catalyst's nav is
-// left untouched per the "do not redesign Catalyst" constraint.
-// ─────────────────────────────────────────────────────────────
+// Kynovant SaaS public navigation. This chrome is shared by the
+// Kynovant marketing routes and the preview "/" route, while authenticated
+// product surfaces suppress it and render their own shells.
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV_LINKS = [
-  { label: "Features", href: "/features" },
-  { label: "Pricing", href: "/pricing" },
-  { label: "For Coaches", href: "/for-coaches" },
+  { label: "Platform", href: "/#platform" },
+  { label: "AI Programming", href: "/#ai-programming" },
+  { label: "Pricing", href: "/#pricing" },
 ] as const;
+
+function isSuppressedPath(pathname: string): boolean {
+  return (
+    pathname === "/admin" ||
+    pathname.startsWith("/admin/") ||
+    pathname.startsWith("/hq") ||
+    pathname.startsWith("/portal") ||
+    pathname.startsWith("/mission-entry") ||
+    pathname === "/login" ||
+    pathname.startsWith("/auth/") ||
+    pathname === "/account" ||
+    pathname === "/account-status"
+  );
+}
 
 export default function KynovantNavbar() {
   const [scrolled, setScrolled] = useState(false);
@@ -41,100 +45,104 @@ export default function KynovantNavbar() {
     return () => clearTimeout(t);
   }, [pathname]);
 
+  if (isSuppressedPath(pathname)) return null;
+
   const solid = scrolled || menuOpen;
 
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
+      className={`fixed left-0 right-0 top-0 z-50 transition-all duration-300 ${
         solid
-          ? "bg-[#080909]/96 backdrop-blur-md border-b border-white/5 shadow-[0_1px_20px_rgba(0,0,0,0.4)]"
+          ? "border-b border-mkt-border bg-mkt-surface/92 shadow-[0_1px_24px_rgba(0,0,0,0.45)] backdrop-blur-md"
           : "bg-transparent"
       }`}
     >
-      <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-3 group">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
+        <Link href="/" className="group flex items-center gap-3">
           <Image
             src="/kynovant_horizontal.png"
             alt="Kynovant"
             width={166}
             height={83}
             priority
-            className="h-7 w-auto opacity-90 group-hover:opacity-100 transition-opacity"
+            className="h-7 w-auto opacity-95 transition-opacity group-hover:opacity-100"
           />
         </Link>
 
-        <nav className="hidden md:flex items-center gap-8">
+        <nav className="hidden items-center gap-8 md:flex">
           {NAV_LINKS.map((link) => (
             <Link
               key={link.href}
               href={link.href}
-              className="text-sm text-gray-400 hover:text-white transition-colors tracking-wide"
+              className="text-sm tracking-wide text-white/55 transition-colors hover:text-white"
             >
               {link.label}
             </Link>
           ))}
           <Link
             href="/login"
-            className="text-sm text-gray-400 hover:text-white transition-colors tracking-wide"
+            className="text-sm tracking-wide text-white/55 transition-colors hover:text-white"
           >
             Login
           </Link>
           <Link
             href="/start-trial"
-            className="text-sm bg-[#C9A24D] text-black px-6 py-2.5 font-semibold tracking-wide hover:bg-[#D4B56A] transition-colors"
+            className="rounded-md bg-white px-5 py-2.5 text-sm font-semibold tracking-wide text-[#0d0f11] transition-colors hover:bg-white/90"
           >
             Start Free Trial
           </Link>
         </nav>
 
         <button
-          className="md:hidden flex flex-col justify-center items-center w-8 h-8 gap-[5px]"
+          type="button"
+          className="flex h-8 w-8 flex-col items-center justify-center gap-[5px] md:hidden"
           onClick={() => setMenuOpen((v) => !v)}
           aria-label="Toggle navigation"
+          aria-expanded={menuOpen}
         >
           <span
-            className={`block h-px w-5 bg-white transition-all duration-300 origin-center ${
-              menuOpen ? "rotate-45 translate-y-[6px]" : ""
+            className={`block h-px w-5 origin-center bg-white transition-all duration-300 ${
+              menuOpen ? "translate-y-[6px] rotate-45" : ""
             }`}
           />
           <span
             className={`block h-px w-5 bg-white transition-all duration-300 ${
-              menuOpen ? "opacity-0 scale-x-0" : ""
+              menuOpen ? "scale-x-0 opacity-0" : ""
             }`}
           />
           <span
-            className={`block h-px w-5 bg-white transition-all duration-300 origin-center ${
-              menuOpen ? "-rotate-45 -translate-y-[6px]" : ""
+            className={`block h-px w-5 origin-center bg-white transition-all duration-300 ${
+              menuOpen ? "-translate-y-[6px] -rotate-45" : ""
             }`}
           />
         </button>
       </div>
 
       <div
-        className={`md:hidden overflow-hidden transition-all duration-300 ${
-          menuOpen ? "max-h-80 opacity-100" : "max-h-0 opacity-0"
+        className={`overflow-hidden transition-all duration-300 md:hidden ${
+          menuOpen ? "max-h-96 opacity-100" : "max-h-0 opacity-0"
         }`}
       >
-        <nav className="px-6 pb-5 pt-2 flex flex-col gap-1 border-t border-white/5">
+        <nav className="flex flex-col gap-1 border-t border-mkt-border px-6 pb-5 pt-2">
           {NAV_LINKS.map((link) => (
             <Link
               key={link.href}
               href={link.href}
-              className="text-gray-300 py-3 text-sm tracking-wide border-b border-white/5 hover:text-white transition-colors"
+              className="border-b border-mkt-border py-3 text-sm tracking-wide text-white/70 transition-colors hover:text-white"
             >
               {link.label}
             </Link>
           ))}
           <Link
             href="/login"
-            className="text-gray-300 py-3 text-sm tracking-wide border-b border-white/5 hover:text-white transition-colors"
+            className="border-b border-mkt-border py-3 text-sm tracking-wide text-white/70 transition-colors hover:text-white"
           >
             Login
           </Link>
           <div className="pt-3">
             <Link
               href="/start-trial"
-              className="block bg-[#C9A24D] text-black py-3 text-center font-semibold text-sm tracking-wide hover:bg-[#D4B56A] transition-colors"
+              className="block rounded-md bg-white py-3 text-center text-sm font-semibold tracking-wide text-[#0d0f11] transition-colors hover:bg-white/90"
             >
               Start 14-Day Free Trial
             </Link>

@@ -1,3 +1,3 @@
-import KynovantPublicFooter from "@/components/marketing/KynovantPublicFooter";
+import KynovantFooter from "@/components/kynovant/KynovantFooter";
 
-export default KynovantPublicFooter;
+export default KynovantFooter;
