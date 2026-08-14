@@ -4,7 +4,7 @@ import type { Phase } from "@/components/OnboardingWizard";
 import AccessGuard from "@/components/AccessGuard";
 
 export const metadata: Metadata = {
-  title: "Onboarding | Kynovant",
+  title: "Onboarding | Catalyst Coaching Elite",
   robots: { index: false, follow: false },
 };
 
@@ -580,7 +580,7 @@ const PHASES: Phase[] = [
       {
         id: "agree_terms",
         label:
-          "I agree to the Kynovant terms and conditions and understand that my coaching subscription is active.",
+          "I agree to the Catalyst Coaching Elite terms and conditions and understand that my coaching subscription is active.",
         type: "checkbox",
         required: true,
       },
@@ -610,7 +610,7 @@ export default function OnboardingPage() {
     >
       <OnboardingWizard
       phases={PHASES}
-      heading="Kynovant"
+      heading="Catalyst Coaching Elite"
       headingLine2="Coaching"
       welcomeSubheading="We're about to build your Performance Blueprint."
       welcomeBody="This assessment takes approximately 12–15 minutes. Every answer helps us personalize your training, nutrition, habits, recovery, and coaching strategy."

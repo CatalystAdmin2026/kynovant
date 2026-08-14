@@ -5,14 +5,14 @@ import Link from "next/link";
 import { Mail, ClipboardList, Phone, Zap } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Executive Performance Confirmed | Kynovant",
+  title: "Executive Performance Confirmed | Catalyst Coaching Elite",
   description:
     "Your Executive Performance program is now active. Welcome to the team.",
   robots: { index: false, follow: false },
   openGraph: {
-    title: "Executive Performance Confirmed | Kynovant",
+    title: "Executive Performance Confirmed | Catalyst Coaching Elite",
     description: "You're officially inside Executive Performance.",
-    siteName: "Kynovant",
+    siteName: "Catalyst Coaching Elite",
   },
 };
 
@@ -253,7 +253,7 @@ export default async function ExecutivePerformanceConfirmedPage({
 
               {/* Body */}
               <p className="ep-f4 text-center lg:text-left text-gray-500 text-[14px] md:text-[15px] leading-relaxed max-w-lg mb-12 mx-auto lg:mx-0">
-                Thank you for trusting Kynovant with your health,
+                Thank you for trusting Catalyst Coaching Elite with your health,
                 performance, and future. We&apos;re honored to build something
                 extraordinary together.
               </p>
@@ -383,7 +383,7 @@ export default async function ExecutivePerformanceConfirmedPage({
 
                   {/* Branding strip */}
                   <div className="absolute bottom-0 left-0 right-0 px-6 py-4 flex items-center justify-between">
-                    <span className="text-[9px] tracking-[0.4em] text-white/20 uppercase">Kynovant</span>
+                    <span className="text-[9px] tracking-[0.4em] text-white/20 uppercase">Catalyst Coaching Elite</span>
                     <span className="text-[9px] tracking-[0.3em] text-[#C9A44C]/30 uppercase">Executive Member</span>
                   </div>
                 </div>

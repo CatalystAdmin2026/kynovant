@@ -1,3 +1,4 @@
+/* eslint-disable react/no-unescaped-entities */
 "use client";
 
 import { useState } from "react";
@@ -107,12 +108,12 @@ export default function ApplyPage() {
               <div className="flex items-center gap-3 mb-4">
                 <Image
                   src="/logos/kynovant-mark.png"
-                  alt="Kynovant"
+                  alt=""
                   width={20}
                   height={20}
                 />
                 <span className="text-[10px] tracking-[0.3em] font-semibold text-white/50 uppercase">
-                  Kynovant
+                  Catalyst Coaching Elite
                 </span>
               </div>
               <p className="text-gray-500 text-sm leading-relaxed">
@@ -220,7 +221,7 @@ export default function ApplyPage() {
 
               <div>
                 <label className={label}>
-                  How did you hear about Kynovant?
+                  How did you hear about Catalyst Coaching Elite?
                 </label>
                 <select
                   name="referral_source"

@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Programs | Kynovant",
+  title: "Programs | Catalyst Coaching Elite",
   description:
-    "Two coaching experiences built around you — Kynovant Elite and Executive Performance. Every journey begins with a complimentary Strategy Call.",
+    "Two Catalyst Coaching Elite experiences built around you — Elite Coaching and Executive Performance. Every journey begins with a complimentary Strategy Call.",
   openGraph: {
-    title: "Programs | Kynovant",
+    title: "Programs | Catalyst Coaching Elite",
     description:
       "Two coaching experiences built around you. Discover which path is right for you.",
-    siteName: "Kynovant",
+    siteName: "Catalyst Coaching Elite",
   },
 };
 
@@ -108,7 +108,7 @@ export default function ProgramsPage() {
 
             {/* Eyebrow */}
             <p className="pg-f0 text-[#C9A24D] text-[10px] font-semibold tracking-[0.65em] uppercase mb-8">
-              Kynovant
+              Catalyst Coaching Elite
             </p>
 
             {/* Headline */}
@@ -168,7 +168,7 @@ export default function ProgramsPage() {
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 xl:gap-8 items-start">
 
-              {/* ── Card 1: Kynovant Elite ── */}
+              {/* ── Card 1: Elite Coaching ── */}
               <div className="elite-card bg-[#0e0f10] border border-white/[0.07] flex flex-col">
                 {/* Top accent */}
                 <div className="h-px w-full bg-gradient-to-r from-transparent via-white/15 to-transparent" />
@@ -181,7 +181,7 @@ export default function ProgramsPage() {
 
                   {/* Headline */}
                   <h3 className="font-headline text-3xl md:text-[40px] font-bold uppercase text-white leading-none mb-6">
-                    Kynovant<br />Elite
+                    Elite<br />Coaching
                   </h3>
 
                   {/* Copy */}
@@ -258,7 +258,7 @@ export default function ProgramsPage() {
 
                   {/* Everything in Elite, plus */}
                   <p className="text-[10px] tracking-[0.4em] text-gray-600 uppercase font-semibold mb-5">
-                    Everything in Kynovant Elite, plus:
+                    Everything in Elite Coaching, plus:
                   </p>
 
                   <div className="space-y-3 mb-10 flex-1">

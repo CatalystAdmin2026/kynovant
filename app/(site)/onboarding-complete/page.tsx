@@ -3,7 +3,7 @@ import Link from "next/link";
 import Image from "next/image";
 
 export const metadata: Metadata = {
-  title: "Onboarding Complete | Kynovant",
+  title: "Onboarding Complete | Catalyst Coaching Elite",
   robots: { index: false, follow: false },
 };
 
@@ -38,7 +38,7 @@ export default function OnboardingCompletePage() {
           <div className="w-16 h-16 rounded-full border border-[#C9A44C]/30 flex items-center justify-center">
             <Image
               src="/logos/kynovant-mark.png"
-              alt="Kynovant"
+              alt="Catalyst Coaching Elite"
               width={32}
               height={32}
               className="opacity-90"
@@ -125,7 +125,7 @@ export default function OnboardingCompletePage() {
           The work starts now.
         </p>
         <p className="text-[#C9A44C] text-[11px] font-semibold tracking-[0.35em] uppercase">
-          Kynovant
+          Catalyst Coaching Elite
         </p>
       </section>
     </main>
