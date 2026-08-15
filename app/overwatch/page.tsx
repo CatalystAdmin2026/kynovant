@@ -34,9 +34,20 @@ function fmtNumber(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 }
 
-function fmtDate(date: Date | null): string {
-  if (!date) return "None";
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date);
+function toDate(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function dateTime(value: Date | string | null | undefined): number {
+  return toDate(value)?.getTime() ?? 0;
+}
+
+function fmtDate(date: Date | string | null | undefined): string {
+  const parsed = toDate(date);
+  if (!parsed) return "None";
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(parsed);
 }
 
 function fmtPercent(value: number | null): string {
@@ -132,7 +143,7 @@ function filterAndSortAccounts(accounts: OverwatchCoachRow[], search: Search): O
         return labelize(a.subscriptionStatus).localeCompare(labelize(b.subscriptionStatus));
       case "newest":
       default:
-        return b.createdAt.getTime() - a.createdAt.getTime();
+        return dateTime(b.createdAt) - dateTime(a.createdAt);
     }
   });
 }
