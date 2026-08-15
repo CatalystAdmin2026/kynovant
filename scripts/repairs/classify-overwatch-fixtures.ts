@@ -2,11 +2,11 @@ import { sql } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 
 const FIXTURE_PATTERNS = [
-  "program-gen-test-coach-%",
-  "messaging-test-coach-%",
-  "isolation-test-coach-%",
-  "review-triage-test-coach-%",
-  "candidate-test-coach-%",
+  "program-gen-test-coach-%@isolation-test.invalid",
+  "messaging-test-coach-%@isolation-test.invalid",
+  "isolation-test-coach-%@isolation-test.invalid",
+  "review-triage-test-coach-%@isolation-test.invalid",
+  "candidate-test-coach-%@isolation-test.invalid",
 ] as const;
 
 const apply = process.argv.includes("--apply");

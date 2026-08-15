@@ -63,14 +63,28 @@ function fmtDuration(ms: number | null): string {
   return `${fmtNumber(ms / 1000)} sec`;
 }
 
+function hourForTimezone(timezone: string): number {
+  try {
+    return Number(
+      new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        hour12: false,
+        timeZone: timezone,
+      }).format(new Date()),
+    );
+  } catch {
+    return Number(
+      new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        hour12: false,
+        timeZone: "America/Chicago",
+      }).format(new Date()),
+    );
+  }
+}
+
 function greetingForNow(name: string | null, timezone: string): string {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      hour12: false,
-      timeZone: timezone,
-    }).format(new Date()),
-  );
+  const hour = hourForTimezone(timezone);
   const daypart = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
   return name ? `Good ${daypart}, ${name}.` : `Good ${daypart}.`;
 }
@@ -338,7 +352,7 @@ export default async function OverwatchPage({
 
           <div className="flex flex-wrap gap-2">
             <FilterLink href="/overwatch?sort=newest" active={!search.sort || search.sort === "newest"}><ArrowUpDown className="mr-1 inline" size={12} />Newest</FilterLink>
-            <FilterLink href="/overwatch?sort=last-active" active={search.sort === "last-active"}><ArrowUpDown className="mr-1 inline" size={12} />Last Active</FilterLink>
+            <FilterLink href="/overwatch?sort=last-active" active={search.sort === "last-active"}><ArrowUpDown className="mr-1 inline" size={12} />Product Activity</FilterLink>
             <FilterLink href="/overwatch?sort=clients" active={search.sort === "clients"}><ArrowUpDown className="mr-1 inline" size={12} />Clients</FilterLink>
             <FilterLink href="/overwatch?sort=subscription" active={search.sort === "subscription"}><ArrowUpDown className="mr-1 inline" size={12} />Subscription</FilterLink>
             <FilterLink href="/overwatch?sort=name" active={search.sort === "name"}><ArrowUpDown className="mr-1 inline" size={12} />Name</FilterLink>
@@ -353,7 +367,7 @@ export default async function OverwatchPage({
                 <span>Subscription</span>
                 <span>Trial / Billing Date</span>
                 <span className="text-right">Clients</span>
-                <span>Last Active</span>
+                <span>Product Activity</span>
               </div>
               {accounts.length > 0 ? accounts.map((coach) => (
                 <div key={coach.id} className="grid grid-cols-[1.3fr_1.15fr_0.65fr_0.85fr_0.85fr_0.55fr_0.75fr] items-center border-b border-white/[0.045] px-4 py-3 last:border-b-0">

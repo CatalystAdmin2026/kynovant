@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS "internal_account_flags" (
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );--> statement-breakpoint
 
+ALTER TABLE public.internal_account_flags ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'internal_account_flags_user_id_users_id_fk'
@@ -54,6 +56,8 @@ CREATE TABLE IF NOT EXISTS "operator_profiles" (
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );--> statement-breakpoint
+
+ALTER TABLE public.operator_profiles ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 
 DO $$ BEGIN
   IF NOT EXISTS (

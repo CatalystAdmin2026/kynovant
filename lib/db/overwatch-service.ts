@@ -156,6 +156,17 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
+function toDateOrNull(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isWithinDateWindow(value: Date | string | null | undefined, start: Date, end: Date): boolean {
+  const date = toDateOrNull(value);
+  return Boolean(date && date >= start && date <= end);
+}
+
 function rate(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
 }
@@ -170,9 +181,18 @@ function businessCoachPredicate() {
   return sql`${users.role} = 'coach' and coalesce(${internalAccountFlags.classification}, 'customer') = 'customer'`;
 }
 
+function acquisitionLeadPredicate() {
+  return sql`(
+    (${coachAcquisitionLeads.accountUserId} is null and ${coachAcquisitionLeads.normalizedEmail} not like '%@isolation-test.invalid')
+    or coalesce(${internalAccountFlags.classification}, 'customer') = 'customer'
+  )`;
+}
+
 export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
   const db = getDb();
   const now = Date.now();
+  const nowDate = new Date(now);
+  const nowIso = nowDate.toISOString();
   const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
   const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
   const sevenDaysAgoIso = sevenDaysAgo.toISOString();
@@ -200,9 +220,9 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       cancelledAt: coachSubscriptions.cancelledAt,
       activeClientCount: sql<number>`count(${coachingEnrollments.id})::int`,
       lastActiveAt: sql<Date | null>`nullif(greatest(
-        coalesce((select max(${workoutSessions.completedAt}) from ${workoutSessions} inner join ${coachingEnrollments} ce_ws on ce_ws.client_id = ${workoutSessions.clientId} where ce_ws.coach_id = ${users.id} and ce_ws.status = 'active'), 'epoch'::timestamptz),
-        coalesce((select max(${weeklyCheckIns.submittedAt}) from ${weeklyCheckIns} inner join ${coachingEnrollments} ce_ci on ce_ci.client_id = ${weeklyCheckIns.clientId} where ce_ci.coach_id = ${users.id} and ce_ci.status = 'active'), 'epoch'::timestamptz),
-        coalesce((select max(${conversations.lastMessageAt}) from ${conversations} where ${conversations.coachId} = ${users.id}), 'epoch'::timestamptz)
+        coalesce((select max(${workoutSessions.completedAt}) from ${workoutSessions} inner join ${coachingEnrollments} ce_ws on ce_ws.client_id = ${workoutSessions.clientId} where ce_ws.coach_id = ${users.id} and ce_ws.status = 'active' and ${workoutSessions.completedAt} <= ${nowIso}::timestamptz), 'epoch'::timestamptz),
+        coalesce((select max(${weeklyCheckIns.submittedAt}) from ${weeklyCheckIns} inner join ${coachingEnrollments} ce_ci on ce_ci.client_id = ${weeklyCheckIns.clientId} where ce_ci.coach_id = ${users.id} and ce_ci.status = 'active' and ${weeklyCheckIns.submittedAt} <= ${nowIso}::timestamptz), 'epoch'::timestamptz),
+        coalesce((select max(${conversations.lastMessageAt}) from ${conversations} where ${conversations.coachId} = ${users.id} and ${conversations.lastMessageAt} <= ${nowIso}::timestamptz), 'epoch'::timestamptz)
       ), 'epoch'::timestamptz)`,
     })
       .from(users)
@@ -232,7 +252,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       .leftJoin(users, eq(users.id, coachAcquisitionLeads.accountUserId))
       .leftJoin(internalAccountFlags, eq(internalAccountFlags.userId, users.id))
       .leftJoin(coachSubscriptions, eq(coachSubscriptions.coachId, users.id))
-      .where(sql`${coachAcquisitionLeads.accountUserId} is null or coalesce(${internalAccountFlags.classification}, 'customer') = 'customer'`);
+      .where(acquisitionLeadPredicate());
 
   const acquisitionRecent = await db.select({
       id: coachAcquisitionLeads.id,
@@ -250,7 +270,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       .leftJoin(users, eq(users.id, coachAcquisitionLeads.accountUserId))
       .leftJoin(internalAccountFlags, eq(internalAccountFlags.userId, users.id))
       .leftJoin(coachSubscriptions, eq(coachSubscriptions.coachId, users.id))
-      .where(sql`${coachAcquisitionLeads.accountUserId} is null or coalesce(${internalAccountFlags.classification}, 'customer') = 'customer'`)
+      .where(acquisitionLeadPredicate())
       .orderBy(desc(coachAcquisitionLeads.firstSignupAt))
       .limit(8);
 
@@ -275,6 +295,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
         where ce.status = 'active'
           and ws.status = 'completed'
           and ws.completed_at >= ${sevenDaysAgoIso}::timestamptz
+          and ws.completed_at <= ${nowIso}::timestamptz
       ) as "workouts7d",
       (
         select count(distinct ci.id)::int
@@ -283,6 +304,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
         inner join customer_coaches cc on cc.id = ce.coach_id
         where ce.status = 'active'
           and ci.submitted_at >= ${sevenDaysAgoIso}::timestamptz
+          and ci.submitted_at <= ${nowIso}::timestamptz
       ) as "checkInsSubmitted7d",
       (
         select count(distinct m.id)::int
@@ -290,15 +312,16 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
         inner join ${conversations} c on c.id = m.conversation_id
         inner join customer_coaches cc on cc.id = c.coach_id
         where m.created_at >= ${sevenDaysAgoIso}::timestamptz
+          and m.created_at <= ${nowIso}::timestamptz
       ) as "messages7d"
   `);
 
   const aiRows = await db.select({
-      runs7d: sql<number>`count(*) filter (where ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz)::int`,
-      runs30d: sql<number>`count(*) filter (where ${programGenerationRuns.createdAt} >= ${thirtyDaysAgoIso}::timestamptz)::int`,
-      completed: sql<number>`count(*) filter (where ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.status} = 'complete')::int`,
-      failed: sql<number>`count(*) filter (where ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.status} = 'failed')::int`,
-      averageLatencyMs: sql<number | null>`avg(extract(epoch from (${programGenerationRuns.completedAt} - ${programGenerationRuns.startedAt})) * 1000) filter (where ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.startedAt} is not null and ${programGenerationRuns.completedAt} is not null)`,
+      runs7d: sql<number>`count(*) filter (where ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.createdAt} <= ${nowIso}::timestamptz)::int`,
+      runs30d: sql<number>`count(*) filter (where ${programGenerationRuns.createdAt} >= ${thirtyDaysAgoIso}::timestamptz and ${programGenerationRuns.createdAt} <= ${nowIso}::timestamptz)::int`,
+      completed: sql<number>`count(*) filter (where ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.createdAt} <= ${nowIso}::timestamptz and ${programGenerationRuns.status} = 'complete')::int`,
+      failed: sql<number>`count(*) filter (where ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.createdAt} <= ${nowIso}::timestamptz and ${programGenerationRuns.status} = 'failed')::int`,
+      averageLatencyMs: sql<number | null>`avg(extract(epoch from (${programGenerationRuns.completedAt} - ${programGenerationRuns.startedAt})) * 1000) filter (where ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.createdAt} <= ${nowIso}::timestamptz and ${programGenerationRuns.startedAt} is not null and ${programGenerationRuns.completedAt} is not null and ${programGenerationRuns.completedAt} >= ${programGenerationRuns.startedAt} and ${programGenerationRuns.completedAt} <= ${nowIso}::timestamptz)`,
     })
       .from(programGenerationRuns)
       .innerJoin(users, eq(users.id, programGenerationRuns.requestedByUserId))
@@ -312,7 +335,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       .from(programGenerationRuns)
       .innerJoin(users, eq(users.id, programGenerationRuns.requestedByUserId))
       .leftJoin(internalAccountFlags, eq(internalAccountFlags.userId, users.id))
-      .where(sql`${businessCoachPredicate()} and ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz`)
+      .where(sql`${businessCoachPredicate()} and ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.createdAt} <= ${nowIso}::timestamptz`)
       .groupBy(sql`coalesce(${programGenerationRuns.provider}, 'unknown')`)
       .orderBy(sql`count(*) desc`)
       .limit(5);
@@ -324,7 +347,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       .from(programGenerationRuns)
       .innerJoin(users, eq(users.id, programGenerationRuns.requestedByUserId))
       .leftJoin(internalAccountFlags, eq(internalAccountFlags.userId, users.id))
-      .where(sql`${businessCoachPredicate()} and ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz`)
+      .where(sql`${businessCoachPredicate()} and ${programGenerationRuns.createdAt} >= ${sevenDaysAgoIso}::timestamptz and ${programGenerationRuns.createdAt} <= ${nowIso}::timestamptz`)
       .groupBy(sql`coalesce(${programGenerationRuns.model}, 'unknown')`)
       .orderBy(sql`count(*) desc`)
       .limit(5);
@@ -363,6 +386,10 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
   const accounts = coachRows.map((coach) => ({
     ...coach,
     classification: coach.classification ?? "customer",
+    createdAt: toDateOrNull(coach.createdAt) ?? new Date(0),
+    currentPeriodEnd: toDateOrNull(coach.currentPeriodEnd),
+    cancelledAt: toDateOrNull(coach.cancelledAt),
+    lastActiveAt: toDateOrNull(coach.lastActiveAt),
     activeClientCount: toNumber(coach.activeClientCount),
   }));
   const activeClients = accounts.reduce((sum, coach) => sum + coach.activeClientCount, 0);
@@ -413,7 +440,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
     overview: {
       activeTrials,
       payingAccounts,
-      newSignups7d: accounts.filter((coach) => coach.createdAt >= sevenDaysAgo).length,
+      newSignups7d: accounts.filter((coach) => isWithinDateWindow(coach.createdAt, sevenDaysAgo, nowDate)).length,
       activeCustomerCoaches: accounts.filter((coach) => coach.accountStatus === "active").length,
       activeClients,
       workouts7d,
@@ -426,7 +453,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       trialingSubscriptions: activeTrials,
       pastDueSubscriptions: accounts.filter((coach) => coach.subscriptionStatus === "past_due").length,
       cancelledSubscriptions: accounts.filter((coach) => coach.subscriptionStatus === "cancelled" || coach.subscriptionStatus === "suspended").length,
-      trialEndingSoon: accounts.filter((coach) => coach.subscriptionStatus === "trialing" && coach.currentPeriodEnd && coach.currentPeriodEnd.toISOString() <= sevenDaysFromNowIso).length,
+      trialEndingSoon: accounts.filter((coach) => coach.subscriptionStatus === "trialing" && coach.currentPeriodEnd && coach.currentPeriodEnd >= nowDate && coach.currentPeriodEnd.toISOString() <= sevenDaysFromNowIso).length,
       upcomingRenewals: accounts
         .filter((coach) => coach.currentPeriodEnd && (coach.subscriptionStatus === "trialing" || coach.subscriptionStatus === "active"))
         .sort((a, b) => (a.currentPeriodEnd?.getTime() ?? 0) - (b.currentPeriodEnd?.getTime() ?? 0))
@@ -438,7 +465,11 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       paidActive,
       conversionRateTrialToPaid: conversionRate(paidActive, trialStarted),
       stages,
-      recentLeads: acquisitionRecent,
+      recentLeads: acquisitionRecent.map((lead) => ({
+        ...lead,
+        firstSignupAt: toDateOrNull(lead.firstSignupAt) ?? new Date(0),
+        inviteSentAt: toDateOrNull(lead.inviteSentAt),
+      })),
     },
     accounts,
     engagement: {

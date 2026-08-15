@@ -200,6 +200,15 @@ describe("Overwatch page server render", () => {
     expect(html).toMatch(/Good (morning|afternoon|evening), Jermaine\./);
   });
 
+  it("falls back instead of crashing when the operator timezone is malformed", async () => {
+    founderProfileMock.mockResolvedValue({ firstName: "Jermaine", timezone: "Not/A_Timezone" });
+
+    const element = await OverwatchPage({ searchParams: Promise.resolve({}) });
+    const html = renderToString(element);
+
+    expect(html).toMatch(/Good (morning|afternoon|evening), Jermaine\./);
+  });
+
   it("keeps client PII out of the rendered Overwatch payload", async () => {
     const element = await OverwatchPage({ searchParams: Promise.resolve({}) });
     const html = renderToString(element);
@@ -208,6 +217,14 @@ describe("Overwatch page server render", () => {
     expect(html).not.toContain("client@example.com");
     expect(html).not.toContain("Health Profile");
     expect(html).not.toContain("Check-In Notes");
+  });
+
+  it("labels derived account activity without implying coach login telemetry", async () => {
+    const element = await OverwatchPage({ searchParams: Promise.resolve({}) });
+    const html = renderToString(element);
+
+    expect(html).toContain("Product Activity");
+    expect(html).not.toContain(">Last Active<");
   });
 
   it("renders the corrected zero-lead acquisition empty state", async () => {
