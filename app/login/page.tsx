@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { SITE_URL } from "@/lib/site-url";
 
 type Mode = "password" | "magic";
 type State = "idle" | "loading" | "sent" | "error";
@@ -82,7 +83,10 @@ function LoginContent() {
       options: {
         // Prevents creating new users — only existing invited accounts receive a link
         shouldCreateUser: false,
-        emailRedirectTo: `${window.location.origin}/auth/callback${next ? `?next=${encodeURIComponent(next)}` : ""}`,
+        // Canonical SITE_URL, not window.location.origin — see
+        // lib/site-url.ts for why (same failure mode as the password-
+        // recovery redirectTo below it in app/forgot-password/page.tsx).
+        emailRedirectTo: `${SITE_URL}/auth/callback${next ? `?next=${encodeURIComponent(next)}` : ""}`,
       },
     });
 

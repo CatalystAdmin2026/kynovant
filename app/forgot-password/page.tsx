@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { SITE_URL } from "@/lib/site-url";
 
 type State = "idle" | "loading" | "sent";
 
@@ -27,8 +28,15 @@ function ForgotPasswordContent() {
     const supabase = createClient();
     // resetPasswordForEmail never reveals whether an email exists —
     // it returns no error for unknown addresses. This prevents enumeration.
+    //
+    // redirectTo is built from the canonical SITE_URL, never
+    // window.location.origin — see lib/site-url.ts for why: Supabase's
+    // redirect-URL allow list has been observed to reject a bare-apex
+    // origin once a query string (?type=recovery) is appended, silently
+    // falling back to the project's Site URL and stripping both the
+    // /auth/callback path and the recovery marker.
     await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
-      redirectTo: `${window.location.origin}/auth/callback?type=recovery`,
+      redirectTo: `${SITE_URL}/auth/callback?type=recovery`,
     });
 
     // Always show the same neutral success state regardless of outcome.

@@ -39,6 +39,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { hostBrand, type Brand } from "@/lib/domain-routing";
+import { SITE_URL } from "@/lib/site-url";
 
 // ─────────────────────────────────────────────────────────────
 // DOMAIN CLASSIFICATION
@@ -49,7 +50,14 @@ import { hostBrand, type Brand } from "@/lib/domain-routing";
 // override and the URL constants used for cross-brand redirects.
 // ─────────────────────────────────────────────────────────────
 
-const KYNOVANT_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://kynovant.com";
+// Was "https://kynovant.com" (bare apex, no www) — inconsistent with
+// every other NEXT_PUBLIC_SITE_URL fallback in the codebase (lib/site-
+// url.ts, lib/billing/actions.ts, and three app/api routes), and, since
+// NEXT_PUBLIC_SITE_URL is unset in Vercel Production, this fallback was
+// the live value in use. See lib/site-url.ts's header comment for the
+// concrete Supabase redirect-URL allow-list bug this class of bare-
+// apex-vs-www mismatch causes.
+const KYNOVANT_URL = SITE_URL;
 const CATALYST_URL = process.env.NEXT_PUBLIC_CATALYST_URL ?? "https://catalystcoachingelite.com";
 
 // Catalyst Coaching Elite — dormant personal-coaching business.
