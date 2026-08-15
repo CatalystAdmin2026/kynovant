@@ -112,25 +112,17 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
   const now = Date.now();
   const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
   const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgoIso = sevenDaysAgo.toISOString();
 
-  const [
-    platformRows,
-    coachRows,
-    acquisitionRows,
-    acquisitionRecent,
-    productRows,
-    blueprintRows,
-    exerciseRows,
-    activeClientProgramsRow,
-    completedWorkoutRows,
-    activityRows,
-  ] = await Promise.all([
-    db.select({
+  // Keep these reads sequential. Supabase session-mode pooling has a small
+  // per-session client cap; fanning out every Overwatch query concurrently can
+  // exhaust it and crash the server-rendered dashboard.
+  const platformRows = await db.select({
       totalUsers: sql<number>`count(*)::int`,
       admins: sql<number>`count(*) filter (where ${users.role} = 'admin')::int`,
-    }).from(users),
+    }).from(users);
 
-    db.select({
+  const coachRows = await db.select({
       id: users.id,
       email: users.email,
       accountStatus: users.status,
@@ -154,9 +146,9 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       )
       .where(eq(users.role, "coach"))
       .groupBy(users.id, coachProfiles.displayName, coachSubscriptions.id)
-      .orderBy(desc(users.createdAt)),
+      .orderBy(desc(users.createdAt));
 
-    db.select({
+  const acquisitionRows = await db.select({
       startedSignup: sql<number>`count(*)::int`,
       inviteSent: sql<number>`count(*) filter (where ${coachAcquisitionLeads.inviteSentAt} is not null or ${coachAcquisitionLeads.inviteStatus} in ('sent', 'already_invited', 'already_active'))::int`,
       accountActivated: sql<number>`count(*) filter (where ${users.status} = 'active')::int`,
@@ -166,9 +158,9 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
     })
       .from(coachAcquisitionLeads)
       .leftJoin(users, eq(users.id, coachAcquisitionLeads.accountUserId))
-      .leftJoin(coachSubscriptions, eq(coachSubscriptions.coachId, users.id)),
+      .leftJoin(coachSubscriptions, eq(coachSubscriptions.coachId, users.id));
 
-    db.select({
+  const acquisitionRecent = await db.select({
       id: coachAcquisitionLeads.id,
       submittedName: coachAcquisitionLeads.submittedName,
       normalizedEmail: coachAcquisitionLeads.normalizedEmail,
@@ -184,42 +176,41 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       .leftJoin(users, eq(users.id, coachAcquisitionLeads.accountUserId))
       .leftJoin(coachSubscriptions, eq(coachSubscriptions.coachId, users.id))
       .orderBy(desc(coachAcquisitionLeads.firstSignupAt))
-      .limit(8),
+      .limit(8);
 
-    db.select({
+  const productRows = await db.select({
       total: sql<number>`count(*)::int`,
       active: sql<number>`count(*) filter (where ${programTemplates.status} = 'active')::int`,
-    }).from(programTemplates),
+    }).from(programTemplates);
 
-    db.select({
+  const blueprintRows = await db.select({
       total: sql<number>`count(distinct ${workoutTemplates.id})::int`,
       active: sql<number>`count(distinct ${workoutTemplates.id}) filter (where ${workoutTemplates.status} = 'active')::int`,
-    }).from(workoutTemplates),
+    }).from(workoutTemplates);
 
-    db.select({
+  const exerciseRows = await db.select({
       total: sql<number>`count(*)::int`,
       active: sql<number>`count(*) filter (where ${exercises.status} = 'active')::int`,
-    }).from(exercises),
+    }).from(exercises);
 
-    db.select({
+  const activeClientProgramsRow = await db.select({
       activeClientPrograms: sql<number>`count(*) filter (where ${clientPrograms.status} = 'active')::int`,
-    }).from(clientPrograms),
+    }).from(clientPrograms);
 
-    db.select({
-      completedWorkoutsLast7d: sql<number>`count(*) filter (where ${workoutSessions.status} = 'completed' and ${workoutSessions.completedAt} >= ${sevenDaysAgo})::int`,
-    }).from(workoutSessions),
+  const completedWorkoutRows = await db.select({
+      completedWorkoutsLast7d: sql<number>`count(*) filter (where ${workoutSessions.status} = 'completed' and ${workoutSessions.completedAt} >= ${sevenDaysAgoIso}::timestamptz)::int`,
+    }).from(workoutSessions);
 
-    db.select({
+  const activityRows = await db.select({
       eventType: timelineEvents.eventType,
       count: sql<number>`count(*)::int`,
       lastOccurredAt: sql<Date | null>`max(${timelineEvents.occurredAt})`,
     })
       .from(timelineEvents)
-      .where(sql`${timelineEvents.occurredAt} >= ${sevenDaysAgo}`)
+      .where(sql`${timelineEvents.occurredAt} >= ${sevenDaysAgoIso}::timestamptz`)
       .groupBy(timelineEvents.eventType)
       .orderBy(sql`max(${timelineEvents.occurredAt}) desc`)
-      .limit(8),
-  ]);
+      .limit(8);
 
   const accounts = coachRows.map((coach) => ({
     ...coach,
