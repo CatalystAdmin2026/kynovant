@@ -2,7 +2,7 @@ import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const metricsMock = vi.fn();
-const founderNameMock = vi.fn();
+const founderProfileMock = vi.fn();
 
 vi.mock("@/lib/auth/guards", () => ({
   requireOverwatchAdminPage: vi.fn(async () => ({
@@ -26,7 +26,7 @@ vi.mock("@/lib/db/overwatch-service", async (importOriginal) => {
   return {
     ...original,
     getOverwatchMetrics: metricsMock,
-    getOverwatchFounderFirstName: founderNameMock,
+    getOverwatchFounderProfile: founderProfileMock,
   };
 });
 
@@ -35,17 +35,23 @@ const { default: OverwatchPage } = await import("@/app/overwatch/page");
 function baseMetrics() {
   return {
     overview: {
-      totalCoachAccounts: 1,
-      activeCoachAccounts: 1,
-      invitedCoachAccounts: 0,
-      activeSubscriptions: 0,
+      activeTrials: 0,
+      payingAccounts: 0,
+      newSignups7d: 1,
+      activeCustomerCoaches: 1,
+      activeClients: 0,
+      workouts7d: 0,
+      trialToPaid: null,
+      aiGenerations7d: 0,
+    },
+    revenue: {
+      activeTrials: 0,
+      payingAccounts: 0,
       trialingSubscriptions: 0,
       pastDueSubscriptions: 0,
       cancelledSubscriptions: 0,
-      totalActiveClients: 0,
-      averageClientsPerCoach: 0,
-      newCoachAccounts7d: 1,
-      newCoachAccounts30d: 1,
+      trialEndingSoon: 0,
+      upcomingRenewals: [],
     },
     acquisition: {
       startedSignup: 0,
@@ -55,6 +61,14 @@ function baseMetrics() {
       paidActive: 0,
       cancelledChurned: 0,
       conversionRateTrialToPaid: null,
+      stages: [
+        { key: "startedSignup", label: "Started Signup", count: 0, previousRate: null, startedRate: null },
+        { key: "inviteSent", label: "Invite Sent", count: 0, previousRate: null, startedRate: null },
+        { key: "accountActivated", label: "Account Activated", count: 0, previousRate: null, startedRate: null },
+        { key: "trialStarted", label: "Trial Started", count: 0, previousRate: null, startedRate: null },
+        { key: "paidActive", label: "Paid / Active", count: 0, previousRate: null, startedRate: null },
+        { key: "cancelledChurned", label: "Cancelled / Churned", count: 0, previousRate: null, startedRate: null },
+      ],
       recentLeads: [],
     },
     accounts: [
@@ -64,16 +78,32 @@ function baseMetrics() {
         accountStatus: "active",
         createdAt: new Date("2026-08-12T22:48:39.519Z"),
         displayName: null,
+        classification: "customer",
         subscriptionStatus: null,
         currentPeriodEnd: null,
         cancelAtPeriodEnd: null,
         cancelledAt: null,
         activeClientCount: 0,
+        lastActiveAt: null,
       },
     ],
+    engagement: {
+      workouts7d: 0,
+      checkInsSubmitted7d: 0,
+      messages7d: 0,
+    },
+    aiOperations: {
+      runs7d: 0,
+      runs30d: 0,
+      completed: 0,
+      failed: 0,
+      successRate: null,
+      averageLatencyMs: null,
+      providerDistribution: [],
+      modelDistribution: [],
+    },
     product: {
       activeClientPrograms: 0,
-      completedWorkoutsLast7d: 0,
       programsTotal: 0,
       programsActive: 0,
       blueprintsTotal: 0,
@@ -82,9 +112,12 @@ function baseMetrics() {
       exercisesActive: 0,
     },
     platform: {
+      dbReachable: true,
       admins: 1,
       totalUsers: 1,
-      activity: [],
+      recentStripeEventAt: null,
+      failedSignupInvites: 0,
+      pastDueSubscriptions: 0,
     },
   };
 }
@@ -92,7 +125,7 @@ function baseMetrics() {
 describe("Overwatch page server render", () => {
   beforeEach(() => {
     metricsMock.mockResolvedValue(baseMetrics());
-    founderNameMock.mockResolvedValue(null);
+    founderProfileMock.mockResolvedValue({ firstName: null, timezone: "America/Chicago" });
   });
 
   it("renders for an active founder admin without coach profile, client profile, or subscription", async () => {
@@ -103,6 +136,7 @@ describe("Overwatch page server render", () => {
     expect(html).toContain("kynovant@gmail.com");
     expect(html).toContain("Unnamed coach");
     expect(html).toContain("No Billing");
+    expect(html).toContain("Business accounts only");
   });
 
   it.skipIf(!process.env.DATABASE_URL)("renders with live production-shaped Overwatch metrics", async () => {
@@ -115,7 +149,7 @@ describe("Overwatch page server render", () => {
     const html = renderToString(element);
 
     expect(html).toContain("Founder command center");
-    expect(html).toContain("Coach and Trainer Accounts");
+    expect(html).toContain("Customer Account Directory");
   });
 
   it("renders when production timestamp fields arrive as strings", async () => {
@@ -155,5 +189,32 @@ describe("Overwatch page server render", () => {
 
     expect(html).toContain("Test Lead");
     expect(html).toContain("Sep 12, 2026");
+  });
+
+  it("uses the operator timezone and name for the founder greeting", async () => {
+    founderProfileMock.mockResolvedValue({ firstName: "Jermaine", timezone: "America/Chicago" });
+
+    const element = await OverwatchPage({ searchParams: Promise.resolve({}) });
+    const html = renderToString(element);
+
+    expect(html).toMatch(/Good (morning|afternoon|evening), Jermaine\./);
+  });
+
+  it("keeps client PII out of the rendered Overwatch payload", async () => {
+    const element = await OverwatchPage({ searchParams: Promise.resolve({}) });
+    const html = renderToString(element);
+
+    expect(html).toContain("Client PII excluded from founder analytics");
+    expect(html).not.toContain("client@example.com");
+    expect(html).not.toContain("Health Profile");
+    expect(html).not.toContain("Check-In Notes");
+  });
+
+  it("renders the corrected zero-lead acquisition empty state", async () => {
+    const element = await OverwatchPage({ searchParams: Promise.resolve({}) });
+    const html = renderToString(element);
+
+    expect(html).toContain("No acquisition leads yet. New trial signups will appear here.");
+    expect(html).not.toContain("Apply migration 0026");
   });
 });

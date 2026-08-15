@@ -20,15 +20,19 @@ describe("Overwatch founder dashboard security and privacy", () => {
     expect(guards).toContain('resolved.dbUser.role !== "admin"');
   });
 
-  it("does not expose client identities or sensitive client tables in the Overwatch data service", () => {
+  it("does not expose client identities or sensitive client payload fields in the Overwatch data service", () => {
     const service = source("lib/db/overwatch-service.ts");
 
     expect(service).toContain("activeClientCount");
+    expect(service).toContain("checkInsSubmitted7d");
+    expect(service).toContain("messages7d");
     expect(service).not.toContain("clientProfiles");
-    expect(service).not.toContain("weeklyCheckIns");
-    expect(service).not.toContain("messages");
     expect(service).not.toContain("documents");
     expect(service).not.toContain("clientId:");
+    expect(service).not.toContain("bodyWeightLbs");
+    expect(service).not.toContain("clientNotes");
+    expect(service).not.toContain("body:");
+    expect(service).not.toContain("lastMessagePreview");
   });
 
   it("keeps acquisition tracking separate from the abuse/rate-limit attempt ledger", () => {
