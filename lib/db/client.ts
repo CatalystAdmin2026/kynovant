@@ -25,6 +25,28 @@
 // on `globalThis` (dev only) survives module re-evaluation across
 // hot reloads, matching the connection lifetime to the actual
 // server process instead of the module instance.
+//
+// max/idle_timeout (both environments — this is not a dev-only
+// concern): postgres.js defaults to up to 10 connections per client
+// instance with no idle timeout. In production, each concurrently-
+// warm Vercel function instance holds its own client (the globalThis
+// cache above is dev-only, by design — see the comment on `getDb()`),
+// so an unbounded per-instance ceiling multiplies across however many
+// instances happen to be warm at once. A single /portal page load
+// alone already fans out to a dozen-plus concurrent queries (see
+// lib/db/portal-dashboard-service.ts's nested Promise.all groups), so
+// even two or three concurrently-warm instances could singlehandedly
+// exceed the shared 15-connection Session Mode budget — confirmed in
+// production: multiple unrelated queries (client_profiles,
+// workout_sessions, client_programs) failed with the Postgres pooler's
+// own "(EMAXCONNSESSION) max clients reached in session mode - max
+// clients are limited to pool_size: 15" within the same few seconds,
+// well before any query result — data shape was never involved.
+// max: 3 keeps each instance's ceiling low enough that several
+// instances can be warm simultaneously without approaching the shared
+// cap, while still giving a single request's Promise.all groups real
+// parallelism. idle_timeout releases connections proactively instead
+// of holding them until the process itself recycles.
 // ─────────────────────────────────────────────────────────────
 
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -49,7 +71,7 @@ export function getDb(): DbInstance {
     );
   }
 
-  _db = drizzle(postgres(url, { prepare: false }), { schema });
+  _db = drizzle(postgres(url, { prepare: false, max: 3, idle_timeout: 20 }), { schema });
   if (process.env.NODE_ENV !== "production") globalForDb._catalystDb = _db;
   return _db;
 }
