@@ -41,6 +41,12 @@ describe("app/api/internal/clients/route.ts — authorization unchanged", () => 
     expect(route).not.toMatch(/body\.role/);
   });
 
+  it("rejects malformed or oversized email input before invoking Auth", () => {
+    expect(route).toContain("EMAIL_RE");
+    expect(route).toContain("MAX_EMAIL_LENGTH");
+    expect(route).toContain("A valid email address is required");
+  });
+
   it("the inviting coach's identity is derived only from the authenticated guard, never request input", () => {
     expect(route).toContain("guard.dbUser.id");
     expect(route).not.toMatch(/body\.(coachId|inviterId)/);
@@ -72,9 +78,23 @@ describe("app/api/internal/clients/route.ts — invite mechanism and redirect ta
     expect(route).toContain('error: "An account with this email already exists."');
   });
 
+  it("rejects an invited coach/admin before the pending-client resend path", () => {
+    const existingStart = route.indexOf("if (existing) {");
+    const statusStart = route.indexOf('if (existing.status !== "invited")', existingStart);
+    const collisionGuard = route.slice(existingStart, statusStart);
+    expect(collisionGuard).toContain('existing.role !== "client"');
+    expect(collisionGuard).toContain("status: 409");
+  });
+
   it("never derives redirectTo, action link, or invited email from client-supplied input beyond the validated email field", () => {
     expect(route).not.toMatch(/redirectTo:\s*body\./);
     expect(route).not.toMatch(/redirectTo:\s*req\./);
+  });
+
+  it("does not return raw Auth/provider exception text to the coach", () => {
+    const postRoute = route.slice(route.indexOf("export async function POST"));
+    expect(postRoute).not.toContain("error: error?.message");
+    expect(postRoute).not.toContain("err instanceof Error ? err.message");
   });
 });
 

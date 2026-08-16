@@ -11,6 +11,9 @@ import { clientProfiles, coachingEnrollments } from "@/lib/db/schema";
 
 export const dynamic = "force-dynamic";
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_EMAIL_LENGTH = 200;
+
 // GET /api/internal/clients
 // Returns active/invited clients for the program Assign panel, scoped
 // to the requesting coach's own coaching_enrollments (admin: all).
@@ -244,6 +247,9 @@ export async function POST(req: NextRequest) {
   if (!email) {
     return NextResponse.json({ ok: false, error: "email is required" }, { status: 400 });
   }
+  if (email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email)) {
+    return NextResponse.json({ ok: false, error: "A valid email address is required" }, { status: 400 });
+  }
   const firstName = fullName.split(/\s+/)[0] || fullName;
 
   try {
@@ -259,6 +265,15 @@ export async function POST(req: NextRequest) {
     // reused or promoted.
     const existing = await findExistingAccountByEmail(email);
     if (existing) {
+      // An invited coach/admin is still a different account type. Never
+      // attach client profile or enrollment records to it merely because
+      // its status is pending; only a pending client can be resent here.
+      if (existing.role !== "client") {
+        return NextResponse.json(
+          { ok: false, error: "An account with this email already exists." },
+          { status: 409 },
+        );
+      }
       if (existing.status !== "invited") {
         return NextResponse.json(
           { ok: false, error: "An account with this email already exists." },
@@ -270,7 +285,7 @@ export async function POST(req: NextRequest) {
       });
       if (error || !data.user) {
         return NextResponse.json(
-          { ok: false, error: error?.message ?? "Invite failed" },
+          { ok: false, error: "The client invitation could not be sent. Please try again." },
           { status: 422 },
         );
       }
@@ -292,7 +307,7 @@ export async function POST(req: NextRequest) {
 
     if (error || !data.user || !data.properties?.action_link) {
       return NextResponse.json(
-        { ok: false, error: error?.message ?? "Invite failed" },
+        { ok: false, error: "The client invitation could not be created. Please try again." },
         { status: 422 },
       );
     }
@@ -329,7 +344,7 @@ export async function POST(req: NextRequest) {
       );
     }
     return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : "Failed" },
+      { ok: false, error: "The client invitation could not be completed. Please try again." },
       { status: 500 },
     );
   }
