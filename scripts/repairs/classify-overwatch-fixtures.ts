@@ -14,18 +14,21 @@
 //
 // See scripts/repairs/overwatch-fixture-classification.ts for the pure,
 // tested matching/classification logic and the approved
-// FIXTURE_PATTERNS list (lib/db/__tests__/classify-overwatch-
-// fixtures.test.ts) — this file is a thin CLI wrapper around that
-// module's exported functions, so the CLI and the tests exercise the
-// exact same query, never a re-implementation of it. Same split as
+// COACH_FIXTURE_PATTERNS / ADMIN_FIXTURE_PATTERNS lists
+// (lib/db/__tests__/classify-overwatch-fixtures.test.ts) — this file is
+// a thin CLI wrapper around that module's exported functions, so the
+// CLI and the tests exercise the exact same query, never a
+// re-implementation of it. Same split as
 // scripts/repair-orphaned-system-exercises.ts /
 // scripts/repairs/orphaned-system-exercises.ts.
 //
 // PATTERNS ARE FIXED AND REVIEWED — matching is restricted to exactly
-// the five explicit @isolation-test.invalid test-coach prefixes in
-// overwatch-fixture-classification.ts's FIXTURE_PATTERNS. Do not
-// broaden them without a fresh manual review; a wider pattern here
-// would risk auto-classifying a real coach account as a test fixture.
+// the explicit @isolation-test.invalid prefixes in
+// overwatch-fixture-classification.ts's COACH_FIXTURE_PATTERNS
+// (role='coach' only) and ADMIN_FIXTURE_PATTERNS (role='admin' only).
+// Do not broaden them without a fresh manual review; a wider pattern
+// here — or matching a pattern against the wrong role — would risk
+// auto-classifying a real coach or admin account as a test fixture.
 //
 // ORIGINAL BUG (fixed here): this script used to build its query via
 // drizzle-orm's `sql` tag with `unnest(${FIXTURE_PATTERNS}::text[])` —
@@ -43,7 +46,8 @@
 
 import postgres from "postgres";
 import {
-  FIXTURE_PATTERNS,
+  COACH_FIXTURE_PATTERNS,
+  ADMIN_FIXTURE_PATTERNS,
   findFixtureCandidates,
   classifyFixtureCandidates,
 } from "./overwatch-fixture-classification";
@@ -61,10 +65,17 @@ async function main() {
   const sql = postgres(dbUrl!, { prepare: false });
 
   console.log(`Overwatch fixture classifier ${apply ? "APPLY" : "DRY RUN"}`);
-  console.log(`Patterns: ${FIXTURE_PATTERNS.join(", ")}`);
+  console.log(`Coach patterns: ${COACH_FIXTURE_PATTERNS.join(", ")}`);
+  console.log(`Admin patterns: ${ADMIN_FIXTURE_PATTERNS.join(", ")}`);
 
   const candidates = await findFixtureCandidates(sql);
   console.table(candidates);
+
+  const byRole = candidates.reduce<Record<string, number>>((acc, c) => {
+    acc[c.role] = (acc[c.role] ?? 0) + 1;
+    return acc;
+  }, {});
+  console.log(`By role: ${JSON.stringify(byRole)}`);
 
   if (!apply) {
     console.log(

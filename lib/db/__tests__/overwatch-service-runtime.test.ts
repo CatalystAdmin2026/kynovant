@@ -73,15 +73,27 @@ describe("Overwatch metrics runtime safety", () => {
     // pure, tested matching/classification module) when the classifier's
     // drizzle-orm array-binding bug was fixed — classify-overwatch-
     // fixtures.ts is now a thin CLI wrapper that imports the pattern
-    // list rather than declaring it. The invariant this test guards is
-    // unchanged: each approved pattern is kept whole, never split from
-    // its @isolation-test.invalid domain suffix.
+    // list rather than declaring it. Later split into COACH_FIXTURE_PATTERNS
+    // / ADMIN_FIXTURE_PATTERNS when the classifier was extended to also
+    // cover role='admin' fixtures. The invariant this test guards is
+    // unchanged: each approved pattern (either list) is kept whole,
+    // never split from its @isolation-test.invalid domain suffix, and
+    // matching is never broadened to a bare generic word.
     const script = source("scripts/repairs/overwatch-fixture-classification.ts");
 
     expect(script).toContain("@isolation-test.invalid");
     expect(script).toContain("candidate-test-coach-%@isolation-test.invalid");
+    expect(script).toContain("credential-test-coach-%@isolation-test.invalid");
+    expect(script).toContain("rd-gate-test-coach-%@isolation-test.invalid");
+    expect(script).toContain("credential-test-admin-%@isolation-test.invalid");
+    expect(script).toContain("rd-gate-test-admin-%@isolation-test.invalid");
+    expect(script).toContain("program-gen-test-admin-%@isolation-test.invalid");
     expect(script).not.toContain('"candidate-test-coach-%"');
     expect(script).not.toContain('"review-triage-test-coach-%"');
+    expect(script).not.toContain('"credential-test-coach-%"');
+    expect(script).not.toContain('"credential-test-admin-%"');
+    expect(script).not.toContain('"rd-gate-test-coach-%"');
+    expect(script).not.toContain('"rd-gate-test-admin-%"');
   });
 
   it("scopes engagement and AI metrics through customer coach accounts", () => {

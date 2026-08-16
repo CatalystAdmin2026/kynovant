@@ -112,19 +112,59 @@ beforeAll(async () => {
   ]);
 });
 
+// ROBUSTNESS (fixed here — see the incident this replaced): every
+// cleanup step below is now independently attempted, regardless of
+// whether an earlier step failed. The previous version awaited the
+// coachCredentialReviews/coachCredentials deletes UNWRAPPED as the
+// first statements in this hook; any error there (in practice: those
+// tables not existing yet, before migration 0028 was applied — but
+// equally true of any future transient DB error) aborted the rest of
+// the function immediately, so the `users` row and the real Supabase
+// Auth user created in beforeAll were NEVER deleted. Confirmed in
+// production: this exact bug left dozens of orphaned
+// @isolation-test.invalid coach/admin fixtures behind across this
+// suite's own repeated runs before the migration existed.
+//
+// Fix shape: try/catch around each phase (never letting one phase's
+// exception skip a later phase), Promise.allSettled instead of
+// Promise.all for the per-user Auth deletions (so one user's Auth
+// failure doesn't prevent attempting the others), and a captured
+// FIRST error that is deliberately rethrown only at the very end —
+// after every cleanup phase has already run — so a real failure is
+// never silently swallowed, but also never blocks identity cleanup
+// from being attempted.
 afterAll(async () => {
   const userIds = [coachA.id, coachB.id, admin.id].filter(Boolean);
-  // Children before parents (FK restrict): review-history events
-  // before their coach_credentials row, before the users themselves.
-  await db.delete(coachCredentialReviews).where(
-    inArray(coachCredentialReviews.coachId, [coachA.id, coachB.id].filter(Boolean)),
-  );
-  await db.delete(coachCredentials).where(inArray(coachCredentials.coachId, [coachA.id, coachB.id].filter(Boolean)));
-  if (userIds.length > 0) {
-    await db.delete(users).where(inArray(users.id, userIds));
-    const supa = createAdminClient();
-    await Promise.all(userIds.map((id) => supa.auth.admin.deleteUser(id)));
+  let firstError: unknown;
+
+  try {
+    // Children before parents (FK restrict): review-history events
+    // before their coach_credentials row.
+    await db.delete(coachCredentialReviews).where(
+      inArray(coachCredentialReviews.coachId, [coachA.id, coachB.id].filter(Boolean)),
+    );
+    await db.delete(coachCredentials).where(
+      inArray(coachCredentials.coachId, [coachA.id, coachB.id].filter(Boolean)),
+    );
+  } catch (err) {
+    firstError = firstError ?? err;
   }
+
+  if (userIds.length > 0) {
+    try {
+      await db.delete(users).where(inArray(users.id, userIds));
+    } catch (err) {
+      firstError = firstError ?? err;
+    }
+
+    const supa = createAdminClient();
+    const results = await Promise.allSettled(userIds.map((id) => supa.auth.admin.deleteUser(id)));
+    for (const result of results) {
+      if (result.status === "rejected") firstError = firstError ?? result.reason;
+    }
+  }
+
+  if (firstError) throw firstError;
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -537,5 +577,62 @@ describe("automation-readiness defaults", () => {
     const mine = await getMyCredential(coachB.id);
     expect(mine?.manualReviewRequired).toBe(true);
     void submitted; // result not load-bearing for this assertion
+  });
+});
+
+describe("afterAll cleanup — resilient to a failed credential-table delete (source-level, same technique as guard-shape tests elsewhere in this codebase)", () => {
+  // Cannot practically re-invoke this file's own afterAll with a
+  // forced-failing credential-table delete from inside a test (vitest
+  // owns that hook's lifecycle) — the structural guarantee itself is
+  // what's being proven, the same "read the source, assert on it"
+  // technique used throughout this codebase for exactly this class of
+  // guarantee (lib/auth/__tests__/coach-signup-security.test.ts,
+  // rd-credential-gate.test.ts's own "gate wiring" describe block).
+  it("wraps the coachCredentialReviews/coachCredentials deletes in their own try/catch, not awaited bare as the first statement", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const source = readFileSync(resolve(process.cwd(), "lib/db/__tests__/coach-credential-service.test.ts"), "utf8");
+
+    const afterAllStart = source.indexOf("afterAll(async () => {");
+    const afterAllBody = source.slice(afterAllStart);
+    const tryIndex = afterAllBody.indexOf("try {");
+    const deleteReviewsIndex = afterAllBody.indexOf("db.delete(coachCredentialReviews)");
+    const catchIndex = afterAllBody.indexOf("} catch (err) {");
+
+    expect(tryIndex).toBeGreaterThan(-1);
+    expect(deleteReviewsIndex).toBeGreaterThan(tryIndex);
+    expect(catchIndex).toBeGreaterThan(deleteReviewsIndex);
+  });
+
+  it("attempts users-row cleanup and Auth-user cleanup unconditionally — not nested inside the credential-table try block", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const source = readFileSync(resolve(process.cwd(), "lib/db/__tests__/coach-credential-service.test.ts"), "utf8");
+
+    const afterAllStart = source.indexOf("afterAll(async () => {");
+    const afterAllBody = source.slice(afterAllStart);
+    const firstCatchEnd = afterAllBody.indexOf("}", afterAllBody.indexOf("firstError = firstError ?? err;")) + 1;
+    const afterFirstCatch = afterAllBody.slice(firstCatchEnd);
+
+    // users/Auth cleanup happens in code reachable after the first
+    // try/catch has already run to completion (success or failure) —
+    // not inside its try block, and not skipped by its catch.
+    expect(afterFirstCatch).toContain("db.delete(users)");
+    expect(afterFirstCatch).toContain("supa.auth.admin.deleteUser");
+    expect(afterFirstCatch).toContain("Promise.allSettled");
+  });
+
+  it("rethrows any captured cleanup error only at the very end — after identity cleanup, never instead of it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const source = readFileSync(resolve(process.cwd(), "lib/db/__tests__/coach-credential-service.test.ts"), "utf8");
+
+    const afterAllStart = source.indexOf("afterAll(async () => {");
+    const afterAllBody = source.slice(afterAllStart);
+    const authDeleteIndex = afterAllBody.indexOf("supa.auth.admin.deleteUser");
+    const rethrowIndex = afterAllBody.indexOf("if (firstError) throw firstError;");
+
+    expect(rethrowIndex).toBeGreaterThan(-1);
+    expect(rethrowIndex).toBeGreaterThan(authDeleteIndex);
   });
 });

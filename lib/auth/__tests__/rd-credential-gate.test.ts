@@ -78,14 +78,52 @@ describe("isVerifiedRd — live, against a real coach_credentials row", () => {
     ]);
   });
 
+  // ROBUSTNESS (fixed here — see the incident this replaced): every
+  // cleanup step below is now independently attempted, regardless of
+  // whether an earlier step failed. The previous version awaited the
+  // coachCredentials delete UNWRAPPED as the first statement in this
+  // hook; any error there (in practice: that table not existing yet,
+  // before migration 0028 was applied — but equally true of any future
+  // transient DB error) aborted the rest of the function immediately,
+  // so `coach`'s and `bystanderAdmin`'s `users` rows and their real
+  // Supabase Auth users (both created in beforeAll) were NEVER deleted.
+  // Confirmed in production: this exact bug left dozens of orphaned
+  // @isolation-test.invalid coach/admin fixtures behind across this
+  // suite's own repeated runs before the migration existed.
+  //
+  // Fix shape: try/catch around each phase (never letting one phase's
+  // exception skip a later phase), Promise.allSettled instead of
+  // Promise.all for the per-user Auth deletions (so one user's Auth
+  // failure doesn't prevent attempting the other), and a captured
+  // FIRST error that is deliberately rethrown only at the very end —
+  // after every cleanup phase has already run — so a real failure is
+  // never silently swallowed, but also never blocks identity cleanup
+  // from being attempted.
   afterAll(async () => {
     const ids = [coach.id, bystanderAdmin.id].filter(Boolean);
-    await db.delete(coachCredentials).where(inArray(coachCredentials.coachId, ids));
-    if (ids.length > 0) {
-      await db.delete(users).where(inArray(users.id, ids));
-      const supa = createAdminClient();
-      await Promise.all(ids.map((id) => supa.auth.admin.deleteUser(id)));
+    let firstError: unknown;
+
+    try {
+      await db.delete(coachCredentials).where(inArray(coachCredentials.coachId, ids));
+    } catch (err) {
+      firstError = firstError ?? err;
     }
+
+    if (ids.length > 0) {
+      try {
+        await db.delete(users).where(inArray(users.id, ids));
+      } catch (err) {
+        firstError = firstError ?? err;
+      }
+
+      const supa = createAdminClient();
+      const results = await Promise.allSettled(ids.map((id) => supa.auth.admin.deleteUser(id)));
+      for (const result of results) {
+        if (result.status === "rejected") firstError = firstError ?? result.reason;
+      }
+    }
+
+    if (firstError) throw firstError;
   });
 
   it("fails closed: no credential row on file → false", async () => {
@@ -139,6 +177,38 @@ describe("isVerifiedRd — live, against a real coach_credentials row", () => {
     // in it at all, so this is a direct, live proof of "no bypass",
     // not just an absence-of-code-path claim.
     expect(await isVerifiedRd(bystanderAdmin.id)).toBe(false);
+  });
+});
+
+describe("afterAll cleanup — resilient to a failed credential-table delete (source-level; vitest owns this hook's lifecycle, so the structural guarantee is what's proven, same technique as the gate-wiring block below)", () => {
+  const fileSource = source("lib/auth/__tests__/rd-credential-gate.test.ts");
+
+  it("wraps the coachCredentials delete in its own try/catch, not awaited bare as the first statement", () => {
+    const afterAllStart = fileSource.indexOf("afterAll(async () => {");
+    const afterAllBody = fileSource.slice(afterAllStart);
+    const tryIndex = afterAllBody.indexOf("try {");
+    const deleteIndex = afterAllBody.indexOf("db.delete(coachCredentials)");
+    const catchIndex = afterAllBody.indexOf("} catch (err) {");
+
+    expect(tryIndex).toBeGreaterThan(-1);
+    expect(deleteIndex).toBeGreaterThan(tryIndex);
+    expect(catchIndex).toBeGreaterThan(deleteIndex);
+  });
+
+  it("attempts users-row cleanup and Auth-user cleanup unconditionally, and rethrows any captured error only at the very end", () => {
+    const afterAllStart = fileSource.indexOf("afterAll(async () => {");
+    const afterAllBody = fileSource.slice(afterAllStart);
+    const firstCatchEnd = afterAllBody.indexOf("}", afterAllBody.indexOf("firstError = firstError ?? err;")) + 1;
+    const afterFirstCatch = afterAllBody.slice(firstCatchEnd);
+
+    expect(afterFirstCatch).toContain("db.delete(users)");
+    expect(afterFirstCatch).toContain("supa.auth.admin.deleteUser");
+    expect(afterFirstCatch).toContain("Promise.allSettled");
+
+    const rethrowIndex = afterAllBody.indexOf("if (firstError) throw firstError;");
+    const authDeleteIndex = afterAllBody.indexOf("supa.auth.admin.deleteUser");
+    expect(rethrowIndex).toBeGreaterThan(-1);
+    expect(rethrowIndex).toBeGreaterThan(authDeleteIndex);
   });
 });
 
