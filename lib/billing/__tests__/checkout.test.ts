@@ -29,6 +29,7 @@ describe("createCoachCheckoutSession — unconfigured price fails cleanly", () =
     const result = await createCoachCheckoutSession({
       coachId: "00000000-0000-0000-0000-000000000001",
       email: "coach@example.invalid",
+      grantTrial: true,
       successUrl: "https://example.invalid/success",
       cancelUrl: "https://example.invalid/cancel",
     });

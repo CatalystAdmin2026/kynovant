@@ -16,13 +16,13 @@ import type Stripe from "stripe";
 import { kynovantStripe } from "./stripe-client";
 import { getPlanPriceId, type CoachPlanKey } from "./prices";
 
-// 14-day free trial (requirement). Every Checkout Session this
-// function creates starts a trial — there is no separate
-// "skip the trial" path today, matching the current product
-// requirement exactly. Revisit if repeat-trial abuse prevention
-// (e.g. Stripe's trial_settings.end_behavior, or checking Stripe
-// customer history before granting another trial) is ever needed —
-// not implemented here to avoid unrequested complexity.
+// 14-day free trial (requirement) for a coach's FIRST subscription
+// only. Repeat-trial abuse prevention (checking coach_subscriptions
+// history before granting another trial — see
+// lib/db/coach-subscription-service.ts's resolveCheckoutEligibility())
+// decides per-call whether this Checkout Session includes a trial at
+// all; this function never decides that itself, it only applies
+// whatever the caller determined.
 const TRIAL_PERIOD_DAYS = 14;
 
 export interface CreateCoachCheckoutSessionParams {
@@ -30,6 +30,16 @@ export interface CreateCoachCheckoutSessionParams {
   email: string;
   /** Defaults to "monthly" — the only plan sold at launch. */
   plan?: CoachPlanKey;
+  /**
+   * Required, not defaulted — forces every call site to make an
+   * explicit, considered choice rather than silently inheriting
+   * "always trial" if a future call site is added without thinking
+   * about repeat-trial abuse. See
+   * lib/db/coach-subscription-service.ts's resolveCheckoutEligibility(),
+   * the canonical decision of whether a given coach has already
+   * consumed a trial.
+   */
+  grantTrial: boolean;
   /**
    * Reuse an existing Stripe Customer (e.g. a coach resubscribing after
    * a prior cancellation) instead of letting Stripe create a new one
@@ -69,7 +79,7 @@ export async function createCoachCheckoutSession(
       ? { customer: params.existingStripeCustomerId }
       : { customer_email: params.email }),
     subscription_data: {
-      trial_period_days: TRIAL_PERIOD_DAYS,
+      ...(params.grantTrial ? { trial_period_days: TRIAL_PERIOD_DAYS } : {}),
       // The webhook (app/api/stripe/webhook/route.ts, via
       // lib/billing/sync.ts) resolves coachId from the SUBSCRIPTION's
       // own metadata for every subsequent lifecycle event — this is

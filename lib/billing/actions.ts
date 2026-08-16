@@ -21,6 +21,7 @@ import { eq } from "drizzle-orm";
 import { requireAuthenticatedPage } from "@/lib/auth/guards";
 import { getDb } from "@/lib/db/client";
 import { coachSubscriptions } from "@/lib/db/schema-billing";
+import { resolveCheckoutEligibility } from "@/lib/db/coach-subscription-service";
 import { createCoachCheckoutSession } from "./checkout";
 import { createBillingPortalSession } from "./portal";
 import type { CoachPlanKey } from "./prices";
@@ -45,10 +46,31 @@ async function lookupStripeCustomerId(coachId: string): Promise<string | null> {
 // with duplicate Customer objects. Reachable from app/account-status —
 // never from inside /hq, since app/hq/layout.tsx's entitlement guard
 // would never let a non-entitled coach reach a page under /hq at all.
+//
+// This is a Server Action, not a page — reachable by direct
+// invocation/replay regardless of what account-status actually
+// rendered (which buttons a given entitlement status shows). The
+// entitlement + trial-eligibility check below is therefore enforced
+// HERE, not just inferred from "the coach got this far in the UI":
+// see lib/db/coach-subscription-service.ts's resolveCheckoutEligibility()
+// for the single canonical decision both halves come from.
 export async function startCheckoutAction(_formData: FormData): Promise<void> {
   const { authUser, dbUser } = await requireAuthenticatedPage();
   if (dbUser.role !== "coach") redirect("/");
   if (!authUser.email) redirect("/account-status?error=missing_email");
+
+  // Session-derived identity only (dbUser.id) — never a client-supplied
+  // coach ID. An already-entitled coach (active/trialing/manually_activated/
+  // in-grace past_due) is redirected to /hq — where their entitlement
+  // already grants them access — without ever calling Stripe. This
+  // mirrors app/account-status/page.tsx's own
+  // `if (entitlement.allowed) redirect("/hq")` exactly, so a direct
+  // Server Action call can't reach a state the page itself would never
+  // let this coach reach either.
+  const eligibility = await resolveCheckoutEligibility(dbUser.id);
+  if (!eligibility.allowed) {
+    redirect("/hq");
+  }
 
   // Only plan sold at launch. A future plan-select control on the
   // account-status page would read the chosen plan from _formData here
@@ -62,6 +84,7 @@ export async function startCheckoutAction(_formData: FormData): Promise<void> {
     coachId: dbUser.id,
     email: authUser.email,
     plan,
+    grantTrial: eligibility.grantTrial,
     existingStripeCustomerId: await lookupStripeCustomerId(dbUser.id),
     // {CHECKOUT_SESSION_ID} is a literal Stripe template token — Stripe
     // substitutes it into the redirect URL itself. account-status reads

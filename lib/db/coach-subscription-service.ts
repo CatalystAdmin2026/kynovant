@@ -90,6 +90,52 @@ export async function getCoachEntitlement(
 }
 
 // ─────────────────────────────────────────────────────────────
+// CHECKOUT ELIGIBILITY — built entirely on getCoachEntitlement() above,
+// not a parallel entitlement system. Two decisions, one canonical
+// source of truth:
+//
+//   1. Can this coach start a NEW Checkout Session at all? No, if
+//      they're already entitled (getCoachEntitlement().allowed) — an
+//      already-active/trialing/manually_activated/in-grace-past_due
+//      coach creating a second Checkout Session would risk a second,
+//      competing Stripe subscription for the same coach. This is the
+//      check startCheckoutAction (lib/billing/actions.ts) must apply
+//      itself, not just trust the account-status page to have hidden
+//      the button — a Server Action is reachable by direct invocation
+//      regardless of what the page renders.
+//
+//   2. If they can, should this NEW session include a free trial?
+//      Only for a genuinely first-time coach (coach_subscriptions has
+//      NO row at all — status "none"). coach_subscriptions rows are
+//      never hard-deleted in application code (only upserted — see
+//      schema-billing.ts's header and upsertCoachSubscriptionFromStripe's
+//      onConflictDoUpdate below); a coach whose subscription was
+//      cancelled still has a row (status "cancelled") right up until
+//      the moment a NEW checkout's webhook overwrites it. Reading that
+//      row HERE, before creating the new session, is the smallest
+//      durable evidence this architecture already has that a trial (or
+//      manual-activation equivalent) was previously consumed — no new
+//      table, no new column, no Stripe API call required. A coach with
+//      status "cancelled" or "suspended" can still check out (this
+//      only withholds the trial, never blocks reactivation) — just
+//      without another 14 free days.
+// ─────────────────────────────────────────────────────────────
+
+export type CheckoutEligibility =
+  | { allowed: false; entitlement: CoachEntitlement }
+  | { allowed: true; grantTrial: boolean };
+
+export async function resolveCheckoutEligibility(
+  coachId: string,
+): Promise<CheckoutEligibility> {
+  const entitlement = await getCoachEntitlement(coachId);
+  if (entitlement.allowed) {
+    return { allowed: false, entitlement };
+  }
+  return { allowed: true, grantTrial: entitlement.status === "none" };
+}
+
+// ─────────────────────────────────────────────────────────────
 // MANUAL ACTIVATION / SUSPENSION (admin-only — see requireAdmin()
 // on the routes that call these)
 // ─────────────────────────────────────────────────────────────
