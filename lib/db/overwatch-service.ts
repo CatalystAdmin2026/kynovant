@@ -259,7 +259,7 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
 
   const acquisitionRows = await db.select({
       startedSignup: sql<number>`count(*)::int`,
-      inviteSent: sql<number>`count(*) filter (where ${coachAcquisitionLeads.inviteSentAt} is not null or ${coachAcquisitionLeads.inviteStatus} in ('sent', 'already_invited', 'already_active'))::int`,
+      inviteSent: sql<number>`count(*) filter (where ${coachAcquisitionLeads.inviteSentAt} is not null or ${coachAcquisitionLeads.inviteStatus} = 'sent')::int`,
       accountActivated: sql<number>`count(*) filter (where ${users.status} = 'active')::int`,
       trialStarted: sql<number>`count(*) filter (where ${coachSubscriptions.status} in ('trialing', 'active', 'past_due', 'cancelled', 'suspended'))::int`,
       paidActive: sql<number>`count(*) filter (where ${coachSubscriptions.status} = 'active')::int`,

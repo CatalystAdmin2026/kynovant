@@ -101,4 +101,13 @@ describe("Overwatch metrics runtime safety", () => {
     expect(service).toContain("${coachAcquisitionLeads.normalizedEmail} not like '%@isolation-test.invalid'");
     expect(service).toContain(".where(acquisitionLeadPredicate())");
   });
+
+  it("does not call an already-active or merely pending account an invite sent without persisted send evidence", () => {
+    const service = source("lib/db/overwatch-service.ts");
+
+    expect(service).toContain(
+      "${coachAcquisitionLeads.inviteSentAt} is not null or ${coachAcquisitionLeads.inviteStatus} = 'sent'",
+    );
+    expect(service).not.toContain("inviteStatus} in ('sent', 'already_invited', 'already_active')");
+  });
 });
