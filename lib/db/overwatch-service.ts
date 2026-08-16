@@ -181,10 +181,27 @@ function businessCoachPredicate() {
   return sql`${users.role} = 'coach' and coalesce(${internalAccountFlags.classification}, 'customer') = 'customer'`;
 }
 
+// BUG FIXED HERE (2026-08-16): the second OR branch used to read just
+// `coalesce(${internalAccountFlags.classification}, 'customer') = 'customer'`,
+// with no accountUserId guard. Both joins that feed internalAccountFlags
+// (users on accountUserId, then internalAccountFlags on users.id) are
+// LEFT JOINs, so a lead with no linked account (accountUserId IS NULL —
+// true for every isolation-test.invalid signup-flow fixture, since those
+// leads intentionally never complete signup) produces a NULL
+// classification, and coalesce(NULL, 'customer') always evaluates to
+// 'customer' — making that branch unconditionally true for every
+// unlinked lead and silently canceling out the first branch's
+// @isolation-test.invalid exclusion. Confirmed against production: the
+// old predicate counted all 16 of 16 known @isolation-test.invalid
+// fixture leads as real acquisition funnel activity. The fix adds the
+// same `accountUserId is not null` guard to the second branch, so it can
+// only apply to a lead that actually resolved to a real account (whose
+// classification is then meaningful) — an unlinked lead's fate is
+// decided by the first branch alone, exactly as originally intended.
 function acquisitionLeadPredicate() {
   return sql`(
     (${coachAcquisitionLeads.accountUserId} is null and ${coachAcquisitionLeads.normalizedEmail} not like '%@isolation-test.invalid')
-    or coalesce(${internalAccountFlags.classification}, 'customer') = 'customer'
+    or (${coachAcquisitionLeads.accountUserId} is not null and coalesce(${internalAccountFlags.classification}, 'customer') = 'customer')
   )`;
 }
 
