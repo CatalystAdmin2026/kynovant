@@ -7,7 +7,9 @@ import { revokeComplimentaryAccess } from "@/lib/db/coach-complimentary-access-s
 
 export const dynamic = "force-dynamic";
 
-type Ctx = { params: Promise<{ coachId: string }> };
+// Next's generated route validator supplies an unknown params shape for
+// this dynamic handler. Keep the runtime narrowing at the await boundary.
+type Ctx = { params: Promise<unknown> };
 
 const MAX_REASON_LENGTH = 500;
 
@@ -23,7 +25,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const guard = await requireOverwatchAdmin();
   if (!guard.ok) return guard.response;
 
-  const { coachId } = await params;
+  const { coachId } = (await params) as { coachId: string };
 
   const db = getDb();
   const [target] = await db

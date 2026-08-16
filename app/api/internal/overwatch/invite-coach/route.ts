@@ -259,6 +259,13 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("[InviteCoach] recordAcquisitionSignup failed:", err instanceof Error ? err.message : err);
+    // Do not create an Auth identity without the durable lead that owns
+    // its retry/funnel state. A later retry can safely repeat this whole
+    // operation; proceeding here would strand an untracked invitation.
+    return NextResponse.json(
+      { ok: false, error: "The invitation could not be started. Please try again shortly." },
+      { status: 503 },
+    );
   }
 
   // Duplicate/collision pre-check — identical decision shape to
@@ -286,6 +293,10 @@ export async function POST(req: NextRequest) {
         // Reuse the existing, proven-safe resend behavior instead of
         // permanently treating that account as blocked.
         try {
+          // Heal a partial provisioning attempt before sending another
+          // invite. This is idempotent and ensures the canonical coach
+          // profile exists before the recipient can enter setup.
+          await provisionInvitedCoach({ userId: existing.id, email, displayName: firstName });
           const resend = await resendPendingInvite(email);
           if (resend.ok) {
             // Heals a prior attempt that provisioned the account and
@@ -391,6 +402,15 @@ export async function POST(req: NextRequest) {
 
     const newUserId = data.user.id;
     const actionLink = data.properties.action_link;
+
+    // Persist the Auth identity on the already-created lead before the
+    // remaining side effects. If provisioning fails, the durable lead
+    // still records which pending identity a later retry must heal.
+    await markAcquisitionInviteStatus({
+      normalizedEmail,
+      status: "not_sent",
+      accountUserId: newUserId,
+    });
 
     // Same canonical role-grant path as every other coach-creation
     // entry point — role is never taken from request input.

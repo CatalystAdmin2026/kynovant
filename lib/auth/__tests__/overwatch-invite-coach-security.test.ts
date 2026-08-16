@@ -240,6 +240,34 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — funnel integrity:
   });
 });
 
+describe("app/api/internal/overwatch/invite-coach/route.ts — partial-failure recovery", () => {
+  const route = source(ROUTE);
+
+  it("fails closed before Auth creation when the durable acquisition lead cannot be recorded", () => {
+    const recordStart = route.indexOf("await recordAcquisitionSignup({");
+    const recordEnd = route.indexOf("// Duplicate/collision pre-check", recordStart);
+    const recordBlock = route.slice(recordStart, recordEnd);
+    expect(recordBlock).toContain("return NextResponse.json(");
+    expect(recordBlock).toContain("status: 503");
+    expect(recordBlock).not.toContain("generateLink");
+  });
+
+  it("re-runs canonical provisioning before resending a pending invite", () => {
+    const invitedStart = route.indexOf('if (existing.status === "invited")');
+    const resendStart = route.indexOf("const resend = await resendPendingInvite", invitedStart);
+    expect(invitedStart).toBeGreaterThan(-1);
+    expect(resendStart).toBeGreaterThan(invitedStart);
+    expect(route.slice(invitedStart, resendStart)).toContain("await provisionInvitedCoach");
+  });
+
+  it("records the newly-created Auth identity on the lead before provisioning", () => {
+    const identityMarker = route.indexOf("accountUserId: newUserId");
+    const provisioningMarker = route.indexOf("await provisionInvitedCoach", identityMarker);
+    expect(identityMarker).toBeGreaterThan(-1);
+    expect(provisioningMarker).toBeGreaterThan(identityMarker);
+  });
+});
+
 describe("app/api/internal/overwatch/invite-coach/route.ts — malformed-email validation", () => {
   const route = source(ROUTE);
 
