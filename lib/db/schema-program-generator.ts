@@ -376,6 +376,55 @@ export const programGenerationValidationEvents = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────
+// TABLE — program_generation_quota_claims
+//
+// Per-coach AI generation rate-limit ledger. One row = one attempt that
+// was actually about to invoke the model provider (generateProgramShell/
+// generateProgramWeek/regenerateDayDraft) and was allowed to proceed.
+// See lib/db/program-generation-service.ts's claimGenerationQuota() for
+// the full design note.
+//
+// Deliberately a SEPARATE table from program_generation_runs rather than
+// reusing that table's own rows as the quota source of truth:
+// program_generation_runs is written unconditionally for bookkeeping/
+// progress-tracking on code paths that do NOT always represent paid
+// model spend (e.g. a resume whose shell and every week already
+// completed — only finalization failed last time — makes zero provider
+// calls; a candidate-exhaustion failure never reaches the model either).
+// Keeping the quota ledger independent means the cost-control gate can
+// sit at the exact narrow point where a paid call is about to be issued,
+// without entangling it with — or risking regressing — the existing
+// run-lifecycle/progress-tracking code that the review page and Overwatch
+// dashboards already depend on.
+//
+// scope reuses programGenerationRunScopeEnum (no new enum type) — a
+// claim is either behind a full_draft generation/resume or a single_day
+// regenerate-day call, exactly mirroring program_generation_runs' own
+// scope values.
+//
+// draftId is nullable and ON DELETE SET NULL: a claim still counts
+// against the coach's quota even if its draft is later discarded/deleted
+// — the ledger records that the model call happened, independent of
+// what became of the draft it was for.
+// ─────────────────────────────────────────────────────────────
+
+export const programGenerationQuotaClaims = pgTable(
+  "program_generation_quota_claims",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    coachId: uuid("coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    draftId: uuid("draft_id").references(() => programGenerationDrafts.id, { onDelete: "set null" }),
+    scope: programGenerationRunScopeEnum("scope").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_program_generation_quota_claims_coach_created").on(table.coachId, table.createdAt),
+  ],
+);
+
+// ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
 
@@ -401,3 +450,6 @@ export type ProgramGenerationValidationEvent =
 export type NewProgramGenerationValidationEvent =
   typeof programGenerationValidationEvents.$inferInsert;
 export type ProgramGenerationValidationStatus = ProgramGenerationValidationEvent["status"];
+
+export type ProgramGenerationQuotaClaim = typeof programGenerationQuotaClaims.$inferSelect;
+export type NewProgramGenerationQuotaClaim = typeof programGenerationQuotaClaims.$inferInsert;

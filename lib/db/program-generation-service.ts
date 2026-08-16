@@ -15,7 +15,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { and, eq, asc, desc, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, asc, desc, inArray, sql } from "drizzle-orm";
 import { getDb } from "./client";
 import { clientProfiles } from "./schema";
 import {
@@ -24,6 +24,7 @@ import {
   programGenerationWeeks,
   programGenerationEditEvents,
   programGenerationValidationEvents,
+  programGenerationQuotaClaims,
   type ProgramGenerationDraft,
   type ProgramGenerationStatus,
   type ProgramGenerationRun,
@@ -503,6 +504,133 @@ export async function failRun(runId: string, errorMessage: string): Promise<void
     .update(programGenerationRuns)
     .set({ status: "failed", errorMessage, completedAt: new Date() })
     .where(eq(programGenerationRuns.id, runId));
+}
+
+// ─────────────────────────────────────────────────────────────
+// RATE LIMIT — per-coach AI generation quota
+//
+// Guards the ONLY thing on this feature that costs real provider money:
+// generateProgramShell() / generateProgramWeek() (staged-generation.ts)
+// and regenerateDayDraft() (actions.ts's regenerateDayAction). Every
+// call site that is actually about to reach one of those must first
+// call claimGenerationQuota() and abort (with a user-facing message) if
+// it returns { ok: false }.
+//
+// Numbers (documented per the launch-hardening brief):
+//   GENERATION_QUOTA_LIMIT = 20 per coach per rolling hour.
+//   A fresh full-program generation is 1 shell call + up to 16 week
+//   calls (contracts.ts caps brief.weeks at 16) — i.e. a single
+//   legitimate generation can already be up to 17 model calls, but is
+//   metered here as ONE quota unit (one claim per top-level action
+//   invocation, not per underlying model call — see the "unit of
+//   account" note below). A coach onboarding several clients in one
+//   session, retrying a couple of failed generations, and regenerating
+//   a handful of individual days comfortably stays under 20/hour under
+//   normal use — this is the "generous, launch-safe" number the brief
+//   asked for, not a tight budget. A malicious loop / compromised
+//   session / automation bug is capped at 20 top-level attempts/hour
+//   (worst case 20 x 17 = 340 model calls/hour) instead of unbounded.
+//   One rolling window (not a separate tighter burst limit) is the
+//   smallest control that still fully bounds rapid-fire clicking or a
+//   tight retry loop — after the 20th claim in the window, every
+//   further attempt is rejected regardless of how fast it arrives.
+//
+// Unit of account: one claim per top-level action invocation that will
+// make at least one model call — NOT one claim per generateProgramWeek()
+// call. Counting per-action keeps a normal multi-week generation
+// invisible to the limiter (goal: "normal coaches should not notice the
+// limiter"); counting per-model-call would charge a single legitimate
+// 12-week generation 13 units against the same budget a 1-day regenerate
+// costs 1 unit, which is a worse approximation of "how many times has
+// this coach asked for a generation" than it is of raw token spend, and
+// this feature's real cost driver is attempts, not week count (a coach
+// cannot ask for an especially long program to burn extra quota faster
+// than someone doing many short ones).
+//
+// Separate ledger from program_generation_runs (deliberately — see
+// programGenerationQuotaClaims' own schema comment): program_generation_
+// runs is written unconditionally, including on code paths that make
+// ZERO model calls (a resume whose shell + every week already completed,
+// where only finalization failed last time; a candidate-exhaustion
+// failure that never reaches the model). Charging quota there would
+// violate "resume/retry behavior must not accidentally consume quota
+// incorrectly if it does not create a new paid model invocation." Every
+// call site below only calls claimGenerationQuota() once it has already
+// determined a real model call is imminent.
+//
+// Identity: coachId here is always the caller's OWN server-resolved
+// identity (requireCoachOrAdmin() -> guard.dbUser.id in actions.ts's
+// requireActor(), never a client-supplied id) — an admin generating on
+// behalf of a coach's client is metered against the admin's own quota,
+// exactly mirroring how program_generation_drafts.coach_id already
+// attributes the draft. There is no parameter anywhere in this call
+// chain that lets a caller charge someone else's bucket.
+export const GENERATION_QUOTA_LIMIT = 20;
+export const GENERATION_QUOTA_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+export type ClaimQuotaResult = { ok: true } | { ok: false; retryAfterMs: number };
+
+// Atomicity under concurrency: a plain "SELECT count(*) ... ; if under
+// limit, INSERT" is a genuine TOCTOU race between two concurrent callers
+// for the SAME coach — Postgres does not serialize two independent
+// INSERT...SELECT statements against each other just because the SELECT
+// is nested inside the INSERT (that only makes the read+write atomic
+// with respect to itself, not with respect to a second connection
+// running the same statement at the same time). To close that race
+// without taking a table-wide lock (which would serialize unrelated
+// coaches' claims against each other and hurt normal throughput), this
+// wraps the count-and-insert in one transaction guarded by
+// pg_advisory_xact_lock(hashtext(coachId)) — a lock keyed on the coach's
+// own id. Two concurrent claims for the SAME coach are forced to run
+// one-at-a-time (the second blocks until the first commits, then
+// re-reads the now-current count); two different coaches never contend
+// for each other's lock, so tenant isolation and normal cross-coach
+// throughput are unaffected. The lock auto-releases at transaction end
+// (commit or rollback) — no manual unlock path to forget.
+export async function claimGenerationQuota(
+  coachId: string,
+  draftId: string | null,
+  scope: ProgramGenerationRunScope,
+): Promise<ClaimQuotaResult> {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - GENERATION_QUOTA_WINDOW_MS);
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${coachId}))`);
+
+    const [{ count }] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(programGenerationQuotaClaims)
+      .where(
+        and(
+          eq(programGenerationQuotaClaims.coachId, coachId),
+          gt(programGenerationQuotaClaims.createdAt, cutoff),
+        ),
+      );
+
+    if (count >= GENERATION_QUOTA_LIMIT) {
+      const [oldest] = await tx
+        .select({ createdAt: programGenerationQuotaClaims.createdAt })
+        .from(programGenerationQuotaClaims)
+        .where(
+          and(
+            eq(programGenerationQuotaClaims.coachId, coachId),
+            gt(programGenerationQuotaClaims.createdAt, cutoff),
+          ),
+        )
+        .orderBy(asc(programGenerationQuotaClaims.createdAt))
+        .limit(1);
+
+      const retryAfterMs = oldest
+        ? Math.max(0, oldest.createdAt.getTime() + GENERATION_QUOTA_WINDOW_MS - Date.now())
+        : GENERATION_QUOTA_WINDOW_MS;
+
+      return { ok: false, retryAfterMs };
+    }
+
+    await tx.insert(programGenerationQuotaClaims).values({ coachId, draftId, scope });
+    return { ok: true };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────

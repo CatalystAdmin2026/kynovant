@@ -225,15 +225,54 @@ beforeAll(async () => {
   exerciseIds = rows.map((r) => r.id);
 });
 
+// Cleanup robustness — same philosophy as coach-credential-service.test.ts's
+// and rd-credential-gate.test.ts's afterAll (see those files): every
+// phase runs in its own try/catch, ALL phases are attempted regardless
+// of an earlier one failing, the FIRST error is captured and rethrown
+// only once every phase has been attempted, and per-item async cleanup
+// (Auth user deletion) uses Promise.allSettled rather than Promise.all
+// so one rejection doesn't stop the others from running. A cleanup
+// failure must never simply be swallowed, and it must never prevent
+// later, independent cleanup phases — most importantly Auth user
+// deletion, which is what actually keeps @isolation-test.invalid
+// accounts from leaking — from being attempted.
+//
+// Phase order also matters here, independent of the try/catch
+// robustness: workout_template_exercises.exercise_id and
+// program_generation_drafts/program_templates/workout_templates'
+// coach/creator columns are all ON DELETE RESTRICT against exercises/
+// users (see schema-exercise.ts, schema-program-generator.ts, schema.ts)
+// — so exercise fixture rows must be freed of any referencing
+// workout_template_exercises rows before they can be deleted, and every
+// table that RESTRICTs against users.id must be cleared before the Auth
+// users themselves can be deleted. The original version deleted
+// `exercises` first, before `workout_template_exercises` — silently
+// relying on this suite's own fixtures never actually being approved
+// into a real workout (true today, but a real FK-violation trap for the
+// suite's very next test to add exercise fixtures that are).
 afterAll(async () => {
-  if (exerciseFixtureIds.length > 0) {
-    await db.delete(exercises).where(inArray(exercises.id, exerciseFixtureIds));
-  }
-  if (workoutTemplateIds.length > 0) {
+  let firstError: unknown;
+
+  const runPhase = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`[program-generator-integration cleanup] ${label} failed:`, err instanceof Error ? err.message : err);
+      firstError = firstError ?? err;
+    }
+  };
+
+  // 1. workout_template_exercises / workout_template_sections — must go
+  // before both workout_templates (RESTRICT) and exercises (RESTRICT).
+  await runPhase("delete workout_template_exercises/sections", async () => {
+    if (workoutTemplateIds.length === 0) return;
     await db.delete(workoutTemplateExercises).where(inArray(workoutTemplateExercises.workoutTemplateId, workoutTemplateIds));
     await db.delete(workoutTemplateSections).where(inArray(workoutTemplateSections.workoutTemplateId, workoutTemplateIds));
-  }
-  if (programTemplateIds.length > 0) {
+  });
+
+  // 2. program_week_days / program_weeks — must go before program_templates.
+  await runPhase("delete program_week_days/program_weeks", async () => {
+    if (programTemplateIds.length === 0) return;
     const weekRows = await db
       .select({ id: programWeeks.id })
       .from(programWeeks)
@@ -243,25 +282,57 @@ afterAll(async () => {
       await db.delete(programWeekDays).where(inArray(programWeekDays.programWeekId, weekIds));
     }
     await db.delete(programWeeks).where(inArray(programWeeks.programTemplateId, programTemplateIds));
-  }
-  if (workoutTemplateIds.length > 0) {
-    await db.delete(workoutTemplates).where(inArray(workoutTemplates.id, workoutTemplateIds));
-  }
-  if (programTemplateIds.length > 0) {
-    await db.delete(programTemplates).where(inArray(programTemplates.id, programTemplateIds));
-  }
-  if (draftIds.length > 0) {
-    // program_generation_runs/edit_events/validation_events cascade from
-    // the draft row itself (ON DELETE CASCADE) — no separate cleanup.
-    await db.delete(programGenerationDrafts).where(inArray(programGenerationDrafts.id, draftIds));
-  }
+  });
 
+  // 3. exercises — now safe: any referencing workout_template_exercises
+  // rows were removed in phase 1.
+  await runPhase("delete exercise fixtures", async () => {
+    if (exerciseFixtureIds.length === 0) return;
+    await db.delete(exercises).where(inArray(exercises.id, exerciseFixtureIds));
+  });
+
+  // 4. workout_templates — now safe: sections/exercises children gone.
+  await runPhase("delete workout_templates", async () => {
+    if (workoutTemplateIds.length === 0) return;
+    await db.delete(workoutTemplates).where(inArray(workoutTemplates.id, workoutTemplateIds));
+  });
+
+  // 5. program_templates — now safe: weeks gone.
+  await runPhase("delete program_templates", async () => {
+    if (programTemplateIds.length === 0) return;
+    await db.delete(programTemplates).where(inArray(programTemplates.id, programTemplateIds));
+  });
+
+  // 6. program_generation_drafts — program_generation_runs/edit_events/
+  // validation_events/quota_claims all cascade from the draft row
+  // itself (ON DELETE CASCADE) — no separate cleanup needed for those.
+  await runPhase("delete program_generation_drafts", async () => {
+    if (draftIds.length === 0) return;
+    await db.delete(programGenerationDrafts).where(inArray(programGenerationDrafts.id, draftIds));
+  });
+
+  // 7. Identity cleanup — attempted regardless of whether any phase
+  // above failed, exactly the property this whole rewrite exists to
+  // guarantee. public.users first (draft/template RESTRICT FKs, now
+  // cleared by the phases above, would otherwise block it), then every
+  // Auth user in parallel via Promise.allSettled so one failed delete
+  // doesn't stop the others.
   const userIds = [coachA.id, coachB.id, admin.id].filter(Boolean);
   if (userIds.length > 0) {
-    await db.delete(users).where(inArray(users.id, userIds));
-    const adminClient = createAdminClient();
-    await Promise.all(userIds.map((id) => adminClient.auth.admin.deleteUser(id)));
+    await runPhase("delete public.users rows", async () => {
+      await db.delete(users).where(inArray(users.id, userIds));
+    });
+
+    await runPhase("delete Supabase Auth users", async () => {
+      const adminClient = createAdminClient();
+      const results = await Promise.allSettled(userIds.map((id) => adminClient.auth.admin.deleteUser(id)));
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+      }
+    });
   }
+
+  if (firstError) throw firstError;
 }, 60_000);
 
 // ─────────────────────────────────────────────────────────────

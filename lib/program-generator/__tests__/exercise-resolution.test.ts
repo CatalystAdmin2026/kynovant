@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { randomUUID } from "crypto";
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { exercises } from "@/lib/db/schema-exercise";
 import {
@@ -25,11 +25,13 @@ const db = getDb();
 
 // A resolver call now requires a coachId (tenant-scoping — see
 // exercise-resolution.ts). This suite never creates coach-owned
-// exercises, so any id works here: every row it reads is system/
-// organization-scope (visible to everyone) by construction of the
-// seeded library, and this id exists purely to exercise that the
-// parameter is threaded through, not to gate visibility of anything
-// in this file.
+// exercises and its own fixture query below is scoped to scope='system'
+// only, so every row it reads is visible to everyone — this id exists
+// purely to exercise that the parameter is threaded through, not to
+// gate visibility of anything in this file. It is deliberately a
+// random, unrelated coach: resolveExerciseNames() must resolve a
+// scope='system' row for ANY coachId, so a random id is actually a
+// stronger check than reusing a real fixture coach's id here.
 const TEST_COACH_ID = randomUUID();
 
 let sampleExerciseId: string;
@@ -39,13 +41,30 @@ let alternateNameFixture: { canonicalId: string; canonicalName: string; alternat
 let activeNameSet: Set<string>;
 
 beforeAll(async () => {
+  // ROOT CAUSE (fixed here): this used to select every status='active'
+  // row with no scope filter and no ORDER BY, then take rows[0]/rows[1]
+  // as "the" sample exercises. Postgres makes no ordering guarantee for
+  // an unordered SELECT, and — more importantly — scope='coach' rows
+  // (private fixtures belonging to a specific coach, created by other
+  // suites such as program-generator-integration.test.ts) were eligible
+  // to be selected. resolveExerciseNames() correctly refuses to resolve
+  // a scope='coach' exercise for TEST_COACH_ID (a random, unrelated
+  // coach) — that's tenant isolation working as designed, not a bug —
+  // but it meant this suite's "exact match" assertions could
+  // nondeterministically fail whenever rows[0]/rows[1] happened to land
+  // on a leaked private fixture instead of a real system exercise. The
+  // fix is scoping fixture SELECTION here to scope='system' (the only
+  // scope this suite's own doc comment already claimed to be reading)
+  // plus a deterministic ORDER BY — never touching
+  // resolveExerciseNames()'s actual tenant-isolation behavior.
   const rows = await db
     .select({ id: exercises.id, name: exercises.name, alternateNames: exercises.alternateNames })
     .from(exercises)
-    .where(eq(exercises.status, "active"));
+    .where(and(eq(exercises.status, "active"), eq(exercises.scope, "system")))
+    .orderBy(asc(exercises.id));
 
   if (rows.length < 2) {
-    throw new Error("Fixture setup failed: need at least 2 active exercises seeded to run this suite.");
+    throw new Error("Fixture setup failed: need at least 2 active scope='system' exercises seeded to run this suite.");
   }
 
   sampleExerciseId = rows[0].id;

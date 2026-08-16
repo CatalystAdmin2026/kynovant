@@ -50,6 +50,8 @@ import {
   completeRun,
   failRun,
   recordEditEvent,
+  claimGenerationQuota,
+  GENERATION_QUOTA_LIMIT,
 } from "@/lib/db/program-generation-service";
 import {
   parseProgramGenerationBrief,
@@ -500,6 +502,22 @@ export async function regenerateDayAction(params: {
       ok: false,
       error:
         "No exercises in the Exercise Library are compatible with this brief's equipment and experience-level combination. Adjust the brief or add matching exercises to the library.",
+    };
+  }
+
+  // Rate-limit gate — regenerateDayDraft() below always makes exactly
+  // one model call, so (unlike staged generation's resume path) this is
+  // unconditional once we're past the candidate-exhaustion fail-fast
+  // above. Shares the SAME per-coach quota as full-draft generation/
+  // resume (claimGenerationQuota's own comment) — a coach cannot dodge
+  // the limiter by only ever using "Regenerate Day".
+  const claim = await claimGenerationQuota(loaded.coachId, params.draftId, "single_day");
+  if (!claim.ok) {
+    const minutes = Math.max(1, Math.ceil(claim.retryAfterMs / 60_000));
+    await failRun(run.id, "Coach AI generation quota exceeded.");
+    return {
+      ok: false,
+      error: `You've reached the AI generation limit (${GENERATION_QUOTA_LIMIT} per hour). Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`,
     };
   }
 

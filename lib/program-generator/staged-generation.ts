@@ -32,6 +32,8 @@ import {
   updateRunProgress,
   completeRun,
   failRun,
+  claimGenerationQuota,
+  GENERATION_QUOTA_LIMIT,
 } from "@/lib/db/program-generation-service";
 import { generateProgramShell, generateProgramWeek } from "./provider";
 import { summarizeWeekForPrompt } from "./prompt";
@@ -129,6 +131,29 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     await failRun(run.id, failureReason);
     await setDraftStatus(params.draftId, "failed", { failureReason });
     return { ok: false, error: failureReason };
+  }
+
+  // ── Rate-limit gate — only consulted when this attempt will actually
+  // reach the model. A fresh generation always will (no existingShell).
+  // A resume only will if there's still a shell to generate, or at least
+  // one week from startFromWeek through totalWeeks left uncompleted —
+  // a resume whose shell and every week already completed (only
+  // finalization failed last time) makes zero provider calls below and
+  // must not consume the coach's quota for retrying it. See
+  // claimGenerationQuota's own doc comment in program-generation-
+  // service.ts for the full reasoning and chosen limit.
+  const totalWeeksForRun = params.existingShell?.totalWeeks ?? params.brief.weeks;
+  const willInvokeModel = !params.existingShell || params.startFromWeek <= totalWeeksForRun;
+
+  if (willInvokeModel) {
+    const claim = await claimGenerationQuota(params.coachId, params.draftId, "full_draft");
+    if (!claim.ok) {
+      const minutes = Math.max(1, Math.ceil(claim.retryAfterMs / 60_000));
+      const failureReason = `You've reached the AI generation limit (${GENERATION_QUOTA_LIMIT} per hour). Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+      await failRun(run.id, "Coach AI generation quota exceeded.");
+      await setDraftStatus(params.draftId, "failed", { failureReason });
+      return { ok: false, error: failureReason };
+    }
   }
 
   let lastProvider = "vercel-ai-gateway";

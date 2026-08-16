@@ -1,0 +1,461 @@
+// ─────────────────────────────────────────────────────────────
+// AI Program Generator — per-coach generation rate-limit ledger
+// (adversarial test suite)
+//
+// Real-DB suite, same fixture/cleanup conventions as
+// program-generator-integration.test.ts: real Supabase Auth users with
+// @isolation-test.invalid emails, robust multi-phase afterAll cleanup
+// (captured-error + deferred-rethrow — see that file's own afterAll
+// comment for the full rationale, reused verbatim here).
+//
+// Each test below uses its OWN dedicated coach fixture rather than
+// sharing one across the suite — several tests deliberately drive a
+// coach's claim count to (or past) GENERATION_QUOTA_LIMIT, which would
+// corrupt any other test sharing that coach's ledger within the same
+// rolling window.
+//
+// Server Actions in app/hq/programs/generate/actions.ts require a real
+// Next.js request scope (next/headers cookies()) that a bare vitest
+// process cannot provide — same constraint already documented by
+// coach-signup-security.test.ts / rd-credential-gate.test.ts / etc. — so
+// "admin/client spoofing" here is covered by real behavioral tests
+// against claimGenerationQuota() (which is what actually enforces the
+// limit) plus source-inspection tests proving actions.ts always feeds
+// it the guard-resolved actor identity, never client input.
+// ─────────────────────────────────────────────────────────────
+
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { randomUUID } from "crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { eq, inArray, sql } from "drizzle-orm";
+import { getDb } from "../client";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { users } from "../schema";
+import { programGenerationQuotaClaims, programGenerationDrafts } from "../schema-program-generator";
+import {
+  claimGenerationQuota,
+  createDraft,
+  saveProgramShell,
+  saveGenerationWeek,
+  setDraftStatus,
+  GENERATION_QUOTA_LIMIT,
+  GENERATION_QUOTA_WINDOW_MS,
+} from "../program-generation-service";
+import { runStagedGeneration } from "@/lib/program-generator/staged-generation";
+import { buildFixtureProgramShell, buildFixtureProgramWeek } from "@/lib/program-generator/fixture";
+import type { ProgramGenerationBrief } from "@/lib/program-generator/contracts";
+
+const db = getDb();
+
+function source(file: string) {
+  return readFileSync(resolve(process.cwd(), file), "utf8");
+}
+
+async function countClaims(coachId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(programGenerationQuotaClaims)
+    .where(eq(programGenerationQuotaClaims.coachId, coachId));
+  return row?.count ?? 0;
+}
+
+const MINIMAL_BRIEF: ProgramGenerationBrief = {
+  goal: "muscle_growth",
+  weeks: 1,
+  daysPerWeek: 1,
+  preferredSplit: "coach_decides",
+  experienceLevel: "intermediate",
+  equipmentAccess: "commercial_gym",
+  targetSessionMinutes: 60,
+  excludedExerciseIds: [],
+  allowedTechniques: ["straight_set"],
+  avoidedTechniques: [],
+  hardSessionCap: false,
+  warmupIncluded: true,
+  musclePriorities: [],
+};
+
+const coachLimit = { id: "" };
+const coachIsoA = { id: "" };
+const coachIsoB = { id: "" };
+const coachConcurrent = { id: "" };
+const coachResume = { id: "" };
+const coachBoundaryExpired = { id: "" };
+const coachBoundaryActive = { id: "" };
+
+const draftIds: string[] = [];
+
+async function createAuthUser(label: string): Promise<string> {
+  const adminClient = createAdminClient();
+  const { data, error } = await adminClient.auth.admin.createUser({
+    email: `quota-test-${label}-${randomUUID()}@isolation-test.invalid`,
+    email_confirm: true,
+    password: randomUUID(),
+  });
+  if (error || !data.user) {
+    throw new Error(`Fixture setup failed: createUser(${label}) — ${error?.message}`);
+  }
+  return data.user.id;
+}
+
+beforeAll(async () => {
+  [
+    coachLimit.id,
+    coachIsoA.id,
+    coachIsoB.id,
+    coachConcurrent.id,
+    coachResume.id,
+    coachBoundaryExpired.id,
+    coachBoundaryActive.id,
+  ] = await Promise.all([
+    createAuthUser("limit"),
+    createAuthUser("iso-a"),
+    createAuthUser("iso-b"),
+    createAuthUser("concurrent"),
+    createAuthUser("resume"),
+    createAuthUser("boundary-expired"),
+    createAuthUser("boundary-active"),
+  ]);
+
+  await Promise.all(
+    [coachLimit, coachIsoA, coachIsoB, coachConcurrent, coachResume, coachBoundaryExpired, coachBoundaryActive].map(
+      (c) => db.update(users).set({ role: "coach", status: "active" }).where(eq(users.id, c.id)),
+    ),
+  );
+}, 30_000);
+
+// Same captured-error + Promise.allSettled + deferred-rethrow philosophy
+// as program-generator-integration.test.ts's afterAll — every phase is
+// attempted regardless of an earlier one failing, and the first error is
+// rethrown only once everything has been attempted.
+afterAll(async () => {
+  let firstError: unknown;
+
+  const runPhase = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`[program-generation-quota cleanup] ${label} failed:`, err instanceof Error ? err.message : err);
+      firstError = firstError ?? err;
+    }
+  };
+
+  const allCoachIds = [
+    coachLimit.id,
+    coachIsoA.id,
+    coachIsoB.id,
+    coachConcurrent.id,
+    coachResume.id,
+    coachBoundaryExpired.id,
+    coachBoundaryActive.id,
+  ].filter(Boolean);
+
+  // program_generation_drafts.coach_id is ON DELETE RESTRICT against
+  // users — must go before user deletion. program_generation_runs/
+  // weeks/edit_events/validation_events/quota_claims all cascade from
+  // the draft row itself, and quota_claims independently also cascades
+  // straight from coach_id -> users.id ON DELETE CASCADE, so no
+  // separate quota_claims cleanup step is needed here either way.
+  await runPhase("delete program_generation_drafts", async () => {
+    if (draftIds.length === 0) return;
+    await db.delete(programGenerationDrafts).where(inArray(programGenerationDrafts.id, draftIds));
+  });
+
+  if (allCoachIds.length > 0) {
+    await runPhase("delete public.users rows", async () => {
+      await db.delete(users).where(inArray(users.id, allCoachIds));
+    });
+
+    await runPhase("delete Supabase Auth users", async () => {
+      const adminClient = createAdminClient();
+      const results = await Promise.allSettled(allCoachIds.map((id) => adminClient.auth.admin.deleteUser(id)));
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+      }
+    });
+  }
+
+  if (firstError) throw firstError;
+}, 60_000);
+
+// ─────────────────────────────────────────────────────────────
+// Same-coach repeated invocation
+// ─────────────────────────────────────────────────────────────
+
+describe("claimGenerationQuota — same coach repeated invocation", () => {
+  it(`allows exactly ${GENERATION_QUOTA_LIMIT} claims within the rolling window, then rejects the next one with a useful message`, async () => {
+    for (let i = 0; i < GENERATION_QUOTA_LIMIT; i++) {
+      const result = await claimGenerationQuota(coachLimit.id, null, "full_draft");
+      expect(result.ok).toBe(true);
+    }
+
+    const blocked = await claimGenerationQuota(coachLimit.id, null, "full_draft");
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.retryAfterMs).toBeGreaterThan(0);
+      expect(blocked.retryAfterMs).toBeLessThanOrEqual(GENERATION_QUOTA_WINDOW_MS);
+    }
+
+    expect(await countClaims(coachLimit.id)).toBe(GENERATION_QUOTA_LIMIT);
+  }, 30_000);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Cross-coach isolation
+// ─────────────────────────────────────────────────────────────
+
+describe("claimGenerationQuota — different coaches isolated", () => {
+  it("one coach reaching their limit never blocks a different coach", async () => {
+    for (let i = 0; i < GENERATION_QUOTA_LIMIT; i++) {
+      expect((await claimGenerationQuota(coachIsoA.id, null, "full_draft")).ok).toBe(true);
+    }
+    expect((await claimGenerationQuota(coachIsoA.id, null, "full_draft")).ok).toBe(false);
+
+    // coachIsoB has made zero claims — must succeed regardless of
+    // coachIsoA's exhausted state.
+    expect((await claimGenerationQuota(coachIsoB.id, null, "full_draft")).ok).toBe(true);
+    expect(await countClaims(coachIsoB.id)).toBe(1);
+  }, 30_000);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Concurrency — the atomicity guarantee itself
+// ─────────────────────────────────────────────────────────────
+
+describe("claimGenerationQuota — concurrent attempts", () => {
+  it("never lets concurrent claims for the same coach exceed the limit, even when deliberately over-subscribed", async () => {
+    const attempts = GENERATION_QUOTA_LIMIT + 10;
+    const results = await Promise.all(
+      Array.from({ length: attempts }, () => claimGenerationQuota(coachConcurrent.id, null, "full_draft")),
+    );
+
+    const succeeded = results.filter((r) => r.ok).length;
+    const blocked = results.filter((r) => !r.ok).length;
+    expect(succeeded).toBe(GENERATION_QUOTA_LIMIT);
+    expect(blocked).toBe(attempts - GENERATION_QUOTA_LIMIT);
+
+    // The real proof: the ledger itself never exceeds the limit — a
+    // naive check-then-insert race (two connections both reading "19,
+    // under limit" before either commits) would show more rows here
+    // than GENERATION_QUOTA_LIMIT despite every individual claimGenerationQuota()
+    // call still, technically, having "checked before inserting".
+    expect(await countClaims(coachConcurrent.id)).toBe(GENERATION_QUOTA_LIMIT);
+  }, 30_000);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Failed generation behavior — no refund
+// ─────────────────────────────────────────────────────────────
+
+describe("claimGenerationQuota — failed generation behavior", () => {
+  it("a consumed quota unit is not refunded when the generation it guarded later fails", async () => {
+    const draftRow = await createDraft({ coachId: coachResume.id, clientId: null, brief: MINIMAL_BRIEF });
+    draftIds.push(draftRow.id);
+
+    const before = await countClaims(coachResume.id);
+    const claim = await claimGenerationQuota(coachResume.id, draftRow.id, "full_draft");
+    expect(claim.ok).toBe(true);
+
+    // The real failure path staged-generation.ts takes once a claimed
+    // attempt's model call fails — setDraftStatus() has no interaction
+    // with the quota ledger at all (see claimGenerationQuota's own
+    // "separate ledger" comment), so this must not release the claim.
+    await setDraftStatus(draftRow.id, "failed", { failureReason: "simulated failure for test" });
+
+    expect(await countClaims(coachResume.id)).toBe(before + 1);
+  }, 30_000);
+
+  it("setDraftStatus/failRun never reference the quota ledger table", () => {
+    const service = source("lib/db/program-generation-service.ts");
+    const failRunBody = service.slice(
+      service.indexOf("export async function failRun("),
+      service.indexOf("// ─────", service.indexOf("export async function failRun(")),
+    );
+    expect(failRunBody).not.toContain("programGenerationQuotaClaims");
+
+    const setDraftStatusBody = service.slice(
+      service.indexOf("export async function setDraftStatus("),
+      service.indexOf("// Set once per draft"),
+    );
+    expect(setDraftStatusBody).not.toContain("programGenerationQuotaClaims");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Retry / resume semantics
+// ─────────────────────────────────────────────────────────────
+
+describe("runStagedGeneration — resume/retry quota accounting", () => {
+  const originalModel = process.env.PROGRAM_GENERATOR_MODEL;
+  const originalFixture = process.env.PROGRAM_GENERATOR_USE_FIXTURE;
+
+  beforeAll(() => {
+    process.env.PROGRAM_GENERATOR_USE_FIXTURE = "true";
+    delete process.env.PROGRAM_GENERATOR_MODEL;
+  });
+
+  afterAll(() => {
+    if (originalModel === undefined) delete process.env.PROGRAM_GENERATOR_MODEL;
+    else process.env.PROGRAM_GENERATOR_MODEL = originalModel;
+    if (originalFixture === undefined) delete process.env.PROGRAM_GENERATOR_USE_FIXTURE;
+    else process.env.PROGRAM_GENERATOR_USE_FIXTURE = originalFixture;
+  });
+
+  it("a fresh generation consumes exactly one quota unit, regardless of week count", async () => {
+    const brief: ProgramGenerationBrief = { ...MINIMAL_BRIEF, weeks: 2, daysPerWeek: 1 };
+    const row = await createDraft({ coachId: coachResume.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const before = await countClaims(coachResume.id);
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachResume.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      startFromWeek: 1,
+      existingCompletedWeeks: new Map(),
+    });
+    expect(result.ok).toBe(true);
+    expect(await countClaims(coachResume.id)).toBe(before + 1);
+  }, 30_000);
+
+  it("a resume with weeks still remaining consumes exactly one more quota unit", async () => {
+    const brief: ProgramGenerationBrief = { ...MINIMAL_BRIEF, weeks: 2, daysPerWeek: 1 };
+    const row = await createDraft({ coachId: coachResume.id, clientId: null, brief });
+    draftIds.push(row.id);
+    const shell = buildFixtureProgramShell(brief);
+    await saveProgramShell(row.id, shell);
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated failure for test" });
+
+    const before = await countClaims(coachResume.id);
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachResume.id,
+      brief,
+      clientContext: null,
+      existingShell: shell,
+      startFromWeek: 1,
+      existingCompletedWeeks: new Map(),
+    });
+    expect(result.ok).toBe(true);
+    expect(await countClaims(coachResume.id)).toBe(before + 1);
+  }, 30_000);
+
+  it("a resume whose shell and every week already completed — only finalization failed last time — consumes ZERO quota units", async () => {
+    const brief: ProgramGenerationBrief = { ...MINIMAL_BRIEF, weeks: 1, daysPerWeek: 1 };
+    const row = await createDraft({ coachId: coachResume.id, clientId: null, brief });
+    draftIds.push(row.id);
+    const shell = buildFixtureProgramShell(brief);
+    await saveProgramShell(row.id, shell);
+    const week1 = await buildFixtureProgramWeek(1, shell);
+    if (!week1) throw new Error("fixture setup failed — not enough active exercises seeded.");
+    await saveGenerationWeek(row.id, 1, { status: "completed", weekJson: week1 });
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated finalization-only failure" });
+
+    const before = await countClaims(coachResume.id);
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachResume.id,
+      brief,
+      clientContext: null,
+      existingShell: shell,
+      startFromWeek: 2, // > shell.totalWeeks (1) — nothing left to generate
+      existingCompletedWeeks: new Map([[1, week1]]),
+    });
+    expect(result.ok).toBe(true);
+    expect(await countClaims(coachResume.id)).toBe(before);
+  }, 30_000);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Admin/client identity spoofing — quota is always charged against the
+// server-resolved actor, never a client-supplied id. Source-inspection
+// (see file header for why: actions.ts requires a real request scope).
+// ─────────────────────────────────────────────────────────────
+
+describe("identity — quota is charged against the session-derived actor only", () => {
+  it("generateProgramDraftAction feeds runStagedGeneration actor.coachId, never a client-supplied id", () => {
+    const actionsSrc = source("app/hq/programs/generate/actions.ts");
+    const start = actionsSrc.indexOf("export async function generateProgramDraftAction");
+    const end = actionsSrc.indexOf("// Resumes a failed staged generation", start);
+    const fnBody = actionsSrc.slice(start, end);
+
+    expect(fnBody).toContain("const actor = await requireActor();");
+    expect(fnBody).toContain("coachId: actor.coachId,");
+    expect(fnBody).not.toMatch(/coachId:\s*input\./);
+  });
+
+  it("resumeGenerationAction feeds runStagedGeneration auth.coachId (from requireOwnedDraft's server-side guard), never a client-supplied id", () => {
+    const actionsSrc = source("app/hq/programs/generate/actions.ts");
+    const start = actionsSrc.indexOf("export async function resumeGenerationAction");
+    const end = actionsSrc.indexOf("// ─────────────────────────────────────────────────────────────", start);
+    const fnBody = actionsSrc.slice(start, end);
+
+    expect(fnBody).toContain("const auth = await requireOwnedDraft(draftId);");
+    expect(fnBody).toContain("coachId: auth.coachId,");
+  });
+
+  it("regenerateDayAction charges the quota claim against loaded.coachId, never a client-supplied id", () => {
+    const actionsSrc = source("app/hq/programs/generate/actions.ts");
+    const start = actionsSrc.indexOf("export async function regenerateDayAction");
+    const end = actionsSrc.indexOf("// ─────────────────────────────────────────────────────────────", start);
+    const fnBody = actionsSrc.slice(start, end);
+
+    expect(fnBody).toContain("const loaded = await loadEditableDraft(params.draftId);");
+    expect(fnBody).toContain('claimGenerationQuota(loaded.coachId, params.draftId, "single_day")');
+  });
+
+  it("requireActor() resolves coachId from the authenticated session guard, never from caller input", () => {
+    const actionsSrc = source("app/hq/programs/generate/actions.ts");
+    const start = actionsSrc.indexOf("async function requireActor");
+    const end = actionsSrc.indexOf("async function requireOwnedDraft");
+    const fnBody = actionsSrc.slice(start, end);
+
+    expect(fnBody).toContain("await requireCoachOrAdmin()");
+    expect(fnBody).toContain("coachId: guard.dbUser.id");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Window boundary / reset behavior
+// ─────────────────────────────────────────────────────────────
+
+describe("claimGenerationQuota — window boundary behavior", () => {
+  it("claims that fell outside the window (all already expired) do not count against the limit", async () => {
+    const now = Date.now();
+    const expiredRows = Array.from({ length: GENERATION_QUOTA_LIMIT }, () => ({
+      coachId: coachBoundaryExpired.id,
+      draftId: null,
+      scope: "full_draft" as const,
+      createdAt: new Date(now - GENERATION_QUOTA_WINDOW_MS - 60_000), // 1 minute past the window
+    }));
+    await db.insert(programGenerationQuotaClaims).values(expiredRows);
+
+    // All GENERATION_QUOTA_LIMIT rows exist but are outside the rolling
+    // window — a fresh claim must still succeed exactly as if the coach
+    // had never made them.
+    const result = await claimGenerationQuota(coachBoundaryExpired.id, null, "full_draft");
+    expect(result.ok).toBe(true);
+  }, 30_000);
+
+  it("claims just inside the window still count against the limit, and retryAfterMs reflects the true remaining time", async () => {
+    const now = Date.now();
+    const activeRows = Array.from({ length: GENERATION_QUOTA_LIMIT }, () => ({
+      coachId: coachBoundaryActive.id,
+      draftId: null,
+      scope: "full_draft" as const,
+      createdAt: new Date(now - GENERATION_QUOTA_WINDOW_MS + 60_000), // 1 minute inside the window
+    }));
+    await db.insert(programGenerationQuotaClaims).values(activeRows);
+
+    const result = await claimGenerationQuota(coachBoundaryActive.id, null, "full_draft");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // The oldest counted row has ~1 minute left before it ages out.
+      expect(result.retryAfterMs).toBeGreaterThan(0);
+      expect(result.retryAfterMs).toBeLessThanOrEqual(65_000);
+    }
+  }, 30_000);
+});
