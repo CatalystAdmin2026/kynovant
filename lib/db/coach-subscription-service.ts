@@ -10,6 +10,11 @@
 // for where getCoachEntitlement() is actually enforced.
 //
 // Status behavior (approved product decision):
+//   complimentary (active grant)          → allowed, no warning —
+//                                            checked FIRST, before
+//                                            coach_subscriptions is even
+//                                            queried; see the
+//                                            precedence note below.
 //   manually_activated, trialing, active → allowed, no warning
 //   past_due, within 7-day grace          → allowed, warning
 //   past_due, grace expired               → lazily transitions to
@@ -19,6 +24,18 @@
 //                                            expiry on read instead)
 //   suspended, cancelled                  → not allowed
 //   no row at all                         → not allowed ("none")
+//
+// COMPLIMENTARY PRECEDENCE (deterministic, by construction): an active
+// coach_complimentary_access grant always wins, and getCoachEntitlement()
+// returns immediately without reading coach_subscriptions at all — so
+// granting complimentary access can NEVER read, modify, or clobber a
+// real Stripe-backed coach_subscriptions row. Once the grant is revoked
+// or expires (see getActiveComplimentaryAccess()'s own lazy-expiry
+// handling), this function falls through to the coach_subscriptions
+// logic below completely unmodified — a coach who had a valid paid/
+// trialing subscription before, during, or after a complimentary grant
+// keeps exactly that subscription's own state, because nothing here
+// ever wrote to it.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
@@ -29,6 +46,7 @@ import {
   type CoachSubscriptionStatus,
 } from "./schema-billing";
 import { notifyBillingPastDue } from "./coach-notification-service";
+import { getActiveComplimentaryAccess } from "./coach-complimentary-access-service";
 
 const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -37,7 +55,7 @@ const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // ─────────────────────────────────────────────────────────────
 
 export interface CoachEntitlement {
-  status: CoachSubscriptionStatus | "none";
+  status: CoachSubscriptionStatus | "none" | "complimentary";
   allowed: boolean;
   /** true only for past_due within the grace window — HQ stays usable,
    *  but the caller should surface a visible billing warning. */
@@ -48,6 +66,15 @@ export interface CoachEntitlement {
 export async function getCoachEntitlement(
   coachId: string,
 ): Promise<CoachEntitlement> {
+  // Complimentary access is checked first and, if active, decides the
+  // outcome entirely on its own — coach_subscriptions is never read in
+  // that case. See this file's header comment for why that precedence
+  // is deliberate.
+  const complimentary = await getActiveComplimentaryAccess(coachId);
+  if (complimentary) {
+    return { status: "complimentary", allowed: true, warning: false, gracePeriodEnd: null };
+  }
+
   const db = getDb();
   const [row] = await db
     .select()

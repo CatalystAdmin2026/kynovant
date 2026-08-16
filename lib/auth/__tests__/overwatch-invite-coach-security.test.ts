@@ -95,9 +95,19 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — inviter/coach ide
 
   it("the invited coach's role is never taken from request input — provisionInvitedCoach hardcodes it", () => {
     // The request body shape (InviteCoachPayload) has no role field at
-    // all — a caller cannot even attempt to supply one.
-    expect(route).toMatch(/interface InviteCoachPayload \{\s*firstName\?: string;\s*email\?: string;\s*\}/);
+    // all — a caller cannot even attempt to supply one. accessType is
+    // the one legitimate addition (complimentary-access feature) and is
+    // whitelisted to the literal "standard" | "complimentary" — it is
+    // NOT a role, admin id, or grantedBy value of any kind.
+    expect(route).toMatch(
+      /interface InviteCoachPayload \{\s*firstName\?: string;\s*email\?: string;\s*accessType\?: "standard" \| "complimentary";\s*\}/,
+    );
     expect(route).not.toMatch(/body\.role/);
+    expect(route).not.toMatch(/body\.(grantedBy|adminId|inviterId)/);
+  });
+
+  it("accessType is resolved through a whitelist function, never trusted as a free-form value passed straight to entitlement logic", () => {
+    expect(route).toContain('function isComplimentaryAccessType(body: InviteCoachPayload): boolean {\n  return body.accessType === "complimentary";\n}');
   });
 
   it("the created userId always comes from Supabase's own response (data.user.id), never from request input", () => {

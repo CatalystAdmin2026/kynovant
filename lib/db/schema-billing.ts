@@ -21,6 +21,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   pgEnum,
@@ -151,3 +152,102 @@ export type CoachSubscriptionStatus =
 
 export type ProcessedStripeEvent = typeof processedStripeEvents.$inferSelect;
 export type NewProcessedStripeEvent = typeof processedStripeEvents.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────
+// TABLE — coach_complimentary_access
+//
+// A coach-level grant of full HQ entitlement with NO Stripe subscription
+// and NO coach_subscriptions row involved at all — deliberately a
+// separate table rather than a coach_subscriptions status value (unlike
+// "manually_activated", which IS a coach_subscriptions row and therefore
+// cannot coexist with a real Stripe subscription on the same coach, since
+// coach_subscriptions is one row per coach). Kept fully independent so:
+//
+//   - A complimentary coach who later becomes a real paying subscriber
+//     never has their coach_subscriptions row touched by anything in
+//     this table — the two are written by entirely disjoint code paths.
+//   - Revoking complimentary access never has to "guess" what billing
+//     state to restore — coach_subscriptions was never modified, so
+//     whatever was already there (or wasn't) is simply what
+//     getCoachEntitlement() falls through to once no active grant
+//     remains (see coach-subscription-service.ts).
+//   - Overwatch KPIs (payingAccounts, activeTrials, trial→paid) stay
+//     truthful automatically: they all key off coach_subscriptions,
+//     which a complimentary grant never writes to.
+//
+// Multiple rows per coach are allowed (grant → revoke → re-grant is a
+// real, auditable history), but at most one ACTIVE row per coach at a
+// time — enforced by a partial unique index, the same pattern already
+// used for client_programs' "one active program per client" invariant
+// (see schema-program.ts's uq_client_active_program).
+//
+// FK behavior:
+//   coachId    → RESTRICT : grant history stays tied to a real coach account
+//   grantedBy  → SET NULL : admin who granted; audit only, same as
+//                           coach_subscriptions.activatedBy
+//   revokedBy  → SET NULL : admin who revoked; null when auto-expired
+//                           (system, not an admin action) rather than
+//                           explicitly revoked
+// ─────────────────────────────────────────────────────────────
+
+// active   — currently granting entitlement.
+// revoked  — an admin explicitly ended it (revokedBy is that admin).
+// expired  — expiresAt elapsed and getCoachEntitlement() lazily closed
+//            it out on read (revokedBy is null — no admin acted; same
+//            "lazy transition on read" shape coach_subscriptions'
+//            past_due → suspended handling already uses, since no
+//            background job runner exists in this codebase yet).
+export const coachComplimentaryAccessStatusEnum = pgEnum("coach_complimentary_access_status", [
+  "active",
+  "revoked",
+  "expired",
+]);
+
+export const coachComplimentaryAccess = pgTable(
+  "coach_complimentary_access",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    coachId: uuid("coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+
+    status: coachComplimentaryAccessStatusEnum("status").notNull().default("active"),
+
+    // Founder-facing note — "strategic partner," "Founding Coach,"
+    // "beta," etc. Never shown to the coach themselves, admin/founder
+    // eyes only (same visibility posture as coach_subscriptions'
+    // activatedBy audit trail).
+    reason: text("reason"),
+
+    grantedBy: uuid("granted_by").references(() => users.id, { onDelete: "set null" }),
+    grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+
+    // Null = lifetime / no expiration, which MUST remain a fully
+    // supported state (product requirement) — never defaulted to a
+    // synthetic far-future date.
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+
+    revokedBy: uuid("revoked_by").references(() => users.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // At most one ACTIVE grant per coach at a time. Postgres partial
+    // unique indexes only enforce the WHERE condition, so a coach with
+    // two 'revoked' rows in their history is untouched by this — only
+    // ever tries to prevent two simultaneous 'active' rows.
+    uniqueIndex("uq_coach_complimentary_access_active_coach")
+      .on(table.coachId)
+      .where(sql`${table.status} = 'active'`),
+    index("idx_coach_complimentary_access_coach_id").on(table.coachId),
+    index("idx_coach_complimentary_access_status").on(table.status),
+  ],
+);
+
+export type CoachComplimentaryAccess = typeof coachComplimentaryAccess.$inferSelect;
+export type NewCoachComplimentaryAccess = typeof coachComplimentaryAccess.$inferInsert;
+export type CoachComplimentaryAccessStatus =
+  (typeof coachComplimentaryAccessStatusEnum.enumValues)[number];

@@ -17,6 +17,13 @@ import { weeklyCheckIns } from "./schema-check-in";
 import { conversations, messages } from "./schema-messaging";
 import { programGenerationRuns } from "./schema-program-generator";
 import { internalAccountFlags, operatorProfiles, type AccountClassification } from "./schema-overwatch-ops";
+import { coachProfiles as coachProfilesTable } from "./schema";
+import { coachComplimentaryAccess } from "./schema-billing";
+import {
+  listActiveComplimentaryCoachIds,
+  listComplimentaryAccessHistory,
+  isRowPastExpiry,
+} from "./coach-complimentary-access-service";
 
 export interface OverwatchCoachRow {
   id: string;
@@ -31,6 +38,10 @@ export interface OverwatchCoachRow {
   cancelledAt: Date | null;
   activeClientCount: number;
   lastActiveAt: Date | null;
+  /** true only for a currently-active, non-expired complimentary grant —
+   *  see coach-complimentary-access-service.ts's listActiveComplimentaryCoachIds().
+   *  Purely a display flag; never used for any authorization decision. */
+  isComplimentary: boolean;
 }
 
 export interface OverwatchAcquisitionLeadRow {
@@ -65,6 +76,10 @@ export interface OverwatchMetrics {
     payingAccounts: number;
     newSignups7d: number;
     activeCustomerCoaches: number;
+    /** Active, non-expired complimentary grants — see the KPI
+     *  semantics decision on activeCustomerCoaches below for why this
+     *  is a subset of it, not of payingAccounts. */
+    complimentaryCoaches: number;
     activeClients: number;
     workouts7d: number;
     trialToPaid: number | null;
@@ -147,6 +162,94 @@ export async function getOverwatchFounderProfile(userId: string): Promise<Overwa
   return {
     firstName: firstName && firstName.length > 0 ? firstName : null,
     timezone: profile?.timezone ?? "America/Chicago",
+  };
+}
+
+export interface OverwatchCoachDetail {
+  id: string;
+  email: string;
+  displayName: string | null;
+  accountStatus: string;
+  createdAt: Date;
+  classification: AccountClassification;
+  subscriptionStatus: string | null;
+  currentPeriodEnd: Date | null;
+  cancelledAt: Date | null;
+  activeComplimentary: { id: string; grantedAt: Date; expiresAt: Date | null; reason: string | null; expiringSoon: boolean } | null;
+  complimentaryHistory: Array<{
+    id: string;
+    status: string;
+    reason: string | null;
+    grantedAt: Date;
+    expiresAt: Date | null;
+    revokedAt: Date | null;
+  }>;
+}
+
+// Single-account detail read for the Overwatch account detail surface
+// (app/overwatch/accounts/[coachId]/page.tsx) — the smallest query that
+// page needs, deliberately separate from getOverwatchMetrics()'s bulk
+// directory query rather than threading a coachId filter through it.
+export async function getOverwatchCoachDetail(coachId: string): Promise<OverwatchCoachDetail | null> {
+  const db = getDb();
+
+  const [row] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      accountStatus: users.status,
+      role: users.role,
+      createdAt: users.createdAt,
+      displayName: coachProfilesTable.displayName,
+      classification: sql<AccountClassification>`coalesce(${internalAccountFlags.classification}, 'customer')`,
+      subscriptionStatus: coachSubscriptions.status,
+      currentPeriodEnd: coachSubscriptions.currentPeriodEnd,
+      cancelledAt: coachSubscriptions.cancelledAt,
+    })
+    .from(users)
+    .leftJoin(internalAccountFlags, eq(internalAccountFlags.userId, users.id))
+    .leftJoin(coachProfilesTable, eq(coachProfilesTable.userId, users.id))
+    .leftJoin(coachSubscriptions, eq(coachSubscriptions.coachId, users.id))
+    .where(eq(users.id, coachId))
+    .limit(1);
+
+  if (!row || row.role !== "coach") return null;
+
+  const [activeRow] = await db
+    .select()
+    .from(coachComplimentaryAccess)
+    .where(and(eq(coachComplimentaryAccess.coachId, coachId), eq(coachComplimentaryAccess.status, "active")))
+    .limit(1);
+
+  const history = await listComplimentaryAccessHistory(coachId);
+
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.displayName,
+    accountStatus: row.accountStatus,
+    createdAt: toDateOrNull(row.createdAt) ?? new Date(0),
+    classification: row.classification ?? "customer",
+    subscriptionStatus: row.subscriptionStatus,
+    currentPeriodEnd: toDateOrNull(row.currentPeriodEnd),
+    cancelledAt: toDateOrNull(row.cancelledAt),
+    activeComplimentary: activeRow
+      ? {
+          id: activeRow.id,
+          grantedAt: activeRow.grantedAt,
+          expiresAt: activeRow.expiresAt,
+          reason: activeRow.reason,
+          expiringSoon: isRowPastExpiry(activeRow),
+        }
+      : null,
+    complimentaryHistory: history.map((h) => ({
+      id: h.id,
+      status: h.status,
+      reason: h.reason,
+      grantedAt: h.grantedAt,
+      expiresAt: h.expiresAt,
+      revokedAt: h.revokedAt,
+    })),
   };
 }
 
@@ -400,6 +503,12 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
     (select max(processed_at) from processed_stripe_events) as recent_stripe_event_at,
     (select count(*)::int from coach_acquisition_leads where invite_status in ('failed', 'error')) as failed_signup_invites`);
 
+  // Separate query rather than folded into the coachRows groupBy above —
+  // coach_complimentary_access is a display-only badge, not part of the
+  // billing aggregation that query is already doing, and keeping it out
+  // avoids complicating that query's existing groupBy/join shape.
+  const complimentaryCoachIds = await listActiveComplimentaryCoachIds();
+
   const accounts = coachRows.map((coach) => ({
     ...coach,
     classification: coach.classification ?? "customer",
@@ -408,7 +517,9 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
     cancelledAt: toDateOrNull(coach.cancelledAt),
     lastActiveAt: toDateOrNull(coach.lastActiveAt),
     activeClientCount: toNumber(coach.activeClientCount),
+    isComplimentary: complimentaryCoachIds.has(coach.id),
   }));
+  const complimentaryCoachCount = accounts.filter((coach) => coach.isComplimentary).length;
   const activeClients = accounts.reduce((sum, coach) => sum + coach.activeClientCount, 0);
   const trialStarted = toNumber(acquisitionRows[0]?.trialStarted);
   const paidActive = toNumber(acquisitionRows[0]?.paidActive);
@@ -458,7 +569,21 @@ export async function getOverwatchMetrics(): Promise<OverwatchMetrics> {
       activeTrials,
       payingAccounts,
       newSignups7d: accounts.filter((coach) => isWithinDateWindow(coach.createdAt, sevenDaysAgo, nowDate)).length,
+      // KPI SEMANTICS DECISION (Phase 5, complimentary coach access):
+      // "Active Customer Coaches" means real active coach accounts
+      // actually using Kynovant — a billing-independent definition
+      // (users.status === 'active', unrelated to subscriptionStatus).
+      // A complimentary coach's account status transitions to 'active'
+      // through the exact same setup-password/auth-callback flow as any
+      // other coach, so they count here without any special-casing —
+      // intentional: they ARE a real, active coach using the product,
+      // just not a billing one. They are excluded (correctly, by
+      // construction — see coach-complimentary-access-service.ts's
+      // header comment) from payingAccounts/activeTrials/trialToPaid
+      // above, since granting complimentary access never writes to
+      // coach_subscriptions at all.
       activeCustomerCoaches: accounts.filter((coach) => coach.accountStatus === "active").length,
+      complimentaryCoaches: complimentaryCoachCount,
       activeClients,
       workouts7d,
       trialToPaid: conversionRate(paidActive, trialStarted),
