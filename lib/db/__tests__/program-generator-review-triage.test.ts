@@ -13,11 +13,12 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "crypto";
-import { eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { users } from "../schema";
-import { exercises } from "../schema-exercise";
+import { users, programTemplates, workoutTemplates } from "../schema";
+import { exercises, workoutTemplateSections, workoutTemplateExercises } from "../schema-exercise";
+import { programWeeks, programWeekDays } from "../schema-program";
 import { programGenerationDrafts, programGenerationEditEvents } from "../schema-program-generator";
 import {
   createDraft,
@@ -48,6 +49,8 @@ let inactiveExerciseId = "";
 
 const draftIds: string[] = [];
 const exerciseFixtureIds: string[] = [];
+const programTemplateIds: string[] = [];
+const workoutTemplateIds: string[] = [];
 
 async function createAuthUser(label: string): Promise<string> {
   const adminClient = createAdminClient();
@@ -216,9 +219,23 @@ beforeAll(async () => {
     db.update(users).set({ role: "admin", status: "active" }).where(eq(users.id, admin.id)),
   ]);
 
-  const rows = await db.select({ id: exercises.id }).from(exercises).where(eq(exercises.status, "active")).limit(3);
+  // Scoped to scope="system" (never an unrelated coach's private
+  // exercise — see exercise-resolution.test.ts, which was fixed for the
+  // identical class of bug this suite leaked from) plus a deterministic
+  // ORDER BY (Postgres does not guarantee row order for an unordered
+  // LIMIT). Root cause of the Review Triage Test fixture leak: this
+  // query used to be unscoped and unordered, so activeExerciseIds[2]
+  // could land on ANY active exercise in the shared table — including a
+  // real coach-owned one — and that id then flowed, untouched, into
+  // every draft this suite approves via alreadyResolvedPrescriptionId.
+  const rows = await db
+    .select({ id: exercises.id })
+    .from(exercises)
+    .where(and(eq(exercises.status, "active"), eq(exercises.scope, "system")))
+    .orderBy(asc(exercises.id))
+    .limit(3);
   if (rows.length < 3) {
-    throw new Error("Fixture setup failed: need at least 3 active exercises seeded to run this suite.");
+    throw new Error("Fixture setup failed: need at least 3 active scope='system' exercises seeded to run this suite.");
   }
   activeExerciseIds = rows.map((r) => r.id);
 
@@ -237,22 +254,142 @@ beforeAll(async () => {
   exerciseFixtureIds.push(inactive.id);
 });
 
+// Cleanup robustness — same philosophy as program-generator-integration.
+// test.ts's afterAll (see that file's header comment): every phase runs
+// in its own try/catch, ALL phases are attempted regardless of an
+// earlier one failing, the FIRST error is captured and rethrown only
+// once every phase has been attempted, and per-item async cleanup (Auth
+// user deletion) uses Promise.allSettled rather than Promise.all so one
+// rejection doesn't stop the others. A cleanup failure must never be
+// swallowed, and it must never prevent later, independent cleanup
+// phases — most importantly Auth user deletion — from being attempted.
+//
+// Phase order matters independent of that robustness too: this is the
+// exact leak this suite caused in production. approveDraft() creates
+// program_templates/program_weeks/workout_templates/
+// workout_template_sections/workout_template_exercises/program_week_days
+// inside its own transaction (see lib/program-generator/approval.ts),
+// and none of that cascades from program_generation_drafts — the FK
+// points the other way (draft.createdProgramTemplateId ->
+// program_templates.id). The old version only ever deleted
+// programGenerationDrafts and the single synthetic "inactive" exercise
+// fixture, so every program_template/workout_template/
+// workout_template_exercise created by the two approveDraft() calls in
+// this file was left behind on every run — ~2 stray program_templates
+// per full-suite run, compounding across CI runs into the ~134-row
+// production leak this fix cleans up after.
 afterAll(async () => {
-  if (draftIds.length > 0) {
-    // program_generation_runs/edit_events/validation_events cascade from
-    // the draft row itself (ON DELETE CASCADE).
-    await db.delete(programGenerationDrafts).where(inArray(programGenerationDrafts.id, draftIds));
-  }
-  if (exerciseFixtureIds.length > 0) {
+  let firstError: unknown;
+
+  const runPhase = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`[program-generator-review-triage cleanup] ${label} failed:`, err instanceof Error ? err.message : err);
+      firstError = firstError ?? err;
+    }
+  };
+
+  // 1. workout_template_exercises / workout_template_sections — must go
+  // before both workout_templates (RESTRICT) and exercises (RESTRICT).
+  await runPhase("delete workout_template_exercises/sections", async () => {
+    if (workoutTemplateIds.length === 0) return;
+    await db.delete(workoutTemplateExercises).where(inArray(workoutTemplateExercises.workoutTemplateId, workoutTemplateIds));
+    await db.delete(workoutTemplateSections).where(inArray(workoutTemplateSections.workoutTemplateId, workoutTemplateIds));
+  });
+
+  // 2. program_week_days / program_weeks — must go before program_templates.
+  await runPhase("delete program_week_days/program_weeks", async () => {
+    if (programTemplateIds.length === 0) return;
+    const weekRows = await db
+      .select({ id: programWeeks.id })
+      .from(programWeeks)
+      .where(inArray(programWeeks.programTemplateId, programTemplateIds));
+    const weekIds = weekRows.map((w) => w.id);
+    if (weekIds.length > 0) {
+      await db.delete(programWeekDays).where(inArray(programWeekDays.programWeekId, weekIds));
+    }
+    await db.delete(programWeeks).where(inArray(programWeeks.programTemplateId, programTemplateIds));
+  });
+
+  // 3. exercises — only the synthetic "inactive" fixture this suite
+  // created itself. The scope="system" exercises read in beforeAll are
+  // pre-existing shared rows this suite never owns and must never
+  // delete.
+  await runPhase("delete exercise fixtures", async () => {
+    if (exerciseFixtureIds.length === 0) return;
     await db.delete(exercises).where(inArray(exercises.id, exerciseFixtureIds));
-  }
+  });
+
+  // 4. workout_templates — now safe: sections/exercises children gone.
+  await runPhase("delete workout_templates", async () => {
+    if (workoutTemplateIds.length === 0) return;
+    await db.delete(workoutTemplates).where(inArray(workoutTemplates.id, workoutTemplateIds));
+  });
+
+  // 5. program_templates — now safe: weeks gone.
+  await runPhase("delete program_templates", async () => {
+    if (programTemplateIds.length === 0) return;
+    await db.delete(programTemplates).where(inArray(programTemplates.id, programTemplateIds));
+  });
+
+  // 6. program_generation_drafts — program_generation_runs/edit_events/
+  // validation_events cascade from the draft row itself (ON DELETE
+  // CASCADE) — no separate cleanup needed for those.
+  await runPhase("delete program_generation_drafts", async () => {
+    if (draftIds.length === 0) return;
+    await db.delete(programGenerationDrafts).where(inArray(programGenerationDrafts.id, draftIds));
+  });
+
+  // 7. Identity cleanup — attempted regardless of whether any phase
+  // above failed. public.users first (draft/template RESTRICT FKs, now
+  // cleared by the phases above, would otherwise block it), then every
+  // Auth user in parallel via Promise.allSettled so one failed delete
+  // doesn't stop the others.
   const userIds = [coachA.id, coachB.id, admin.id].filter(Boolean);
   if (userIds.length > 0) {
-    await db.delete(users).where(inArray(users.id, userIds));
-    const adminClient = createAdminClient();
-    await Promise.all(userIds.map((id) => adminClient.auth.admin.deleteUser(id)));
+    await runPhase("delete public.users rows", async () => {
+      await db.delete(users).where(inArray(users.id, userIds));
+    });
+
+    await runPhase("delete Supabase Auth users", async () => {
+      const adminClient = createAdminClient();
+      const results = await Promise.allSettled(userIds.map((id) => adminClient.auth.admin.deleteUser(id)));
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+      }
+    });
   }
+
+  if (firstError) throw firstError;
 }, 60_000);
+
+// ─────────────────────────────────────────────────────────────
+// Regression — fixture exercise selection scoping
+//
+// Direct guard against the root cause of the production leak this file
+// was fixed to stop: the fixture exercise lookup in beforeAll used to
+// be unscoped and unordered, so activeExerciseIds could non-
+// deterministically land on ANY active exercise in the shared table —
+// including a real coach's private one — and that id would then flow,
+// untouched, into every draft this suite approves. This asserts the
+// fixed query's actual guarantee rather than re-testing Postgres row
+// ordering.
+// ─────────────────────────────────────────────────────────────
+
+describe("fixture exercise selection — scoping regression", () => {
+  it("activeExerciseIds are all scope='system' — never a private/coach-owned exercise", async () => {
+    expect(activeExerciseIds.length).toBeGreaterThanOrEqual(3);
+    const rows = await db
+      .select({ id: exercises.id, scope: exercises.scope, createdBy: exercises.createdBy })
+      .from(exercises)
+      .where(inArray(exercises.id, activeExerciseIds));
+    expect(rows).toHaveLength(activeExerciseIds.length);
+    for (const row of rows) {
+      expect(row.scope).toBe("system");
+    }
+  });
+});
 
 // ─────────────────────────────────────────────────────────────
 // Replace All Occurrences — mechanics
@@ -349,6 +486,10 @@ describe("approveDraft after Replace All — approval availability", () => {
 
     const outcome = await approveDraft(draftId, { coachId: coachA.id }, coachA.id);
     expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      programTemplateIds.push(outcome.programTemplateId);
+      workoutTemplateIds.push(...outcome.workoutTemplateIds);
+    }
   }, 20_000);
 });
 
@@ -523,6 +664,10 @@ describe("Replace All Occurrences — ownership and validity gates", () => {
 
     const approval = await approveDraft(draftId, { coachId: coachA.id }, coachA.id);
     expect(approval.ok).toBe(true);
+    if (approval.ok) {
+      programTemplateIds.push(approval.programTemplateId);
+      workoutTemplateIds.push(...approval.workoutTemplateIds);
+    }
 
     const [row] = await db.select({ status: programGenerationDrafts.status }).from(programGenerationDrafts).where(eq(programGenerationDrafts.id, draftId));
     expect(row.status).toBe("approved");
