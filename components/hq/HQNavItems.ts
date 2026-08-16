@@ -6,6 +6,7 @@ import {
   FileText,
   Folder,
   LayoutDashboard,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 
@@ -30,6 +31,7 @@ export const HQ_NAV_ITEMS: HQNavItem[] = [
   { icon: ClipboardCheck, label: "Check-Ins", href: "/hq/check-ins" },
   { icon: Calendar, label: "Schedule", href: "/hq/schedule" },
   { icon: Folder, label: "Documents", href: "/hq/documents" },
+  { icon: ShieldCheck, label: "RD/RDN Verification", href: "/hq/credentials" },
 ];
 
 export function visibleHQNavItems(): HQNavItem[] {
