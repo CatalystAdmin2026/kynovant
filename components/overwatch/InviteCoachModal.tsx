@@ -26,7 +26,7 @@ type InviteResult =
   | { kind: "sent" }
   | { kind: "already_invited" }
   | { kind: "already_active" }
-  | { kind: "email_failed"; actionLink: string };
+  | { kind: "email_failed" };
 
 const EMPTY_FORM = { firstName: "", email: "" };
 
@@ -47,7 +47,7 @@ function resultCopy(result: InviteResult): { title: string; body: string } {
     case "email_failed":
       return {
         title: "Account Created — Email Failed",
-        body: "The invitation exists, but we couldn't send the email. Share this link with them directly.",
+        body: "The invitation exists, but we couldn't send the email. Retry delivery now or try again later.",
       };
   }
 }
@@ -74,8 +74,7 @@ export default function InviteCoachModal({ open, onClose }: Props) {
     resetAll();
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submitInvite() {
     const firstName = form.firstName.trim();
     const email = form.email.trim();
 
@@ -96,7 +95,6 @@ export default function InviteCoachModal({ open, onClose }: Props) {
         ok: boolean;
         status?: string;
         error?: string;
-        actionLink?: string;
       };
 
       if (data.ok && data.status === "sent") {
@@ -105,8 +103,8 @@ export default function InviteCoachModal({ open, onClose }: Props) {
         setResult({ kind: "already_invited" });
       } else if (data.ok && data.status === "already_active") {
         setResult({ kind: "already_active" });
-      } else if (!data.ok && data.status === "email_failed" && data.actionLink) {
-        setResult({ kind: "email_failed", actionLink: data.actionLink });
+      } else if (!data.ok && data.status === "email_failed") {
+        setResult({ kind: "email_failed" });
       } else {
         // Never surfaces raw exception/database text — always the
         // server's own user-facing message, or a generic fallback.
@@ -117,6 +115,11 @@ export default function InviteCoachModal({ open, onClose }: Props) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await submitInvite();
   }
 
   const input =
@@ -144,17 +147,24 @@ export default function InviteCoachModal({ open, onClose }: Props) {
           <p className="text-white text-sm font-semibold mb-1">{form.firstName || "Invitation"}</p>
           <p className="text-gray-500 text-xs mb-6 leading-relaxed">{resultCopy(result).body}</p>
 
-          {result.kind === "email_failed" && (
-            <div className="mb-6 border border-white/10 bg-[#141618] px-3 py-2.5 text-left">
-              <p className="text-[10px] uppercase tracking-[0.1em] text-gray-500 mb-1.5">Invitation link</p>
-              <p className="text-white/70 text-[11px] break-all leading-relaxed">{result.actionLink}</p>
-            </div>
-          )}
-
           <div className="flex flex-col gap-2.5">
+            {result.kind === "email_failed" && (
+              <button
+                onClick={() => {
+                  setResult(null);
+                  void submitInvite();
+                }}
+                disabled={submitting}
+                className="bg-[#C9A24D] text-black font-bold text-[11px] tracking-[0.14em] uppercase py-3.5 hover:bg-[#D4B56A] transition-colors disabled:opacity-50"
+              >
+                Retry Invitation
+              </button>
+            )}
             <button
               onClick={inviteAnother}
-              className="bg-[#C9A24D] text-black font-bold text-[11px] tracking-[0.14em] uppercase py-3.5 hover:bg-[#D4B56A] transition-colors"
+              className={result.kind === "email_failed"
+                ? "text-gray-500 hover:text-gray-300 text-[11px] tracking-[0.1em] uppercase py-2 transition-colors"
+                : "bg-[#C9A24D] text-black font-bold text-[11px] tracking-[0.14em] uppercase py-3.5 hover:bg-[#D4B56A] transition-colors"}
             >
               Invite Another Coach
             </button>

@@ -39,16 +39,11 @@
 // an email itself). The returned link still resolves through
 // /auth/callback exactly like every other invite in this codebase.
 //
-// RESEND-FOR-A-STILL-PENDING-INVITE IS DELIBERATELY NOT IMPLEMENTED
-// HERE. app/api/coach-signup/route.ts documents that inviteUserByEmail
-// specifically is a proven-safe resend for a status='invited' user;
-// generateLink's behavior for an already-existing-but-unconfirmed user
-// has not been exercised in this codebase and is not verified here
-// (no real Auth mutation was performed during this review — see the
-// PR report). Rather than gamble on that against a real Auth user
-// record, a still-pending invite is reported back as "already_invited"
-// with no further Auth-layer call. The founder can still ask the
-// coach to check their inbox, or use the plain self-service link.
+// A still-pending invite is safely resendable through the existing
+// inviteUserByEmail path. This is the same behavior already used by
+// app/api/coach-signup/route.ts for unconfirmed users. It intentionally
+// uses Supabase's established invite email on retry rather than relying
+// on unverified generateLink behavior for an existing Auth user.
 // ─────────────────────────────────────────────────────────────
 
 import { type NextRequest, NextResponse } from "next/server";
@@ -82,6 +77,16 @@ interface InviteCoachPayload {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_NAME_LENGTH = 200;
 const MAX_EMAIL_LENGTH = 200;
+
+async function resendPendingInvite(email: string): Promise<{ ok: true; userId: string } | { ok: false }> {
+  const admin = createAdminClient();
+  const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.kynovant.com";
+  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
+    redirectTo: `${siteOrigin}/auth/callback`,
+  });
+  if (error || !data.user) return { ok: false };
+  return { ok: true, userId: data.user.id };
+}
 
 function validate(body: InviteCoachPayload): string | null {
   if (!body.firstName?.trim()) return "First name is required.";
@@ -258,16 +263,39 @@ export async function POST(req: NextRequest) {
         );
       }
       if (existing.status === "invited") {
-        // Already has a pending, unconfirmed invite (from this path,
-        // self-service, or the plain admin-invite path) — see this
-        // file's header for why this reports back rather than
-        // attempting an automatic resend.
+        // A prior Resend outage may have left the Auth user pending.
+        // Reuse the existing, proven-safe resend behavior instead of
+        // permanently treating that account as blocked.
+        try {
+          const resend = await resendPendingInvite(email);
+          if (resend.ok) {
+            await markAcquisitionInviteStatus({
+              normalizedEmail,
+              status: "sent",
+              accountUserId: resend.userId,
+              inviteSentAt: new Date(),
+            }).catch(() => {});
+            return NextResponse.json({ ok: true, status: "sent" });
+          }
+        } catch (err) {
+          if (err instanceof AdminClientConfigError) {
+            console.error("[InviteCoach] " + err.message);
+            return NextResponse.json(
+              { ok: false, error: "Invite service is temporarily unavailable. Please try again shortly." },
+              { status: 503 },
+            );
+          }
+          console.error("[InviteCoach] pending invite resend failed:", err instanceof Error ? err.message : err);
+        }
         await markAcquisitionInviteStatus({
           normalizedEmail,
-          status: "already_invited",
+          status: "failed",
           accountUserId: existing.id,
         }).catch(() => {});
-        return NextResponse.json({ ok: true, status: "already_invited" });
+        return NextResponse.json(
+          { ok: false, status: "email_failed", error: "The pending invitation could not be resent. Please try again." },
+          { status: 502 },
+        );
       }
       // Existing coach/admin account already active/suspended/archived.
       await markAcquisitionInviteStatus({
@@ -331,15 +359,9 @@ export async function POST(req: NextRequest) {
     });
 
     if (!sendResult.ok) {
-      // The account already exists (status='invited') — this is the
-      // "DB write succeeded, email send failed" case (Phase 6). Not
-      // rolled back: a still-pending invited account is harmless and
-      // matches this codebase's existing accepted tradeoff for
-      // Storage-then-DB writes (no two-phase commit anywhere in this
-      // codebase's provisioning paths). The founder gets the real
-      // link back directly so they can share it manually — the exact
-      // same token that would have been emailed, over the same
-      // trusted, authenticated admin channel.
+      // The account already exists (status='invited') — retain it so
+      // the founder can retry through the pending-invite resend path
+      // above. Do not expose the raw action token in the response.
       await markAcquisitionInviteStatus({
         normalizedEmail,
         status: "failed",
@@ -349,8 +371,7 @@ export async function POST(req: NextRequest) {
         {
           ok: false,
           status: "email_failed",
-          error: "The invitation was created, but the email couldn't be sent. Share this link directly:",
-          actionLink,
+          error: "The invitation was created, but the email couldn't be sent. Please retry the invitation.",
         },
         { status: 502 },
       );

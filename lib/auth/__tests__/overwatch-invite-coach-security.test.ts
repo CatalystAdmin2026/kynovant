@@ -152,13 +152,15 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — duplicate/collisi
     expect(activeBlock).not.toContain("provisionInvitedCoach");
   });
 
-  it("does not attempt an automatic resend for an already-invited-but-unconfirmed account (documented, deliberate scope decision)", () => {
+  it("resends an already-invited-but-unconfirmed account through the existing safe invite path", () => {
     const invitedBlock = route.slice(
       route.indexOf('if (existing.status === "invited")'),
       route.indexOf("// Existing coach/admin account already active"),
     );
     expect(invitedBlock).not.toContain("generateLink");
-    expect(invitedBlock).toContain('status: "already_invited"');
+    expect(invitedBlock).toContain("resendPendingInvite");
+    expect(invitedBlock).toContain('status: "sent"');
+    expect(invitedBlock).toContain('status: "email_failed"');
   });
 });
 
@@ -212,7 +214,7 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — funnel integrity:
 
   it("the 'sent' status write happens strictly after sendFounderInviteEmail's result is checked, not merely after provisioning", () => {
     const sendResultIndex = route.indexOf("const sendResult = await sendFounderInviteEmail(");
-    const sentStatusIndex = route.indexOf('status: "sent",');
+    const sentStatusIndex = route.indexOf('status: "sent",', sendResultIndex);
     expect(sendResultIndex).toBeGreaterThan(-1);
     expect(sentStatusIndex).toBeGreaterThan(sendResultIndex);
   });
@@ -224,6 +226,7 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — funnel integrity:
     );
     expect(failureBranch).toContain('status: "failed"');
     expect(failureBranch).not.toContain('status: "sent"');
+    expect(failureBranch).not.toContain("actionLink");
   });
 });
 
