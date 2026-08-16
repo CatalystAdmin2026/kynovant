@@ -1,64 +1,82 @@
-import { sql } from "drizzle-orm";
-import { getDb } from "@/lib/db/client";
+#!/usr/bin/env npx tsx
+// ─────────────────────────────────────────────────────────────
+// Catalyst OS — Overwatch V2: Fixture Account Classifier (CLI)
+//
+// Usage:
+//   set -a && source .env.local && set +a && npx tsx scripts/repairs/classify-overwatch-fixtures.ts
+//   set -a && source .env.local && set +a && npx tsx scripts/repairs/classify-overwatch-fixtures.ts --apply
+//
+// Requires DATABASE_URL_DIRECT.
+//
+// Dry run (no flag) is the default and ONLY behavior without --apply:
+// it prints every matching candidate and writes nothing. --apply is
+// required to actually insert internal_account_flags rows.
+//
+// See scripts/repairs/overwatch-fixture-classification.ts for the pure,
+// tested matching/classification logic and the approved
+// FIXTURE_PATTERNS list (lib/db/__tests__/classify-overwatch-
+// fixtures.test.ts) — this file is a thin CLI wrapper around that
+// module's exported functions, so the CLI and the tests exercise the
+// exact same query, never a re-implementation of it. Same split as
+// scripts/repair-orphaned-system-exercises.ts /
+// scripts/repairs/orphaned-system-exercises.ts.
+//
+// PATTERNS ARE FIXED AND REVIEWED — matching is restricted to exactly
+// the five explicit @isolation-test.invalid test-coach prefixes in
+// overwatch-fixture-classification.ts's FIXTURE_PATTERNS. Do not
+// broaden them without a fresh manual review; a wider pattern here
+// would risk auto-classifying a real coach account as a test fixture.
+//
+// ORIGINAL BUG (fixed here): this script used to build its query via
+// drizzle-orm's `sql` tag with `unnest(${FIXTURE_PATTERNS}::text[])` —
+// drizzle's tag does not serialize an interpolated JS array as a
+// Postgres array literal the way postgres.js's own tag does, so that
+// bound as a single parenthesized record/tuple parameter and failed
+// every call with "cannot cast type record to text[]" (Postgres error
+// 42846). This wrapper now uses a raw postgres.js connection (matching
+// how scripts/repair-orphaned-system-exercises.ts and
+// scripts/backfill-coach-ownership.ts already connect for one-off admin
+// scripts), whose own tag serializes JS arrays correctly — see
+// overwatch-fixture-classification.ts's header for the full
+// explanation.
+// ─────────────────────────────────────────────────────────────
 
-const FIXTURE_PATTERNS = [
-  "program-gen-test-coach-%@isolation-test.invalid",
-  "messaging-test-coach-%@isolation-test.invalid",
-  "isolation-test-coach-%@isolation-test.invalid",
-  "review-triage-test-coach-%@isolation-test.invalid",
-  "candidate-test-coach-%@isolation-test.invalid",
-] as const;
+import postgres from "postgres";
+import {
+  FIXTURE_PATTERNS,
+  findFixtureCandidates,
+  classifyFixtureCandidates,
+} from "./overwatch-fixture-classification";
 
 const apply = process.argv.includes("--apply");
+const dbUrl = process.env.DATABASE_URL_DIRECT;
+
+if (!dbUrl) {
+  console.error("DATABASE_URL_DIRECT is not set.");
+  console.error("Load your .env.local before running this script.");
+  process.exit(1);
+}
 
 async function main() {
-  const db = getDb();
-  const rows = await db.execute<{
-    id: string;
-    email: string;
-    normalized_email: string;
-    matched_pattern: string;
-  }>(sql`
-    select
-      u.id,
-      u.email,
-      u.normalized_email,
-      pattern.pattern as matched_pattern
-    from users u
-    cross join unnest(${FIXTURE_PATTERNS}::text[]) as pattern(pattern)
-    left join internal_account_flags f on f.user_id = u.id
-    where u.role = 'coach'
-      and f.user_id is null
-      and u.normalized_email like pattern.pattern
-    order by u.normalized_email
-  `);
+  const sql = postgres(dbUrl!, { prepare: false });
 
   console.log(`Overwatch fixture classifier ${apply ? "APPLY" : "DRY RUN"}`);
   console.log(`Patterns: ${FIXTURE_PATTERNS.join(", ")}`);
-  console.table(rows);
+
+  const candidates = await findFixtureCandidates(sql);
+  console.table(candidates);
 
   if (!apply) {
-    console.log("No rows updated. Re-run with --apply after reviewing the matched accounts.");
+    console.log(
+      `\n${candidates.length} candidate(s) found. No rows updated (dry run). Re-run with --apply after reviewing the matched accounts.`,
+    );
+    await sql.end();
     return;
   }
 
-  const updated = await db.execute<{ user_id: string }>(sql`
-    insert into internal_account_flags (user_id, classification, reason, reviewed_at)
-    select distinct
-      u.id,
-      'test_fixture'::account_classification,
-      'Reviewed legacy Overwatch fixture backfill: normalized_email matched explicit test-coach pattern.',
-      now()
-    from users u
-    cross join unnest(${FIXTURE_PATTERNS}::text[]) as pattern(pattern)
-    left join internal_account_flags f on f.user_id = u.id
-    where u.role = 'coach'
-      and f.user_id is null
-      and u.normalized_email like pattern.pattern
-    returning user_id
-  `);
-
-  console.log(`Classified ${updated.length} fixture account(s).`);
+  const result = await classifyFixtureCandidates(sql);
+  console.log(`\nClassified ${result.classifiedCount} fixture account(s).`);
+  await sql.end();
 }
 
 main().catch((error) => {

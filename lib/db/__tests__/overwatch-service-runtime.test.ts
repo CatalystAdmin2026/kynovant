@@ -69,7 +69,14 @@ describe("Overwatch metrics runtime safety", () => {
   });
 
   it("limits the legacy fixture classifier to the known invalid fixture domain", () => {
-    const script = source("scripts/repairs/classify-overwatch-fixtures.ts");
+    // FIXTURE_PATTERNS moved to overwatch-fixture-classification.ts (the
+    // pure, tested matching/classification module) when the classifier's
+    // drizzle-orm array-binding bug was fixed — classify-overwatch-
+    // fixtures.ts is now a thin CLI wrapper that imports the pattern
+    // list rather than declaring it. The invariant this test guards is
+    // unchanged: each approved pattern is kept whole, never split from
+    // its @isolation-test.invalid domain suffix.
+    const script = source("scripts/repairs/overwatch-fixture-classification.ts");
 
     expect(script).toContain("@isolation-test.invalid");
     expect(script).toContain("candidate-test-coach-%@isolation-test.invalid");
