@@ -4,19 +4,28 @@
 // Proves, against a REAL database connection (same rationale as
 // document-tenant-isolation.test.ts / nutrition-target-service.test.ts):
 //
-//   1. Pure validation (validateCredentialSubmission, isExpired) —
-//      no DB, no I/O.
+//   1. Pure validation (validateCredentialSubmission, isExpired,
+//      validateFileSignature) — no DB, no I/O.
 //   2. submitCredential's full state machine: new submission, blocked
 //      while pending, blocked while approved-and-unexpired, allowed
 //      as resubmission after rejection, allowed as renewal after
 //      expiration — and that resubmission clears the prior review
-//      decision.
+//      decision FROM THE CURRENT ROW while it remains durably readable
+//      via coach_credential_reviews (the append-only history table —
+//      see schema-coach-credentials.ts / ADR-015 for why the split
+//      exists: an earlier version of this schema had no history table
+//      at all, and this exact resubmission path provably erased the
+//      prior reviewer/decision/notes with no way to recover them).
 //   3. reviewCredential sets status/reviewedBy/reviewedAt/reviewNotes
 //      correctly and only from the values the caller (an already
 //      admin-authorized action) explicitly passes — see
 //      lib/auth/__tests__/rd-credential-gate.test.ts for the
 //      source-level proof that reviewedBy can never be
-//      client-supplied.
+//      client-supplied. Also proves the runtime decision guard (not
+//      just a TypeScript type) rejects a decision value outside
+//      {"approved","rejected"} without mutating the row — a Server
+//      Action's TS parameter type is not enforced against a caller
+//      invoking it directly with an arbitrary string.
 //   4. Cross-coach isolation: getMyCredential/submitCredential/
 //      generateCoachCredentialProofUrl are all keyed by coachId with
 //      a parameterized WHERE clause — a coachId that owns no row
@@ -38,18 +47,20 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "crypto";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { users } from "../schema";
-import { coachCredentials } from "../schema-coach-credentials";
+import { coachCredentials, coachCredentialReviews } from "../schema-coach-credentials";
 import {
   validateCredentialSubmission,
+  validateFileSignature,
   isExpired,
   submitCredential,
   getMyCredential,
   reviewCredential,
   getCredentialById,
+  getCredentialReviewHistory,
   generateCoachCredentialProofUrl,
   MAX_PROOF_DOCUMENT_SIZE_BYTES,
   type UploadedProof,
@@ -103,6 +114,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const userIds = [coachA.id, coachB.id, admin.id].filter(Boolean);
+  // Children before parents (FK restrict): review-history events
+  // before their coach_credentials row, before the users themselves.
+  await db.delete(coachCredentialReviews).where(
+    inArray(coachCredentialReviews.coachId, [coachA.id, coachB.id].filter(Boolean)),
+  );
   await db.delete(coachCredentials).where(inArray(coachCredentials.coachId, [coachA.id, coachB.id].filter(Boolean)));
   if (userIds.length > 0) {
     await db.delete(users).where(inArray(users.id, userIds));
@@ -158,6 +174,59 @@ describe("validateCredentialSubmission — pure, no I/O", () => {
 
   it("rejects a disallowed MIME type", () => {
     expect(validateCredentialSubmission(validInput, { ...validFile, mimeType: "application/zip" }).ok).toBe(false);
+  });
+});
+
+describe("validateFileSignature — pure, no I/O (closes the mislabeled-upload gap)", () => {
+  // validateCredentialSubmission only checks the CLAIMED mimeType; a
+  // caller controls that value freely (it's the browser's File.type,
+  // or whatever a raw multipart client sends). validateFileSignature
+  // checks the real bytes.
+  const realPdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]); // "%PDF-1.4"
+  const realPngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+  const realJpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  const realWebpBytes = new Uint8Array([
+    0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+  ]); // "RIFF????WEBP"
+  const htmlPayloadBytes = new TextEncoder().encode("<html><script>alert(1)</script></html>");
+
+  it("accepts real PDF bytes declared as application/pdf", () => {
+    expect(validateFileSignature(realPdfBytes, "application/pdf").ok).toBe(true);
+  });
+
+  it("accepts real PNG bytes declared as image/png", () => {
+    expect(validateFileSignature(realPngBytes, "image/png").ok).toBe(true);
+  });
+
+  it("accepts real JPEG bytes declared as image/jpeg", () => {
+    expect(validateFileSignature(realJpegBytes, "image/jpeg").ok).toBe(true);
+  });
+
+  it("accepts real WebP bytes declared as image/webp", () => {
+    expect(validateFileSignature(realWebpBytes, "image/webp").ok).toBe(true);
+  });
+
+  it("rejects an HTML/script payload disguised as application/pdf", () => {
+    expect(validateFileSignature(htmlPayloadBytes, "application/pdf").ok).toBe(false);
+  });
+
+  it("rejects an HTML/script payload disguised as image/png — the exact attack this check exists for: a malicious upload later served straight into an admin's browser session", () => {
+    expect(validateFileSignature(htmlPayloadBytes, "image/png").ok).toBe(false);
+  });
+
+  it("rejects real PNG bytes mislabeled as application/pdf (cross-type mismatch, not just non-image content)", () => {
+    expect(validateFileSignature(realPngBytes, "application/pdf").ok).toBe(false);
+  });
+
+  it("rejects a claimed MIME type outside the four allowed types, even if a check for it existed", () => {
+    expect(validateFileSignature(realPdfBytes, "application/zip").ok).toBe(false);
+  });
+
+  it("rejects empty bytes for every allowed type", () => {
+    const empty = new Uint8Array(0);
+    for (const type of ["application/pdf", "image/png", "image/jpeg", "image/webp"]) {
+      expect(validateFileSignature(empty, type).ok).toBe(false);
+    }
   });
 });
 
@@ -231,6 +300,26 @@ describe("submitCredential — state machine", () => {
     expect(updated?.reviewNotes).toBeNull();
     expect(updated?.reviewedBy).toBeNull();
     expect(updated?.reviewedAt).toBeNull();
+    // Automation-readiness fields reset alongside the review decision —
+    // a resubmitted credential has no current verification until
+    // reviewed again.
+    expect(updated?.verificationMethod).toBeNull();
+    expect(updated?.lastVerifiedAt).toBeNull();
+
+    // THE ACTUAL FIX: the prior rejection is gone from the current row
+    // (asserted above) but NOT gone from the database — it survives in
+    // coach_credential_reviews. This is the concrete proof for
+    // ADR-015's "does the one-row-upsert design destroy evidence"
+    // question: it does not, because this history exists.
+    const history = await getCredentialReviewHistory(coachA.id);
+    const priorRejection = history.find((h) => h.action === "rejected");
+    expect(priorRejection).toBeDefined();
+    expect(priorRejection?.notes).toBe("Illegible document.");
+    expect(priorRejection?.performedBy).toBe(admin.id);
+    expect(priorRejection?.performedByType).toBe("human");
+    // And the resubmission itself is also logged.
+    const submittedEvents = history.filter((h) => h.action === "submitted");
+    expect(submittedEvents.length).toBeGreaterThanOrEqual(2); // original submit + this resubmit
   });
 
   it("allows renewal (same row) when the existing approved credential has expired", async () => {
@@ -276,6 +365,86 @@ describe("reviewCredential", () => {
     const result = await reviewCredential(randomUUID(), admin.id, "approved", null);
     expect(result.ok).toBe(false);
   });
+
+  it("approval sets verificationMethod='manual_review' and lastVerifiedAt; rejection leaves both null", async () => {
+    const submitted = await submitCredential(
+      coachB.id,
+      { credentialType: "rd", licenseNumber: "RD-B-AUTOFIELDS", issuingState: "Nevada", expirationDate: futureDate(200) },
+      fakeProof(),
+    );
+    if (!submitted.ok) throw new Error("fixture setup failed");
+
+    await reviewCredential(submitted.credentialId, admin.id, "approved", "Confirmed.");
+    const approvedRow = await getCredentialById(submitted.credentialId);
+    expect(approvedRow?.verificationMethod).toBe("manual_review");
+    expect(approvedRow?.lastVerifiedAt).not.toBeNull();
+
+    // Re-submit then reject — verificationMethod/lastVerifiedAt must
+    // not carry over from the earlier approval.
+    await db.update(coachCredentials).set({ expirationDate: "2000-01-01" }).where(eq(coachCredentials.id, submitted.credentialId));
+    await submitCredential(
+      coachB.id,
+      { credentialType: "rd", licenseNumber: "RD-B-AUTOFIELDS-2", issuingState: "Nevada", expirationDate: futureDate(200) },
+      fakeProof(),
+    );
+    await reviewCredential(submitted.credentialId, admin.id, "rejected", "Renewal illegible.");
+    const rejectedRow = await getCredentialById(submitted.credentialId);
+    expect(rejectedRow?.verificationMethod).toBeNull();
+    expect(rejectedRow?.lastVerifiedAt).toBeNull();
+  });
+
+  it("every submission and every review decision writes a coach_credential_reviews event, correctly attributed", async () => {
+    const submitted = await submitCredential(
+      coachB.id,
+      { credentialType: "rdn", licenseNumber: "RD-B-HIST", issuingState: "Nevada", expirationDate: futureDate(200) },
+      fakeProof(),
+    );
+    if (!submitted.ok) throw new Error("fixture setup failed");
+    await reviewCredential(submitted.credentialId, admin.id, "approved", "Looks good.");
+
+    const history = await getCredentialReviewHistory(coachB.id);
+    const submittedEvent = history.find(
+      (h) => h.credentialId === submitted.credentialId && h.action === "submitted",
+    );
+    const approvedEvent = history.find(
+      (h) => h.credentialId === submitted.credentialId && h.action === "approved",
+    );
+    expect(submittedEvent).toBeDefined();
+    expect(submittedEvent?.performedBy).toBe(coachB.id);
+    expect(submittedEvent?.performedByType).toBe("human");
+    expect(approvedEvent).toBeDefined();
+    expect(approvedEvent?.performedBy).toBe(admin.id);
+    expect(approvedEvent?.performedByType).toBe("human");
+    expect(approvedEvent?.verificationMethod).toBe("manual_review");
+    expect(approvedEvent?.notes).toBe("Looks good.");
+  });
+
+  it("runtime-rejects a decision value outside {approved, rejected} — defense-in-depth beyond the TS type, since a Server Action's type is not enforced against a direct invocation with an arbitrary string", async () => {
+    const submitted = await submitCredential(
+      coachA.id,
+      { credentialType: "rd", licenseNumber: "RD-A-DECISION-GUARD", issuingState: "Texas", expirationDate: futureDate(365) },
+      fakeProof(),
+    );
+    // coachA may already have a row from earlier tests in this file
+    // (submitCredential returns ok:false in that case) — either way,
+    // resolve a real credentialId to attack.
+    const target = submitted.ok ? submitted.credentialId : (await getMyCredential(coachA.id))!.id;
+    const before = await getCredentialById(target);
+
+    // Bypasses the TS union type deliberately, as a direct/tampered
+    // call to the Server Action's underlying endpoint would.
+    const result = await reviewCredential(
+      target,
+      admin.id,
+      "pending" as unknown as "approved",
+      "should never apply",
+    );
+    expect(result.ok).toBe(false);
+
+    const after = await getCredentialById(target);
+    expect(after?.status).toBe(before?.status); // unchanged — no mutation occurred
+    expect(after?.reviewNotes).toBe(before?.reviewNotes);
+  });
 });
 
 describe("cross-coach isolation", () => {
@@ -306,5 +475,67 @@ describe("cross-coach isolation", () => {
         proofDocumentMimeType: "application/pdf",
       }),
     ).rejects.toThrow();
+  });
+
+  it("getCredentialReviewHistory never returns another coach's events", async () => {
+    const historyA = await getCredentialReviewHistory(coachA.id);
+    const historyB = await getCredentialReviewHistory(coachB.id);
+    expect(historyA.every((h) => h.coachId === coachA.id)).toBe(true);
+    expect(historyB.every((h) => h.coachId === coachB.id)).toBe(true);
+  });
+
+  it("coach_credential_reviews is append-only in practice — no UPDATE/DELETE path exists anywhere in coach-credential-service.ts", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const source = readFileSync(resolve(process.cwd(), "lib/db/coach-credential-service.ts"), "utf8");
+    expect(source).not.toMatch(/\.update\(coachCredentialReviews\)/);
+    expect(source).not.toMatch(/\.delete\(coachCredentialReviews\)/);
+  });
+});
+
+describe("coach_credentials / coach_credential_reviews — RLS policy presence (introspection; service-role connection bypasses RLS by design, same caveat as nutrition-target-service.test.ts)", () => {
+  it("coach_credentials has row-level security enabled with the owner-select policy", async () => {
+    const rlsRows = await db.execute<{ relrowsecurity: boolean }>(
+      sql`select relrowsecurity from pg_class where relname = 'coach_credentials'`,
+    );
+    expect(rlsRows[0]?.relrowsecurity).toBe(true);
+
+    const policyRows = await db.execute<{ policyname: string; cmd: string; qual: string | null }>(
+      sql`select policyname, cmd, qual from pg_policies where tablename = 'coach_credentials'`,
+    );
+    const policy = policyRows.find((r) => r.policyname === "coach_credentials_owner_select");
+    expect(policy).toBeTruthy();
+    expect(policy?.cmd).toBe("SELECT");
+    expect(policy?.qual).toContain("auth.uid()");
+  });
+
+  it("coach_credential_reviews has row-level security enabled with the owner-select policy", async () => {
+    const rlsRows = await db.execute<{ relrowsecurity: boolean }>(
+      sql`select relrowsecurity from pg_class where relname = 'coach_credential_reviews'`,
+    );
+    expect(rlsRows[0]?.relrowsecurity).toBe(true);
+
+    const policyRows = await db.execute<{ policyname: string; cmd: string; qual: string | null }>(
+      sql`select policyname, cmd, qual from pg_policies where tablename = 'coach_credential_reviews'`,
+    );
+    const policy = policyRows.find((r) => r.policyname === "coach_credential_reviews_owner_select");
+    expect(policy).toBeTruthy();
+    expect(policy?.cmd).toBe("SELECT");
+    expect(policy?.qual).toContain("auth.uid()");
+  });
+});
+
+describe("automation-readiness defaults", () => {
+  it("manualReviewRequired defaults true on a fresh submission — every coach starts in the exception/manual queue until an automated verifier exists", async () => {
+    const submitted = await submitCredential(
+      coachB.id,
+      { credentialType: "rd", licenseNumber: "RD-B-DEFAULTS", issuingState: "Nevada", expirationDate: futureDate(200) },
+      fakeProof(),
+    );
+    // coachB may already have a row from an earlier test — either way,
+    // read back whatever row is current and confirm the default.
+    const mine = await getMyCredential(coachB.id);
+    expect(mine?.manualReviewRequired).toBe(true);
+    void submitted; // result not load-bearing for this assertion
   });
 });

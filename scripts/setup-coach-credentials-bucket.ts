@@ -29,11 +29,17 @@ import { createClient } from "@supabase/supabase-js";
 
 const BUCKET_NAME = "coach-credentials";
 
-// Mirrors coach-credential-service.ts's MAX_PROOF_DOCUMENT_SIZE_BYTES —
-// kept as a literal here (rather than importing from a server-only
-// module) so this script has zero app-code dependencies and can run
-// standalone, same convention as setup-documents-bucket.ts.
+// Mirrors coach-credential-service.ts's MAX_PROOF_DOCUMENT_SIZE_BYTES
+// and ALLOWED_PROOF_MIME_TYPES — kept as literals here (rather than
+// importing from a server-only module) so this script has zero
+// app-code dependencies and can run standalone, same convention as
+// setup-documents-bucket.ts. Setting allowedMimeTypes at the bucket
+// level is defense-in-depth alongside the application-level allow-list
+// and file-signature checks (coach-credential-service.ts) — even a
+// bug in application code could not make Storage accept a disallowed
+// type.
 const MAX_PROOF_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+const ALLOWED_PROOF_MIME_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
 
 async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -61,6 +67,7 @@ async function main() {
   const { error: createError } = await supabase.storage.createBucket(BUCKET_NAME, {
     public: false, // private — all access via short-lived signed URLs only
     fileSizeLimit: MAX_PROOF_DOCUMENT_SIZE_BYTES,
+    allowedMimeTypes: ALLOWED_PROOF_MIME_TYPES,
   });
 
   if (createError) {

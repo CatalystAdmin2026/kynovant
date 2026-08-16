@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ShieldCheck } from "lucide-react";
 import { requireCoachOrAdminPage } from "@/lib/auth/guards";
 import { getMyCredential, isExpired } from "@/lib/db/coach-credential-service";
@@ -63,9 +64,9 @@ export default async function CoachCredentialsPage() {
             <p className="text-gray-400 text-sm font-medium">Not applicable to admin accounts</p>
             <p className="text-gray-600 text-xs mt-1">
               Review coach submissions at{" "}
-              <a href="/admin/growth/credentials" className="underline underline-offset-2 hover:text-gray-400">
+              <Link href="/admin/credentials" className="underline underline-offset-2 hover:text-gray-400">
                 Admin → Credentials
-              </a>
+              </Link>
               .
             </p>
           </div>

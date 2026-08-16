@@ -4,6 +4,7 @@ import {
   submitCredential,
   uploadCredentialProof,
   validateCredentialSubmission,
+  validateFileSignature,
   MAX_PROOF_DOCUMENT_SIZE_BYTES,
 } from "@/lib/db/coach-credential-service";
 
@@ -59,6 +60,17 @@ export async function POST(req: NextRequest) {
     const fileBytes = new Uint8Array(await file.arrayBuffer());
     if (fileBytes.byteLength > MAX_PROOF_DOCUMENT_SIZE_BYTES) {
       return NextResponse.json({ ok: false, error: "Proof document must be 10MB or smaller." }, { status: 400 });
+    }
+
+    // The claimed MIME type (file.type) is caller-declared, not proof
+    // of actual content — validateCredentialSubmission's allow-list
+    // check alone does not catch a mislabeled upload. This checks the
+    // real bytes before anything reaches Storage or is later served
+    // straight into an admin's browser session (see
+    // validateFileSignature's own header comment).
+    const signatureCheck = validateFileSignature(fileBytes, file.type);
+    if (!signatureCheck.ok) {
+      return NextResponse.json({ ok: false, error: signatureCheck.error }, { status: 400 });
     }
 
     const proof = await uploadCredentialProof(guard.dbUser.id, {

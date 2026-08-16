@@ -761,6 +761,50 @@ All copy, emotional design, and architectural patterns must follow:
 
 ---
 
+### ADR-015 — RD/RDN Credential Gate: Current-State Row + Append-Only Review History, Automation-Ready Boundary
+Status: Active
+Date: 2026-08-15
+
+#### Decision
+
+Kynovant will restrict a future AI-assisted, individualized meal-plan feature (not built yet) to coaches with an admin-approved, unexpired Registered Dietitian (RD) or Registered Dietitian Nutritionist (RDN) credential on file. The credential gate is built and independently security-reviewed BEFORE that feature exists (`lib/auth/rd-credential.ts`, `lib/db/coach-credential-service.ts`, `drizzle/0028_coach_rd_credentials.sql`).
+
+**Two tables, not one:**
+
+- `coach_credentials` — one row per coach (unique on `coach_id`). This is the CURRENT STATE the gate (`isVerifiedRd`) reads: exactly one unambiguous row answers "is this coach verified right now" in a single indexed lookup. Resubmission (after rejection, or renewal after expiration) updates this row in place.
+- `coach_credential_reviews` — append-only. Every submission and every review decision (approve/reject) is logged here as an immutable event before `coach_credentials` is upserted, so a resubmission's overwrite of `reviewedAt`/`reviewedBy`/`reviewNotes` never destroys the evidence of what was decided, by whom, and why.
+
+**"Approved" is a status, not a claim of independent verification.** The gate's authorization boundary is exactly: `status = 'approved' AND expirationDate >= today`, computed identically everywhere via `isExpired()` — never a 4th stored "expired" status (would require a background job and could drift stale). Today, "approved" always means a human admin reviewed the submitted document; it does NOT mean Kynovant independently confirmed the license with the issuing board. The schema records HOW the current status was established (`verificationMethod`, defaulting `'manual_review'`) precisely so this distinction remains visible and extensible without a future rewrite — see below.
+
+**Admin gets no bypass.** `isVerifiedRd()` never checks role; an admin account must have its own approved `coach_credentials` row like any coach. RD/RDN verification is a real-world licensure fact about a specific person, not a data-ownership boundary admin blanket-access conventions elsewhere in this codebase apply to.
+
+**Automation-readiness, added deliberately narrow.** Four nullable/defaulted columns on `coach_credentials` (`verificationMethod`, `lastVerifiedAt`, `manualReviewRequired` — the future exception-queue flag, defaults `true` — and `nextReverificationAt`, unused until a reverification job exists) let a future automated verification pipeline populate real state without a schema change, while the authorization boundary itself never reads any of them beyond `status`/`expirationDate`. Per-event provenance (`verificationSource`, `externalReference`, `reasonCode`) lives on `coach_credential_reviews` instead — those are properties of a specific verification attempt, not of "the coach's current state." See `lib/db/coach-credential-verifier.ts` for the (unimplemented, unwired) `CredentialVerifier` interface a future provider-neutral automated verifier would satisfy.
+
+#### Why
+
+Building the security gate before the feature it will gate exists means the gate can be adversarially reviewed on its own, with no product pressure to relax it for a launch deadline. Splitting current-state from history lets the gate stay a fast, single-row, unambiguous check forever, while still satisfying this document's own established principle (ADR-014: "append-only: previous targets are never overwritten") for a second compliance-sensitive domain, without forcing `coach_credentials` itself to become a version history table the gate would then need to query more expensively.
+
+#### Alternatives Considered
+
+**Single table, `coach_credentials` itself append-only (mirroring `client_nutrition_targets` exactly):** Would require `isVerifiedRd()` to find "the current row" via a status/date-ordered query instead of a unique-indexed lookup, and would need application-level logic (or a partial unique index) to enforce "at most one currently-active credential per coach" the same way `client_nutrition_targets` enforces "at most one published target per client." Rejected for Phase 1 as more machinery than the problem needs: a credential's current state genuinely is 1:1 with a coach in a way a client's nutrition target (which has a real effective-dated history of different coaching decisions over time) is not. Revisit if a real compliance need ever requires point-in-time snapshots of the submitted license/proof-document fields themselves, not just the review decision metadata `coach_credential_reviews` already captures.
+
+**A 4th `expired` status:** Rejected — see Decision above; a derived condition cannot drift, a background-job-maintained status can.
+
+**Storing raw verification-provider responses or an LLM's free-text assessment as "verified":** Rejected outright, not deferred. A future `CredentialVerifier` must report a structured, source-attributed outcome; "the document looks legitimate" from a model is, at most, a routing signal toward manual review — never a basis for `status = 'approved'`.
+
+#### Tradeoffs
+
+- Every submission/review write now happens inside a transaction (current-state upsert + history-event insert), a small amount of additional write complexity accepted for the audit guarantee.
+- The automation-readiness columns are inert today — no automated verifier exists yet, so `manualReviewRequired` is `true` and `verificationMethod` is `'manual_review'` for every row until one is built.
+
+#### Long-term Benefits
+
+- A resubmission after rejection no longer erases evidence of the prior rejection — it is durably queryable via `coach_credential_reviews` even though the current row's own review fields have moved on.
+- When automated verification is built, it writes through the exact same `coach_credentials` + `coach_credential_reviews` shape a manual review does today — no migration, no gate rewrite, no change to what "approved" authorizes.
+- The exception-queue concept (`manualReviewRequired`) already exists in the schema before any automation does, so a future admin/K-OS review surface can filter on it from day one of automation, rather than needing a schema change at that time.
+
+---
+
 ## Appending New Decisions
 
 When a new architectural decision is made, add an entry at the bottom of this document following the format above. Assign the next sequential ADR number. Update the document history table.
@@ -784,3 +828,4 @@ Decisions should be documented when:
 | 2026-07-23 | Added ADR-012 (Document Ownership): two-table model (documents + client_document_assignments), partial unique index for active assignments, signed URL access, organization-owned source |
 | 2026-07-23 | Added ADR-013 (Voice and Tone): docs/VOICE_AND_TONE.md established as required design standard for all product work |
 | 2026-07-23 | Added ADR-014 (Nutrition Domain): effective-dated target model, four-stage model, source-of-truth map, Meal Plan Builder deferred |
+| 2026-08-15 | Added ADR-015 (RD/RDN Credential Gate): current-state row + append-only review history, automation-readiness columns, admin-no-bypass, `CredentialVerifier` interface documented (unimplemented) |

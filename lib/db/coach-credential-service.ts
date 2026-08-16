@@ -34,6 +34,14 @@
 // currently verified" (rd-credential.ts) as separate concerns means
 // the gate has exactly one, minimal, independently-testable
 // implementation.
+//
+// REVIEW HISTORY (see schema-coach-credentials.ts header, ADR-015):
+// coachCredentials stays one row per coach (fast, unambiguous current
+// state for the gate); submitCredential() and reviewCredential() ALSO
+// write an immutable coachCredentialReviews event, in the same
+// transaction as the coachCredentials write, so a resubmission's
+// overwrite of reviewedAt/reviewedBy/reviewNotes never destroys the
+// evidence of a past decision — it's preserved in the event log.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
@@ -44,6 +52,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { users, coachProfiles } from "./schema";
 import {
   coachCredentials,
+  coachCredentialReviews,
   coachCredentialTypeEnum,
   type CoachCredential,
   type CoachCredentialType,
@@ -57,6 +66,13 @@ const CREDENTIALS_BUCKET = "coach-credentials";
 
 // Default signed URL TTL. 1 hour — same as document-service.ts.
 const SIGNED_URL_TTL_SECONDS = 3600;
+
+// Phase 1 has exactly one verification method. A future automated
+// verifier sets a different value here (and on coachCredentialReviews'
+// verificationMethod for the event it wrote) — see
+// coach-credential-verifier.ts. Never read by isVerifiedRd(); purely
+// provenance/audit metadata.
+const MANUAL_REVIEW_METHOD = "manual_review";
 
 // ─────────────────────────────────────────────────────────────
 // UPLOAD VALIDATION — server-side. Sized for a license/certification
@@ -126,6 +142,63 @@ export function validateCredentialSubmission(
   return { ok: true };
 }
 
+// ─────────────────────────────────────────────────────────────
+// FILE SIGNATURE VALIDATION — pure, no I/O.
+//
+// validateCredentialSubmission() above only checks the CLAIMED
+// mimeType (file.type from the browser's multipart part headers, or
+// whatever a raw HTTP client chooses to send) against the allow-list —
+// it is not proof of the file's actual content. A caller can label
+// arbitrary bytes as "image/png" and pass that check. Since the
+// proof document is later served back with its stored (client-
+// declared) content type directly to a privileged ADMIN's browser
+// (app/admin/credentials/[id]/page.tsx links straight to the signed
+// URL, no download-disposition, no re-encoding), a mislabeled
+// malicious upload would render in the admin's authenticated session
+// exactly as claimed. This checks the first bytes against each
+// allowed type's real file signature, so a mismatch is rejected
+// before the file ever reaches Storage.
+// ─────────────────────────────────────────────────────────────
+
+function hasBytesAt(bytes: Uint8Array, offset: number, expected: number[]): boolean {
+  if (bytes.length < offset + expected.length) return false;
+  for (let i = 0; i < expected.length; i++) {
+    if (bytes[offset + i] !== expected[i]) return false;
+  }
+  return true;
+}
+
+const FILE_SIGNATURE_CHECKS: Record<string, (bytes: Uint8Array) => boolean> = {
+  // "%PDF-"
+  "application/pdf": (b) => hasBytesAt(b, 0, [0x25, 0x50, 0x44, 0x46, 0x2d]),
+  // PNG 8-byte magic number
+  "image/png": (b) => hasBytesAt(b, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  // JPEG SOI marker
+  "image/jpeg": (b) => hasBytesAt(b, 0, [0xff, 0xd8, 0xff]),
+  // RIFF....WEBP
+  "image/webp": (b) => hasBytesAt(b, 0, [0x52, 0x49, 0x46, 0x46]) && hasBytesAt(b, 8, [0x57, 0x45, 0x42, 0x50]),
+};
+
+// Pure function — no I/O — directly unit-testable. Call AFTER
+// validateCredentialSubmission (so an already-rejected mimeType never
+// reaches this), BEFORE uploadCredentialProof (so a mismatched file
+// never reaches Storage).
+export function validateFileSignature(bytes: Uint8Array, claimedMimeType: string): ValidationResult {
+  const matches = FILE_SIGNATURE_CHECKS[claimedMimeType];
+  if (!matches) {
+    // Not one of the four allowed types — validateCredentialSubmission
+    // should already have rejected this, but fail closed regardless.
+    return { ok: false, error: "Unrecognized proof document type." };
+  }
+  if (!matches(bytes)) {
+    return {
+      ok: false,
+      error: "The uploaded file does not match its declared type. Please re-upload the original document.",
+    };
+  }
+  return { ok: true };
+}
+
 // True when an approved credential's expirationDate has passed.
 // Pure, string-comparable because both sides are "YYYY-MM-DD".
 // Exported so the UI and the gate (lib/auth/rd-credential.ts) apply
@@ -160,6 +233,9 @@ export async function getMyCredential(coachId: string): Promise<CoachCredential 
 //   status='approved', EXPIRED    → renewal: update in place
 //   status='approved', not expired → reject the attempt (already valid)
 //   status='pending'              → reject the attempt (already queued)
+//
+// Every insert/update also writes a 'submitted' coachCredentialReviews
+// event in the same transaction — see this file's header.
 // ─────────────────────────────────────────────────────────────
 
 export interface UploadedProof {
@@ -218,10 +294,52 @@ export async function submitCredential(
       // Resubmission (rejected) or renewal (approved-but-expired) —
       // update the single row in place, clear the prior review
       // decision (it referred to the credential details being
-      // replaced), and re-queue for review.
-      await db
-        .update(coachCredentials)
-        .set({
+      // replaced — the decision ITSELF remains readable in
+      // coachCredentialReviews), and re-queue for review.
+      await db.transaction(async (tx) => {
+        await tx
+          .update(coachCredentials)
+          .set({
+            credentialType: input.credentialType as CoachCredentialType,
+            licenseNumber: input.licenseNumber,
+            issuingState: input.issuingState,
+            expirationDate: input.expirationDate,
+            proofDocumentStorageKey: proof.storageKey,
+            proofDocumentFilename: proof.filename,
+            proofDocumentMimeType: proof.mimeType,
+            status: "pending",
+            submittedAt: now,
+            resubmissionCount: existing.resubmissionCount + 1,
+            reviewedAt: null,
+            reviewedBy: null,
+            reviewNotes: null,
+            // Automation-readiness fields reset alongside the review
+            // decision — a resubmitted credential has no current
+            // verification until reviewed again.
+            verificationMethod: null,
+            lastVerifiedAt: null,
+            manualReviewRequired: true,
+            updatedAt: now,
+          })
+          .where(eq(coachCredentials.coachId, coachId));
+
+        await tx.insert(coachCredentialReviews).values({
+          credentialId: existing.id,
+          coachId,
+          action: "submitted",
+          performedBy: coachId,
+          performedByType: "human",
+        });
+      });
+
+      return { ok: true, credentialId: existing.id };
+    }
+
+    const credentialId = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(coachCredentials)
+        .values({
+          coachId,
           credentialType: input.credentialType as CoachCredentialType,
           licenseNumber: input.licenseNumber,
           issuingState: input.issuingState,
@@ -230,34 +348,21 @@ export async function submitCredential(
           proofDocumentFilename: proof.filename,
           proofDocumentMimeType: proof.mimeType,
           status: "pending",
-          submittedAt: now,
-          resubmissionCount: existing.resubmissionCount + 1,
-          reviewedAt: null,
-          reviewedBy: null,
-          reviewNotes: null,
-          updatedAt: now,
         })
-        .where(eq(coachCredentials.coachId, coachId));
+        .returning({ id: coachCredentials.id });
 
-      return { ok: true, credentialId: existing.id };
-    }
-
-    const [inserted] = await db
-      .insert(coachCredentials)
-      .values({
+      await tx.insert(coachCredentialReviews).values({
+        credentialId: inserted.id,
         coachId,
-        credentialType: input.credentialType as CoachCredentialType,
-        licenseNumber: input.licenseNumber,
-        issuingState: input.issuingState,
-        expirationDate: input.expirationDate,
-        proofDocumentStorageKey: proof.storageKey,
-        proofDocumentFilename: proof.filename,
-        proofDocumentMimeType: proof.mimeType,
-        status: "pending",
-      })
-      .returning({ id: coachCredentials.id });
+        action: "submitted",
+        performedBy: coachId,
+        performedByType: "human",
+      });
 
-    return { ok: true, credentialId: inserted.id };
+      return inserted.id;
+    });
+
+    return { ok: true, credentialId };
   } catch (err) {
     console.error("[coach-credential-service] submitCredential error:", err);
     return { ok: false, error: "Failed to submit credential. Please try again." };
@@ -335,12 +440,25 @@ export async function listCredentialsForReview(): Promise<CredentialListItem[]> 
   }));
 }
 
+const REVIEW_DECISIONS = new Set<CoachCredentialStatus>(["approved", "rejected"]);
+
 export async function reviewCredential(
   credentialId: string,
   reviewerId: string,
   decision: Extract<CoachCredentialStatus, "approved" | "rejected">,
   reviewNotes: string | null,
 ): Promise<{ ok: boolean; error?: string }> {
+  // Runtime guard, not just a TS type: decision crosses a Server
+  // Action boundary (app/admin/credentials/[id]/actions.ts), where
+  // TypeScript's compile-time union type is not enforced against a
+  // caller invoking the action directly with an arbitrary string.
+  // requireAdmin() already gates who can reach this at all — this is
+  // defense-in-depth against an already-authenticated admin's request
+  // being malformed or tampered with, not a privilege boundary itself.
+  if (!REVIEW_DECISIONS.has(decision)) {
+    return { ok: false, error: "Invalid review decision." };
+  }
+
   const db = getDb();
   const now = new Date();
 
@@ -348,16 +466,34 @@ export async function reviewCredential(
     const existing = await getCredentialById(credentialId);
     if (!existing) return { ok: false, error: "Credential submission not found." };
 
-    await db
-      .update(coachCredentials)
-      .set({
-        status: decision,
-        reviewedAt: now,
-        reviewedBy: reviewerId,
-        reviewNotes,
-        updatedAt: now,
-      })
-      .where(eq(coachCredentials.id, credentialId));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(coachCredentials)
+        .set({
+          status: decision,
+          reviewedAt: now,
+          reviewedBy: reviewerId,
+          reviewNotes,
+          // A manual approval IS a verification event; a rejection has
+          // no "verified" state to record. See this file's header for
+          // why lastVerifiedAt/verificationMethod are distinct from
+          // reviewedAt/reviewedBy.
+          verificationMethod: decision === "approved" ? MANUAL_REVIEW_METHOD : null,
+          lastVerifiedAt: decision === "approved" ? now : null,
+          updatedAt: now,
+        })
+        .where(eq(coachCredentials.id, credentialId));
+
+      await tx.insert(coachCredentialReviews).values({
+        credentialId,
+        coachId: existing.coachId,
+        action: decision,
+        verificationMethod: MANUAL_REVIEW_METHOD,
+        notes: reviewNotes,
+        performedBy: reviewerId,
+        performedByType: "human",
+      });
+    });
 
     return { ok: true };
   } catch (err) {
@@ -383,6 +519,19 @@ export async function generateAdminCredentialProofUrl(
     return null;
   }
   return data.signedUrl;
+}
+
+// Full review-history event log for one coach's credential, newest
+// first. Read by the admin detail page so a reviewer can see prior
+// decisions even after a resubmission has overwritten the current
+// row's own reviewedAt/reviewedBy/reviewNotes.
+export async function getCredentialReviewHistory(coachId: string) {
+  const db = getDb();
+  return db
+    .select()
+    .from(coachCredentialReviews)
+    .where(eq(coachCredentialReviews.coachId, coachId))
+    .orderBy(desc(coachCredentialReviews.createdAt));
 }
 
 export async function countPendingCredentials(): Promise<number> {
