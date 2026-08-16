@@ -29,3 +29,34 @@ export function resolveInstallSurface(env: InstallEnvironment & { hasNativePromp
   if (isAppleMobileDevice(env) && isSafariFamily(env.userAgent)) return "ios_instructions";
   return "unsupported";
 }
+
+// Phone/tablet-class device, independent of install surface. Deliberately
+// UA/touch-based rather than a CSS viewport-width heuristic: a desktop
+// browser window resized narrow is still a desktop, mouse-driven session
+// and must never be treated as "mobile" for onboarding purposes (Chrome
+// on desktop can also fire beforeinstallprompt, which would otherwise be
+// indistinguishable from Android Chrome by surface alone — see
+// resolveInstallSurface, which only encodes install MECHANISM, not
+// device class). Used to gate the Portal first-use install onboarding
+// (components/pwa/PortalInstallOnboarding.tsx) to phones/tablets only —
+// desktop keeps its existing, unobtrusive InstallKynovant affordance
+// instead of an unprompted mobile-style sheet.
+export function isMobileDevice(env: Pick<InstallEnvironment, "userAgent" | "platform" | "maxTouchPoints">): boolean {
+  const ua = env.userAgent.toLowerCase();
+  if (/android/.test(ua)) return true;
+  return isAppleMobileDevice(env);
+}
+
+// Single decision point for "should the unprompted Portal onboarding
+// sheet appear right now" — mobile device, AND an install surface that
+// actually offers something to do (native prompt or iOS instructions).
+// Excludes "installed" (nothing to do) and "unsupported" (nothing safe
+// to offer — fails gracefully per the launch brief's explicit
+// requirement, never a broken/dead install button).
+export function shouldShowPortalInstallOnboarding(
+  env: InstallEnvironment & { hasNativePrompt?: boolean },
+): boolean {
+  if (!isMobileDevice(env)) return false;
+  const surface = resolveInstallSurface(env);
+  return surface === "native_prompt" || surface === "ios_instructions";
+}
