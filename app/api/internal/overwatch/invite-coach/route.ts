@@ -53,11 +53,13 @@ import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin"
 import { provisionInvitedCoach } from "@/lib/db/coach-provisioning-service";
 import { findExistingAccountByEmail } from "@/lib/db/coach-signup-service";
 import {
+  getAcquisitionInviteLead,
   markAcquisitionInviteStatus,
   recordAcquisitionSignup,
 } from "@/lib/db/coach-acquisition-service";
 import { getKynovantResendConfig } from "@/lib/email/resend-brand-config";
 import { getOverwatchFounderProfile } from "@/lib/db/overwatch-service";
+import { grantComplimentaryAccess } from "@/lib/db/coach-complimentary-access-service";
 
 export const dynamic = "force-dynamic";
 
@@ -69,9 +71,18 @@ export const dynamic = "force-dynamic";
 // required" by the existing signup architecture.
 // ─────────────────────────────────────────────────────────────
 
+// accessType is the ONLY thing this route adds beyond the original
+// firstName/email shape. It is never trusted beyond the exact literal
+// "complimentary" — anything else (including omission) falls back to
+// "standard", the unchanged, pre-existing invite path. It never
+// determines WHO is authorized to invite (requireOverwatchAdmin() alone
+// does that, unconditionally, before this body is even parsed) — it
+// only decides whether the coach this route is about to provision also
+// receives a complimentary entitlement grant.
 interface InviteCoachPayload {
   firstName?: string;
   email?: string;
+  accessType?: "standard" | "complimentary";
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -96,6 +107,15 @@ function validate(body: InviteCoachPayload): string | null {
   }
   if (body.email.trim().length > MAX_EMAIL_LENGTH) return "Email is too long.";
   return null;
+}
+
+// Whitelist normalization, not a trust decision — see this file's
+// header comment on InviteCoachPayload.accessType. Anything other than
+// the exact literal "complimentary" (including undefined, "standard",
+// or a garbage string) resolves to "standard": the original, unchanged
+// invite path.
+function isComplimentaryAccessType(body: InviteCoachPayload): boolean {
+  return body.accessType === "complimentary";
 }
 
 function escapeHtml(value: string): string {
@@ -240,6 +260,61 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("[InviteCoach] recordAcquisitionSignup failed:", err instanceof Error ? err.message : err);
+    // Do not create an Auth identity without the durable lead that owns
+    // its retry/funnel state. A later retry can safely repeat this whole
+    // operation; proceeding here would strand an untracked invitation.
+    return NextResponse.json(
+      { ok: false, error: "The invitation could not be started. Please try again shortly." },
+      { status: 503 },
+    );
+  }
+
+  // A generateLink call can create an Auth user before a transient DB
+  // failure prevents public.users provisioning. Recover only the exact
+  // pending founder-invite identity recorded on this lead; never infer
+  // this state from an email prefix or promote an ordinary client row.
+  try {
+    const lead = await getAcquisitionInviteLead(normalizedEmail);
+    if (
+      lead?.source === "founder_invite" &&
+      (lead.inviteStatus === "failed" || lead.inviteStatus === "not_sent" || lead.inviteStatus === "already_invited") &&
+      lead.accountUserId
+    ) {
+      const admin = createAdminClient();
+      const { data: authData } = await admin.auth.admin.getUserById(lead.accountUserId);
+      const authEmail = authData.user?.email?.trim().toLowerCase();
+      if (authData.user && authEmail === normalizedEmail && !authData.user.email_confirmed_at) {
+        await provisionInvitedCoach({ userId: lead.accountUserId, email, displayName: firstName });
+        const resend = await resendPendingInvite(email);
+        if (!resend.ok) throw new Error("pending invite resend failed");
+        if (isComplimentaryAccessType(body)) {
+          await grantComplimentaryAccess({
+            coachId: lead.accountUserId,
+            grantedBy: guard.dbUser.id,
+            reason: "Founder invite — complimentary access",
+          });
+        }
+        await markAcquisitionInviteStatus({
+          normalizedEmail,
+          status: "sent",
+          accountUserId: lead.accountUserId,
+          inviteSentAt: new Date(),
+        });
+        return NextResponse.json({ ok: true, status: "sent" });
+      }
+    }
+  } catch (err) {
+    if (err instanceof AdminClientConfigError) {
+      return NextResponse.json(
+        { ok: false, error: "Invite service is temporarily unavailable. Please try again shortly." },
+        { status: 503 },
+      );
+    }
+    console.error("[InviteCoach] orphan invite recovery failed:", err instanceof Error ? err.message : err);
+    return NextResponse.json(
+      { ok: false, error: "The pending invitation could not be recovered. Please try again." },
+      { status: 502 },
+    );
   }
 
   // Duplicate/collision pre-check — identical decision shape to
@@ -267,8 +342,39 @@ export async function POST(req: NextRequest) {
         // Reuse the existing, proven-safe resend behavior instead of
         // permanently treating that account as blocked.
         try {
+          // Heal a partial provisioning attempt before sending another
+          // invite. This is idempotent and ensures the canonical coach
+          // profile exists before the recipient can enter setup.
+          await provisionInvitedCoach({ userId: existing.id, email, displayName: firstName });
           const resend = await resendPendingInvite(email);
           if (resend.ok) {
+            // Heals a prior attempt that provisioned the account and
+            // sent (or re-sends) the invite but never persisted the
+            // entitlement grant — e.g. the founder retrying after an
+            // earlier "entitlement_failed" response, or simply
+            // re-inviting a still-pending coach with Complimentary now
+            // selected. grantComplimentaryAccess() is idempotent, so
+            // this is always safe to call again even if the grant
+            // already exists from a fully successful first attempt.
+            if (isComplimentaryAccessType(body)) {
+              try {
+                await grantComplimentaryAccess({
+                  coachId: resend.userId,
+                  grantedBy: guard.dbUser.id,
+                  reason: "Founder invite — complimentary access",
+                });
+              } catch (err) {
+                console.error("[InviteCoach] grantComplimentaryAccess failed (resend path):", err instanceof Error ? err.message : err);
+                return NextResponse.json(
+                  {
+                    ok: false,
+                    status: "entitlement_failed",
+                    error: "The invitation was resent, but complimentary access couldn't be granted. Please try again.",
+                  },
+                  { status: 502 },
+                );
+              }
+            }
             await markAcquisitionInviteStatus({
               normalizedEmail,
               status: "sent",
@@ -346,9 +452,52 @@ export async function POST(req: NextRequest) {
     const newUserId = data.user.id;
     const actionLink = data.properties.action_link;
 
+    // Persist the Auth identity on the already-created lead before the
+    // remaining side effects. If provisioning fails, the durable lead
+    // still records which pending identity a later retry must heal.
+    await markAcquisitionInviteStatus({
+      normalizedEmail,
+      status: "not_sent",
+      accountUserId: newUserId,
+    });
+
     // Same canonical role-grant path as every other coach-creation
     // entry point — role is never taken from request input.
     await provisionInvitedCoach({ userId: newUserId, email, displayName: firstName });
+
+    // Complimentary entitlement, if requested — granted BEFORE the
+    // invite email goes out and BEFORE "sent" is ever recorded, so a
+    // failure here is reported honestly (entitlement_failed) instead
+    // of silently sending an invite for access that doesn't actually
+    // exist yet. The account itself (Auth user + coach role) is
+    // already durably provisioned at this point regardless of what
+    // happens next, so this is always safely retryable: the founder
+    // re-invites the same email, lands in the "already invited" resend
+    // branch above, which re-attempts this same idempotent grant call.
+    if (isComplimentaryAccessType(body)) {
+      try {
+        await grantComplimentaryAccess({
+          coachId: newUserId,
+          grantedBy: guard.dbUser.id,
+          reason: "Founder invite — complimentary access",
+        });
+      } catch (err) {
+        console.error("[InviteCoach] grantComplimentaryAccess failed:", err instanceof Error ? err.message : err);
+        await markAcquisitionInviteStatus({
+          normalizedEmail,
+          status: "failed",
+          accountUserId: newUserId,
+        }).catch(() => {});
+        return NextResponse.json(
+          {
+            ok: false,
+            status: "entitlement_failed",
+            error: "The coach account was created, but complimentary access couldn't be granted. Please retry the invitation.",
+          },
+          { status: 502 },
+        );
+      }
+    }
 
     const founderProfile = await getOverwatchFounderProfile(guard.dbUser.id);
     const sendResult = await sendFounderInviteEmail({

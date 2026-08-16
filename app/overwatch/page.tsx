@@ -248,7 +248,16 @@ export default async function OverwatchPage({
           <MetricCard icon={ReceiptText} label="Active Trials" value={data.overview.activeTrials} detail="Customer accounts in trialing billing state." />
           <MetricCard icon={CircleDollarSign} label="Paying Accounts" value={data.overview.payingAccounts} detail="Active or manually activated customer billing." />
           <MetricCard icon={Users} label="New Signups 7D" value={data.overview.newSignups7d} detail="New customer coach/trainer accounts." />
-          <MetricCard icon={ShieldCheck} label="Active Customer Coaches" value={data.overview.activeCustomerCoaches} detail="Active real business coach/trainer accounts." />
+          <MetricCard
+            icon={ShieldCheck}
+            label="Active Customer Coaches"
+            value={data.overview.activeCustomerCoaches}
+            detail={
+              data.overview.complimentaryCoaches > 0
+                ? `Active real business coach/trainer accounts. ${data.overview.complimentaryCoaches} complimentary.`
+                : "Active real business coach/trainer accounts."
+            }
+          />
           <MetricCard icon={Users} label="Active Clients" value={data.overview.activeClients} detail="Count only, no client identities exposed." />
           <MetricCard icon={Activity} label="Workouts 7D" value={data.overview.workouts7d} detail="Completed sessions under customer coaches." />
           <MetricCard icon={CircleDollarSign} label="Trial → Paid" value={fmtPercent(data.overview.trialToPaid)} detail="Hidden until the recorded trial denominator is meaningful." />
@@ -363,8 +372,8 @@ export default async function OverwatchPage({
           </div>
 
           <div className="overflow-x-auto border border-white/[0.08] bg-[#101113]">
-            <div className="min-w-[1060px]">
-              <div className="grid grid-cols-[1.3fr_1.15fr_0.65fr_0.85fr_0.85fr_0.55fr_0.75fr] border-b border-white/[0.07] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/30">
+            <div className="min-w-[1160px]">
+              <div className="grid grid-cols-[1.3fr_1.15fr_0.65fr_0.95fr_0.85fr_0.55fr_0.75fr_0.6fr] border-b border-white/[0.07] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/30">
                 <span>Account</span>
                 <span>Email</span>
                 <span>Status</span>
@@ -372,22 +381,34 @@ export default async function OverwatchPage({
                 <span>Trial / Billing Date</span>
                 <span className="text-right">Clients</span>
                 <span>Product Activity</span>
+                <span />
               </div>
               {accounts.length > 0 ? accounts.map((coach) => (
-                <div key={coach.id} className="grid grid-cols-[1.3fr_1.15fr_0.65fr_0.85fr_0.85fr_0.55fr_0.75fr] items-center border-b border-white/[0.045] px-4 py-3 last:border-b-0">
+                <div key={coach.id} className="grid grid-cols-[1.3fr_1.15fr_0.65fr_0.95fr_0.85fr_0.55fr_0.75fr_0.6fr] items-center border-b border-white/[0.045] px-4 py-3 last:border-b-0">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-white/78">{coach.displayName ?? "Unnamed coach"}</p>
                     <p className="text-[11px] text-white/30">Joined {fmtDate(coach.createdAt)}</p>
                   </div>
                   <p className="truncate text-xs text-white/42">{coach.email}</p>
                   <span className={`mr-3 border px-2 py-1 text-[10px] ${statusTone(coach.accountStatus)}`}>{labelize(coach.accountStatus)}</span>
-                  <span className={`mr-3 border px-2 py-1 text-[10px] ${statusTone(coach.subscriptionStatus)}`}>{labelize(coach.subscriptionStatus)}</span>
+                  <div className="mr-3 flex flex-wrap items-center gap-1.5">
+                    <span className={`border px-2 py-1 text-[10px] ${statusTone(coach.subscriptionStatus)}`}>{labelize(coach.subscriptionStatus)}</span>
+                    {coach.isComplimentary && (
+                      <span className="border border-[#C9A24D]/35 bg-[#C9A24D]/[0.08] px-2 py-1 text-[10px] text-[#E3C778]">Comp</span>
+                    )}
+                  </div>
                   <div className="min-w-0 text-xs text-white/42">
                     <p>{coach.cancelledAt ? fmtDate(coach.cancelledAt) : fmtDate(coach.currentPeriodEnd)}</p>
                     {coach.cancelAtPeriodEnd && <p className="text-amber-100/70">Cancels at period end</p>}
                   </div>
                   <p className="text-right text-sm font-semibold text-white">{coach.activeClientCount}</p>
                   <p className="text-xs text-white/42">{fmtDate(coach.lastActiveAt)}</p>
+                  <Link
+                    href={`/overwatch/accounts/${coach.id}`}
+                    className="justify-self-end border border-white/[0.08] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/38 hover:border-white/[0.16] hover:text-white/70 transition-colors"
+                  >
+                    Manage
+                  </Link>
                 </div>
               )) : (
                 <p className="p-5 text-sm text-white/36">No accounts match the current filters.</p>

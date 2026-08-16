@@ -22,13 +22,18 @@ interface Props {
   onClose: () => void;
 }
 
+type AccessType = "standard" | "complimentary";
+
 type InviteResult =
   | { kind: "sent" }
   | { kind: "already_invited" }
   | { kind: "already_active" }
-  | { kind: "email_failed" };
+  | { kind: "email_failed" }
+  | { kind: "entitlement_failed" };
 
-const EMPTY_FORM = { firstName: "", email: "" };
+// Standard is the default on every open/reset — complimentary is
+// always an explicit founder choice, never the fallback.
+const EMPTY_FORM = { firstName: "", email: "", accessType: "standard" as AccessType };
 
 function resultCopy(result: InviteResult): { title: string; body: string } {
   switch (result.kind) {
@@ -48,6 +53,11 @@ function resultCopy(result: InviteResult): { title: string; body: string } {
       return {
         title: "Account Created — Email Failed",
         body: "The invitation exists, but we couldn't send the email. Retry delivery now or try again later.",
+      };
+    case "entitlement_failed":
+      return {
+        title: "Account Created — Access Not Granted",
+        body: "The coach account was created, but complimentary access couldn't be saved. Retry now, or grant it later from the account directory.",
       };
   }
 }
@@ -89,7 +99,7 @@ export default function InviteCoachModal({ open, onClose }: Props) {
       const res = await fetch("/api/internal/overwatch/invite-coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ firstName, email }),
+        body: JSON.stringify({ firstName, email, accessType: form.accessType }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         ok: boolean;
@@ -105,6 +115,8 @@ export default function InviteCoachModal({ open, onClose }: Props) {
         setResult({ kind: "already_active" });
       } else if (!data.ok && data.status === "email_failed") {
         setResult({ kind: "email_failed" });
+      } else if (!data.ok && data.status === "entitlement_failed") {
+        setResult({ kind: "entitlement_failed" });
       } else {
         // Never surfaces raw exception/database text — always the
         // server's own user-facing message, or a generic fallback.
@@ -134,21 +146,23 @@ export default function InviteCoachModal({ open, onClose }: Props) {
       description={result ? undefined : "Send a Kynovant invitation directly to a trainer or coach."}
       size="sm"
     >
-      {result ? (
+      {result ? (() => {
+        const recoverable = result.kind === "email_failed" || result.kind === "entitlement_failed";
+        return (
         <div className="text-center py-2">
           <div
             className="w-12 h-12 rounded-full bg-[#C9A24D]/15 border border-[#C9A24D]/40 flex items-center justify-center mx-auto mb-5"
             style={{ boxShadow: "0 0 32px rgba(201,162,77,0.2)" }}
           >
             <span className="text-[#C9A24D] text-xl">
-              {result.kind === "sent" ? "✓" : result.kind === "email_failed" ? "!" : "•"}
+              {result.kind === "sent" ? "✓" : recoverable ? "!" : "•"}
             </span>
           </div>
           <p className="text-white text-sm font-semibold mb-1">{form.firstName || "Invitation"}</p>
           <p className="text-gray-500 text-xs mb-6 leading-relaxed">{resultCopy(result).body}</p>
 
           <div className="flex flex-col gap-2.5">
-            {result.kind === "email_failed" && (
+            {recoverable && (
               <button
                 onClick={() => {
                   setResult(null);
@@ -162,7 +176,7 @@ export default function InviteCoachModal({ open, onClose }: Props) {
             )}
             <button
               onClick={inviteAnother}
-              className={result.kind === "email_failed"
+              className={recoverable
                 ? "text-gray-500 hover:text-gray-300 text-[11px] tracking-[0.1em] uppercase py-2 transition-colors"
                 : "bg-[#C9A24D] text-black font-bold text-[11px] tracking-[0.14em] uppercase py-3.5 hover:bg-[#D4B56A] transition-colors"}
             >
@@ -176,7 +190,8 @@ export default function InviteCoachModal({ open, onClose }: Props) {
             </button>
           </div>
         </div>
-      ) : (
+        );
+      })() : (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className={label}>First Name</label>
@@ -202,6 +217,45 @@ export default function InviteCoachModal({ open, onClose }: Props) {
               disabled={submitting}
               autoComplete="email"
             />
+          </div>
+
+          <div>
+            <label className={label}>Access Type</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, accessType: "standard" }))}
+                disabled={submitting}
+                aria-pressed={form.accessType === "standard"}
+                className={`border px-3 py-3 text-left text-xs font-semibold transition-colors ${
+                  form.accessType === "standard"
+                    ? "border-[#C9A24D]/60 bg-[#C9A24D]/10 text-[#E3C778]"
+                    : "border-white/10 bg-transparent text-gray-500 hover:border-white/20 hover:text-gray-300"
+                }`}
+              >
+                Standard
+                <span className="mt-1 block text-[10px] font-normal normal-case text-gray-500">14-day trial</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, accessType: "complimentary" }))}
+                disabled={submitting}
+                aria-pressed={form.accessType === "complimentary"}
+                className={`border px-3 py-3 text-left text-xs font-semibold transition-colors ${
+                  form.accessType === "complimentary"
+                    ? "border-[#C9A24D]/60 bg-[#C9A24D]/10 text-[#E3C778]"
+                    : "border-white/10 bg-transparent text-gray-500 hover:border-white/20 hover:text-gray-300"
+                }`}
+              >
+                Complimentary
+                <span className="mt-1 block text-[10px] font-normal normal-case text-gray-500">No billing required</span>
+              </button>
+            </div>
+            {form.accessType === "complimentary" && (
+              <p className="mt-2 text-[11px] leading-relaxed text-gray-500">
+                Full Coach HQ access without billing. Can be revoked later from the account directory.
+              </p>
+            )}
           </div>
 
           {error && <p className="text-red-400 text-xs">{error}</p>}

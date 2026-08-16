@@ -95,9 +95,19 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — inviter/coach ide
 
   it("the invited coach's role is never taken from request input — provisionInvitedCoach hardcodes it", () => {
     // The request body shape (InviteCoachPayload) has no role field at
-    // all — a caller cannot even attempt to supply one.
-    expect(route).toMatch(/interface InviteCoachPayload \{\s*firstName\?: string;\s*email\?: string;\s*\}/);
+    // all — a caller cannot even attempt to supply one. accessType is
+    // the one legitimate addition (complimentary-access feature) and is
+    // whitelisted to the literal "standard" | "complimentary" — it is
+    // NOT a role, admin id, or grantedBy value of any kind.
+    expect(route).toMatch(
+      /interface InviteCoachPayload \{\s*firstName\?: string;\s*email\?: string;\s*accessType\?: "standard" \| "complimentary";\s*\}/,
+    );
     expect(route).not.toMatch(/body\.role/);
+    expect(route).not.toMatch(/body\.(grantedBy|adminId|inviterId)/);
+  });
+
+  it("accessType is resolved through a whitelist function, never trusted as a free-form value passed straight to entitlement logic", () => {
+    expect(route).toContain('function isComplimentaryAccessType(body: InviteCoachPayload): boolean {\n  return body.accessType === "complimentary";\n}');
   });
 
   it("the created userId always comes from Supabase's own response (data.user.id), never from request input", () => {
@@ -227,6 +237,42 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — funnel integrity:
     expect(failureBranch).toContain('status: "failed"');
     expect(failureBranch).not.toContain('status: "sent"');
     expect(failureBranch).not.toContain("actionLink");
+  });
+});
+
+describe("app/api/internal/overwatch/invite-coach/route.ts — partial-failure recovery", () => {
+  const route = source(ROUTE);
+
+  it("fails closed before Auth creation when the durable acquisition lead cannot be recorded", () => {
+    const recordStart = route.indexOf("await recordAcquisitionSignup({");
+    const recordEnd = route.indexOf("// Duplicate/collision pre-check", recordStart);
+    const recordBlock = route.slice(recordStart, recordEnd);
+    expect(recordBlock).toContain("return NextResponse.json(");
+    expect(recordBlock).toContain("status: 503");
+    expect(route.indexOf("generateLink", recordEnd)).toBeGreaterThan(recordEnd);
+  });
+
+  it("re-runs canonical provisioning before resending a pending invite", () => {
+    const invitedStart = route.indexOf('if (existing.status === "invited")');
+    const resendStart = route.indexOf("const resend = await resendPendingInvite", invitedStart);
+    expect(invitedStart).toBeGreaterThan(-1);
+    expect(resendStart).toBeGreaterThan(invitedStart);
+    expect(route.slice(invitedStart, resendStart)).toContain("await provisionInvitedCoach");
+  });
+
+  it("records the newly-created Auth identity on the lead before provisioning", () => {
+    const identityMarker = route.indexOf("accountUserId: newUserId");
+    const provisioningMarker = route.indexOf("await provisionInvitedCoach", identityMarker);
+    expect(identityMarker).toBeGreaterThan(-1);
+    expect(provisioningMarker).toBeGreaterThan(identityMarker);
+  });
+
+  it("recovers only a matching unconfirmed founder-invite Auth identity", () => {
+    expect(route).toContain("getAcquisitionInviteLead(normalizedEmail)");
+    expect(route).toContain('lead?.source === "founder_invite"');
+    expect(route).toContain("authEmail === normalizedEmail");
+    expect(route).toContain("!authData.user.email_confirmed_at");
+    expect(route).toContain("getUserById(lead.accountUserId)");
   });
 });
 
