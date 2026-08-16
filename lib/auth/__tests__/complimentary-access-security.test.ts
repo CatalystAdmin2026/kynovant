@@ -49,7 +49,7 @@ describe.each([
   });
 
   it("the target coachId comes from the URL path param, not the request body — cross-coach mutation via body is structurally impossible", () => {
-    expect(route).toContain("const { coachId } = await params;");
+    expect(route).toMatch(/const \{ coachId \} = \(await params\) as/);
     expect(route).not.toMatch(/body\.coachId/);
   });
 });

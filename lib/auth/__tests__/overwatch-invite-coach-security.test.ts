@@ -249,7 +249,7 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — partial-failure r
     const recordBlock = route.slice(recordStart, recordEnd);
     expect(recordBlock).toContain("return NextResponse.json(");
     expect(recordBlock).toContain("status: 503");
-    expect(recordBlock).not.toContain("generateLink");
+    expect(route.indexOf("generateLink", recordEnd)).toBeGreaterThan(recordEnd);
   });
 
   it("re-runs canonical provisioning before resending a pending invite", () => {
@@ -265,6 +265,14 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — partial-failure r
     const provisioningMarker = route.indexOf("await provisionInvitedCoach", identityMarker);
     expect(identityMarker).toBeGreaterThan(-1);
     expect(provisioningMarker).toBeGreaterThan(identityMarker);
+  });
+
+  it("recovers only a matching unconfirmed founder-invite Auth identity", () => {
+    expect(route).toContain("getAcquisitionInviteLead(normalizedEmail)");
+    expect(route).toContain('lead?.source === "founder_invite"');
+    expect(route).toContain("authEmail === normalizedEmail");
+    expect(route).toContain("!authData.user.email_confirmed_at");
+    expect(route).toContain("getUserById(lead.accountUserId)");
   });
 });
 

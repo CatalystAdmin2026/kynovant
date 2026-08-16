@@ -53,6 +53,7 @@ import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin"
 import { provisionInvitedCoach } from "@/lib/db/coach-provisioning-service";
 import { findExistingAccountByEmail } from "@/lib/db/coach-signup-service";
 import {
+  getAcquisitionInviteLead,
   markAcquisitionInviteStatus,
   recordAcquisitionSignup,
 } from "@/lib/db/coach-acquisition-service";
@@ -265,6 +266,54 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { ok: false, error: "The invitation could not be started. Please try again shortly." },
       { status: 503 },
+    );
+  }
+
+  // A generateLink call can create an Auth user before a transient DB
+  // failure prevents public.users provisioning. Recover only the exact
+  // pending founder-invite identity recorded on this lead; never infer
+  // this state from an email prefix or promote an ordinary client row.
+  try {
+    const lead = await getAcquisitionInviteLead(normalizedEmail);
+    if (
+      lead?.source === "founder_invite" &&
+      (lead.inviteStatus === "failed" || lead.inviteStatus === "not_sent" || lead.inviteStatus === "already_invited") &&
+      lead.accountUserId
+    ) {
+      const admin = createAdminClient();
+      const { data: authData } = await admin.auth.admin.getUserById(lead.accountUserId);
+      const authEmail = authData.user?.email?.trim().toLowerCase();
+      if (authData.user && authEmail === normalizedEmail && !authData.user.email_confirmed_at) {
+        await provisionInvitedCoach({ userId: lead.accountUserId, email, displayName: firstName });
+        const resend = await resendPendingInvite(email);
+        if (!resend.ok) throw new Error("pending invite resend failed");
+        if (isComplimentaryAccessType(body)) {
+          await grantComplimentaryAccess({
+            coachId: lead.accountUserId,
+            grantedBy: guard.dbUser.id,
+            reason: "Founder invite — complimentary access",
+          });
+        }
+        await markAcquisitionInviteStatus({
+          normalizedEmail,
+          status: "sent",
+          accountUserId: lead.accountUserId,
+          inviteSentAt: new Date(),
+        });
+        return NextResponse.json({ ok: true, status: "sent" });
+      }
+    }
+  } catch (err) {
+    if (err instanceof AdminClientConfigError) {
+      return NextResponse.json(
+        { ok: false, error: "Invite service is temporarily unavailable. Please try again shortly." },
+        { status: 503 },
+      );
+    }
+    console.error("[InviteCoach] orphan invite recovery failed:", err instanceof Error ? err.message : err);
+    return NextResponse.json(
+      { ok: false, error: "The pending invitation could not be recovered. Please try again." },
+      { status: 502 },
     );
   }
 

@@ -3,6 +3,20 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "./client";
 import { coachAcquisitionLeads } from "./schema-coach-acquisition";
 
+export async function getAcquisitionInviteLead(normalizedEmail: string) {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      source: coachAcquisitionLeads.source,
+      inviteStatus: coachAcquisitionLeads.inviteStatus,
+      accountUserId: coachAcquisitionLeads.accountUserId,
+    })
+    .from(coachAcquisitionLeads)
+    .where(eq(coachAcquisitionLeads.normalizedEmail, normalizedEmail))
+    .limit(1);
+  return row ?? null;
+}
+
 export type AcquisitionInviteStatus =
   | "not_sent"
   | "sent"
