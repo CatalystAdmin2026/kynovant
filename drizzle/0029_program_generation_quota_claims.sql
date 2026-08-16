@@ -7,6 +7,19 @@
 --
 -- Reuses the existing program_generation_run_scope enum (0017) — no new
 -- enum type needed.
+--
+-- Retention: append-only, no pruning built here on purpose (scope per
+-- the launch review that added this note — see git history). The
+-- application only ever reads rows newer than the 1-hour quota window
+-- (claimGenerationQuota() in lib/db/program-generation-service.ts), so
+-- everything older is permanently cold weight. At the current per-coach
+-- limit (10/hour) and expected coach counts, growth is on the order of
+-- low thousands of rows/month even under sustained heavy legitimate use
+-- — not an urgent problem — but this table WILL need a periodic prune
+-- (e.g. DELETE WHERE created_at < now() - interval '7 days', on a
+-- schedule) before it grows unbounded over the long run. Deliberately
+-- not built here — do not add a cron/archival system as part of this
+-- migration; track it as a follow-up once real usage volume is known.
 
 CREATE TABLE IF NOT EXISTS "program_generation_quota_claims" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

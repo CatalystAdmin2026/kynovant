@@ -28,6 +28,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { execSync } from "node:child_process";
 import { eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -415,6 +416,77 @@ describe("identity — quota is charged against the session-derived actor only",
 
     expect(fnBody).toContain("await requireCoachOrAdmin()");
     expect(fnBody).toContain("coachId: guard.dbUser.id");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Full model-invocation coverage — every path that can reach the
+// provider is gated, and the AI SDK's own internal retry cannot
+// independently consume extra quota.
+// ─────────────────────────────────────────────────────────────
+
+describe("full model-invocation coverage", () => {
+  it("provider.ts's maxRetries is an internal AI SDK retry inside ONE callProvider() call, not a separate claimGenerationQuota() invocation", () => {
+    // generateProgramShell()/generateProgramWeek()/regenerateDayDraft()
+    // each call callProvider() exactly once per invocation; callProvider()
+    // passes maxRetries to the AI SDK's own generateObject(), which
+    // retries transparently *inside* that single call (same HTTP-level
+    // attempt budget, not a new top-level action invocation). Since
+    // claimGenerationQuota() is only ever called once per top-level
+    // action invocation (staged-generation.ts / regenerateDayAction),
+    // not once per callProvider() call, an internal SDK retry can never
+    // trigger a second claim.
+    const providerSrc = source("lib/program-generator/provider.ts");
+    expect(providerSrc).toContain("maxRetries: PROVIDER_MAX_RETRIES");
+    expect(providerSrc).not.toContain("claimGenerationQuota");
+
+    const serviceSrc = source("lib/db/program-generation-service.ts");
+    // claimGenerationQuota is defined here but never self-invoked in a
+    // retry loop — it returns a single result per call, no internal
+    // retry of its own that could re-claim.
+    const fnStart = serviceSrc.indexOf("export async function claimGenerationQuota");
+    const fnBody = serviceSrc.slice(fnStart, serviceSrc.indexOf("\n// ─────", fnStart + 1));
+    const selfCallCount = (fnBody.match(/claimGenerationQuota\(/g) ?? []).length;
+    expect(selfCallCount).toBe(1); // only its own declaration/signature, never a recursive/retry call
+  });
+
+  it("no route/action other than app/hq/programs/generate/actions.ts (directly or via staged-generation.ts) imports the model-calling provider functions", () => {
+    // generateProgramShell / generateProgramWeek / regenerateDayDraft are
+    // the ONLY functions in this codebase that reach the AI SDK
+    // (provider.ts's own file header: "the only file in the feature that
+    // may reference an LLM API key or call out to a model provider").
+    // A real repo-wide grep (not just checking actions.ts's own content)
+    // — so this actually regresses if someone later adds a second,
+    // ungated call site rather than merely asserting today's known-good
+    // shape.
+    const providerSrc = source("lib/program-generator/provider.ts");
+    expect(providerSrc).toContain("This is the only file in the feature that may reference");
+
+    const grepResult = execSync(
+      String.raw`grep -rl 'from "@/lib/program-generator/provider"' --include="*.ts" --include="*.tsx" --exclude-dir=node_modules --exclude-dir=.next .`,
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    const importers = grepResult
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/^\.\//, ""))
+      .filter((line) => !line.includes("__tests__")); // test fixtures import it too — not app code paths
+
+    // Every real (non-test) importer of provider.ts must be either the
+    // gated Server Action surface itself, or staged-generation.ts, which
+    // is ONLY reachable from that same gated surface (never exported to
+    // a route/API handler directly — see staged-generation.ts's own file
+    // header: "no auth/ownership checks of its own; every caller...
+    // is responsible for calling requireCoachOrAdmin()...").
+    const allowed = new Set([
+      "app/hq/programs/generate/actions.ts",
+      "lib/program-generator/staged-generation.ts",
+    ]);
+    for (const file of importers) {
+      expect(allowed.has(file)).toBe(true);
+    }
+    expect(importers.length).toBeGreaterThan(0); // sanity: the grep itself actually matched something
   });
 });
 

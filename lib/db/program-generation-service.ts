@@ -516,24 +516,49 @@ export async function failRun(runId: string, errorMessage: string): Promise<void
 // call claimGenerationQuota() and abort (with a user-facing message) if
 // it returns { ok: false }.
 //
-// Numbers (documented per the launch-hardening brief):
-//   GENERATION_QUOTA_LIMIT = 20 per coach per rolling hour.
-//   A fresh full-program generation is 1 shell call + up to 16 week
-//   calls (contracts.ts caps brief.weeks at 16) — i.e. a single
-//   legitimate generation can already be up to 17 model calls, but is
-//   metered here as ONE quota unit (one claim per top-level action
-//   invocation, not per underlying model call — see the "unit of
-//   account" note below). A coach onboarding several clients in one
-//   session, retrying a couple of failed generations, and regenerating
-//   a handful of individual days comfortably stays under 20/hour under
-//   normal use — this is the "generous, launch-safe" number the brief
-//   asked for, not a tight budget. A malicious loop / compromised
-//   session / automation bug is capped at 20 top-level attempts/hour
-//   (worst case 20 x 17 = 340 model calls/hour) instead of unbounded.
-//   One rolling window (not a separate tighter burst limit) is the
-//   smallest control that still fully bounds rapid-fire clicking or a
-//   tight retry loop — after the 20th claim in the window, every
+// Numbers (revised during final cost/security review — see git history
+// for the original 20/hour proposal and the review that tightened it):
+//   GENERATION_QUOTA_LIMIT = 10 per coach per rolling hour.
+//
+//   Model-call volume (inspected from the actual configured workflow,
+//   not guessed): PROGRAM_GENERATOR_MODEL=anthropic/claude-sonnet-4 via
+//   the Vercel AI Gateway (see .env.local / provider.ts). A fresh
+//   full-program generation is 1 shell call (<=2,000 output tokens,
+//   provider.ts's SHELL_MAX_OUTPUT_TOKENS) + 1 generateProgramWeek()
+//   call per week (<=8,000 output tokens each, WEEK_MAX_OUTPUT_TOKENS).
+//   contracts.ts caps brief.weeks at 16, so MAXIMUM is 1 + 16 = 17 model
+//   calls / ~130,000 output tokens per generation. TYPICAL is far lower:
+//   GenerateBriefForm.tsx pre-fills the brief's "Weeks" field with 8 (the
+//   coach can type anything 1-16, but 8 is what an un-modified submit
+//   produces) — i.e. a typical generation is 1 + 8 = 9 model calls,
+//   ~66,000 output tokens worst-case-per-call-cap (actual usage is
+//   normally well under each call's cap). regenerateDayDraft() (Regenerate
+//   Day) is always exactly 1 model call, <=16,000 output tokens.
+//
+//   Worst-case hourly exposure at the ORIGINAL 20/hour proposal:
+//   20 x 17 = 340 model calls/hour. At the REVISED 10/hour limit:
+//   10 x 17 = 170 model calls/hour — a 50% cut to the worst-case ceiling
+//   for the exact same "generous, launch-safe" intent, chosen over an
+//   even tighter 6/hour or 8/hour: realistic legitimate usage (one
+//   fresh generation + an occasional resume/retry + a handful of
+//   Regenerate Day touch-ups while reviewing ONE client's draft) lands
+//   around 4-9 claims per working session by the same call-volume
+//   reasoning above, and 6/hour or 8/hour risks a single thorough
+//   one-client review session (initial gen, one retry, several day
+//   regens) occasionally tripping the limiter — the opposite of "normal
+//   coaches should not notice." 10/hour keeps real headroom over that
+//   typical 4-9 range while still meaningfully tightening the cost
+//   ceiling a malicious loop / compromised session / automation bug is
+//   capped at. One rolling window (not a separate tighter burst limit)
+//   is the smallest control that still fully bounds rapid-fire clicking
+//   or a tight retry loop — after the 10th claim in the window, every
 //   further attempt is rejected regardless of how fast it arrives.
+//
+//   Dollar-cost figures are deliberately not stated here — current
+//   Anthropic/gateway pricing is not encoded anywhere in this repo or
+//   its config, and inventing a number would be a guess dressed up as
+//   data. The reasoning above is call-volume-based, which is what this
+//   repo can actually substantiate.
 //
 // Unit of account: one claim per top-level action invocation that will
 // make at least one model call — NOT one claim per generateProgramWeek()
@@ -565,7 +590,7 @@ export async function failRun(runId: string, errorMessage: string): Promise<void
 // exactly mirroring how program_generation_drafts.coach_id already
 // attributes the draft. There is no parameter anywhere in this call
 // chain that lets a caller charge someone else's bucket.
-export const GENERATION_QUOTA_LIMIT = 20;
+export const GENERATION_QUOTA_LIMIT = 10;
 export const GENERATION_QUOTA_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 export type ClaimQuotaResult = { ok: true } | { ok: false; retryAfterMs: number };
@@ -587,6 +612,39 @@ export type ClaimQuotaResult = { ok: true } | { ok: false; retryAfterMs: number 
 // for each other's lock, so tenant isolation and normal cross-coach
 // throughput are unaffected. The lock auto-releases at transaction end
 // (commit or rollback) — no manual unlock path to forget.
+//
+// hashtext(coachId) is a 32-bit hash, so pg_advisory_xact_lock(bigint)
+// is keyed on a ~4.3 billion-value space — collision probability across
+// the small number of coaches ever concurrently claiming at once is
+// negligible, and even a coincidental collision between two DIFFERENT
+// coaches would only serialize their claim attempts against each other
+// for a few milliseconds longer; it can never cause a correctness issue,
+// because every SELECT/INSERT inside the transaction is still scoped by
+// the coach's REAL id (`coachId = ${coachId}`), never by the hash — the
+// hash only ever decides lock contention/ordering, not which rows are
+// counted or inserted.
+//
+// Connection-pool safety (lib/db/client.ts's getDb() caps the whole
+// app's pool at max: 3 against Supabase's Session Mode pooler): a
+// blocked pg_advisory_xact_lock() call holds its connection for as long
+// as it waits, and Postgres has no default cap on that wait. A coach
+// firing many concurrent claim attempts — exactly the "malicious loop /
+// automation bug" scenario this whole feature exists to bound — would,
+// without a bound, queue every extra attempt indefinitely on the SAME
+// lock, each one pinning one of only 3 app-wide connections for the
+// duration of its wait; enough concurrent attempts could stall unrelated
+// requests elsewhere in the app, not just this coach's own. `SET LOCAL
+// lock_timeout` bounds that: scoped to this transaction only (never
+// leaks to any other query on the connection), it makes a blocked lock
+// acquisition fail fast with Postgres error 55P03 (lock_not_available)
+// after 2s instead of waiting unboundedly. 2s comfortably exceeds how
+// long a legitimate double-click/retry race actually contends for the
+// lock (the winning transaction's own count+insert is a couple of
+// simple indexed queries — low milliseconds) while still bounding
+// worst-case connection-hold time per blocked waiter under a genuine
+// burst. A lock_timeout is treated the same as "over quota, try again
+// shortly" rather than a raw DB error surfacing to the coach — it is a
+// contention signal, not a data problem.
 export async function claimGenerationQuota(
   coachId: string,
   draftId: string | null,
@@ -595,42 +653,58 @@ export async function claimGenerationQuota(
   const db = getDb();
   const cutoff = new Date(Date.now() - GENERATION_QUOTA_WINDOW_MS);
 
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${coachId}))`);
+  try {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`set local lock_timeout = '2s'`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${coachId}))`);
 
-    const [{ count }] = await tx
-      .select({ count: sql<number>`count(*)::int` })
-      .from(programGenerationQuotaClaims)
-      .where(
-        and(
-          eq(programGenerationQuotaClaims.coachId, coachId),
-          gt(programGenerationQuotaClaims.createdAt, cutoff),
-        ),
-      );
-
-    if (count >= GENERATION_QUOTA_LIMIT) {
-      const [oldest] = await tx
-        .select({ createdAt: programGenerationQuotaClaims.createdAt })
+      const [{ count }] = await tx
+        .select({ count: sql<number>`count(*)::int` })
         .from(programGenerationQuotaClaims)
         .where(
           and(
             eq(programGenerationQuotaClaims.coachId, coachId),
             gt(programGenerationQuotaClaims.createdAt, cutoff),
           ),
-        )
-        .orderBy(asc(programGenerationQuotaClaims.createdAt))
-        .limit(1);
+        );
 
-      const retryAfterMs = oldest
-        ? Math.max(0, oldest.createdAt.getTime() + GENERATION_QUOTA_WINDOW_MS - Date.now())
-        : GENERATION_QUOTA_WINDOW_MS;
+      if (count >= GENERATION_QUOTA_LIMIT) {
+        const [oldest] = await tx
+          .select({ createdAt: programGenerationQuotaClaims.createdAt })
+          .from(programGenerationQuotaClaims)
+          .where(
+            and(
+              eq(programGenerationQuotaClaims.coachId, coachId),
+              gt(programGenerationQuotaClaims.createdAt, cutoff),
+            ),
+          )
+          .orderBy(asc(programGenerationQuotaClaims.createdAt))
+          .limit(1);
 
-      return { ok: false, retryAfterMs };
+        const retryAfterMs = oldest
+          ? Math.max(0, oldest.createdAt.getTime() + GENERATION_QUOTA_WINDOW_MS - Date.now())
+          : GENERATION_QUOTA_WINDOW_MS;
+
+        return { ok: false, retryAfterMs };
+      }
+
+      await tx.insert(programGenerationQuotaClaims).values({ coachId, draftId, scope });
+      return { ok: true };
+    });
+  } catch (err) {
+    // Postgres 55P03 = lock_not_available — the lock_timeout above
+    // tripped because this coach already has another claim attempt in
+    // flight. Same user-facing shape as "over quota" (a short, clear
+    // "try again" — see actions.ts/staged-generation.ts's message
+    // formatting) rather than a raw 500, but a much shorter retry
+    // window since this is contention, not exhaustion. Any other error
+    // (a genuine DB failure) is not swallowed — it propagates exactly
+    // like every other unexpected failure in this service layer.
+    if (err && typeof err === "object" && "code" in err && (err as { code: unknown }).code === "55P03") {
+      return { ok: false, retryAfterMs: 5_000 };
     }
-
-    await tx.insert(programGenerationQuotaClaims).values({ coachId, draftId, scope });
-    return { ok: true };
-  });
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
