@@ -272,6 +272,44 @@ export async function requireOverwatchAdminPage(): Promise<AuthedUser> {
   return { authUser: resolved.authUser, dbUser: resolved.dbUser };
 }
 
+// API-guard sibling of requireOverwatchAdminPage() — same checks
+// (authenticated, status='active', role='admin'), JSON response
+// instead of a redirect. Every other page guard in this file already
+// has an API-guard counterpart (requireCoachOrAdminPage/
+// requireCoachOrAdmin, requireAdminPage/requireAdmin); Overwatch's own
+// founder-operator actions (e.g. Invite Coach — see
+// app/api/internal/overwatch/invite-coach/route.ts) need the same
+// "active admin" check requireOverwatchAdminPage enforces for the
+// dashboard itself, from a Route Handler / Server Action rather than a
+// page. Authorization here is ENTIRELY session/role-derived — no
+// operator_profiles, no account-classification table, no client-
+// supplied identity of any kind is ever consulted.
+export async function requireOverwatchAdmin(): Promise<GuardResult> {
+  const resolved = await resolveSession();
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { ok: false, error: resolved.message },
+        { status: resolved.httpStatus },
+      ),
+    };
+  }
+  if (resolved.dbUser.status !== "active") {
+    return {
+      ok: false,
+      response: NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 }),
+    };
+  }
+  if (resolved.dbUser.role !== "admin") {
+    return {
+      ok: false,
+      response: NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 }),
+    };
+  }
+  return { ok: true, authUser: resolved.authUser, dbUser: resolved.dbUser };
+}
+
 // ─────────────────────────────────────────────────────────────
 // OBJECT-LEVEL AUTHORIZATION
 // ─────────────────────────────────────────────────────────────

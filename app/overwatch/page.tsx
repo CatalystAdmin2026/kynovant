@@ -18,6 +18,7 @@ import {
   type OverwatchCoachRow,
   type OverwatchFunnelStage,
 } from "@/lib/db/overwatch-service";
+import InviteCoachButton from "@/components/overwatch/InviteCoachButton";
 
 export const dynamic = "force-dynamic";
 
@@ -217,9 +218,12 @@ export default async function OverwatchPage({
               <p className="text-[11px] text-white/34">Founder command center</p>
             </div>
           </div>
-          <div className="hidden min-w-0 text-right sm:block">
-            <p className="truncate text-sm text-white/64">{dbUser.email}</p>
-            <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-200/55">Admin-only session</p>
+          <div className="flex shrink-0 items-center gap-3">
+            <InviteCoachButton />
+            <div className="hidden min-w-0 text-right sm:block">
+              <p className="truncate text-sm text-white/64">{dbUser.email}</p>
+              <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-200/55">Admin-only session</p>
+            </div>
           </div>
         </div>
       </header>
