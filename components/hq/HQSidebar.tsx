@@ -80,27 +80,31 @@ export default function HQSidebar({
           );
         })}
 
-        <div className="h-px bg-white/[0.05] my-3 mx-3" />
+        {comingSoonNav.length > 0 && (
+          <>
+            <div className="h-px bg-white/[0.05] my-3 mx-3" />
 
-        <p className="text-[9px] text-white/40 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
-          Coming Soon
-        </p>
+            <p className="text-[9px] text-white/40 uppercase tracking-[0.5em] px-3 pb-2 font-semibold">
+              Coming Soon
+            </p>
 
-        {comingSoonNav.map((item) => {
-          const Icon = item.icon;
-          return (
-            <div
-              key={item.label}
-              className="flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium tracking-wide text-white/30 cursor-default select-none border border-transparent"
-            >
-              <Icon size={13} className="text-white/25" />
-              {item.label}
-              <span className="ml-auto text-[9px] text-white/35 border border-white/10 px-1.5 py-0.5 leading-tight">
-                Soon
-              </span>
-            </div>
-          );
-        })}
+            {comingSoonNav.map((item) => {
+              const Icon = item.icon;
+              return (
+                <div
+                  key={item.label}
+                  className="flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium tracking-wide text-white/30 cursor-default select-none border border-transparent"
+                >
+                  <Icon size={13} className="text-white/25" />
+                  {item.label}
+                  <span className="ml-auto text-[9px] text-white/35 border border-white/10 px-1.5 py-0.5 leading-tight">
+                    Soon
+                  </span>
+                </div>
+              );
+            })}
+          </>
+        )}
       </nav>
 
       {/* Coach identity */}

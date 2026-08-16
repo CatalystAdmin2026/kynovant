@@ -110,17 +110,21 @@ export default function HQMobileNav({
                 );
               })}
 
-              <div className="h-px bg-white/[0.05] my-3" />
+              {comingSoonNav.length > 0 && (
+                <>
+                  <div className="h-px bg-white/[0.05] my-3" />
 
-              <div className="px-3 py-2 text-xs text-white/20 space-y-2">
-                {comingSoonNav.map(({ icon: Icon, label }) => (
-                  <div key={label} className="flex items-center gap-2">
-                    <Icon size={13} className="text-white/15" />
-                    <span>{label}</span>
-                    <span className="text-[9px] border border-white/10 px-1 text-white/15">Soon</span>
+                  <div className="px-3 py-2 text-xs text-white/20 space-y-2">
+                    {comingSoonNav.map(({ icon: Icon, label }) => (
+                      <div key={label} className="flex items-center gap-2">
+                        <Icon size={13} className="text-white/15" />
+                        <span>{label}</span>
+                        <span className="text-[9px] border border-white/10 px-1 text-white/15">Soon</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </>
+              )}
             </nav>
 
             <div className="px-4 py-3 border-t border-white/[0.06]">
