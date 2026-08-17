@@ -79,14 +79,51 @@ beforeAll(async () => {
   ]);
 });
 
+// Cleanup robustness — same philosophy as program-generator-integration.
+// test.ts's afterAll: every phase runs in its own try/catch, ALL phases
+// are attempted regardless of an earlier one failing, the FIRST error
+// is captured and rethrown only once every phase has been attempted,
+// and Auth user deletion (the step that actually keeps
+// @isolation-test.invalid accounts from leaking) uses Promise.allSettled
+// so one rejection doesn't stop the others. The previous version had no
+// try/catch at all — a single throw from the coachSubscriptions delete
+// aborted the entire function before users/Auth cleanup ever ran,
+// confirmed as the source of leaked entitlement-test-* fixtures found
+// during a production fixture audit.
 afterAll(async () => {
+  let firstError: unknown;
+
+  const runPhase = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`[coach-entitlement cleanup] ${label} failed:`, err instanceof Error ? err.message : err);
+      firstError = firstError ?? err;
+    }
+  };
+
   const userIds = [coach.id, admin.id].filter(Boolean);
-  if (userIds.length > 0) {
+
+  await runPhase("delete coach_subscriptions", async () => {
+    if (userIds.length === 0) return;
     await db.delete(coachSubscriptions).where(inArray(coachSubscriptions.coachId, userIds));
-    await db.delete(users).where(inArray(users.id, userIds));
-    const supa = createAdminClient();
-    await Promise.all(userIds.map((id) => supa.auth.admin.deleteUser(id)));
+  });
+
+  if (userIds.length > 0) {
+    await runPhase("delete public.users rows", async () => {
+      await db.delete(users).where(inArray(users.id, userIds));
+    });
+
+    await runPhase("delete Supabase Auth users", async () => {
+      const supa = createAdminClient();
+      const results = await Promise.allSettled(userIds.map((id) => supa.auth.admin.deleteUser(id)));
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+      }
+    });
   }
+
+  if (firstError) throw firstError;
 });
 
 async function setSubscriptionRow(overrides: Partial<typeof coachSubscriptions.$inferInsert>) {

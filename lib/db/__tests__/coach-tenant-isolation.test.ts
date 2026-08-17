@@ -173,41 +173,76 @@ beforeAll(async () => {
   checkInB = ciB.id;
 });
 
+// Cleanup robustness — same philosophy as program-generator-integration.
+// test.ts's afterAll: every phase runs in its own try/catch, ALL phases
+// are attempted regardless of an earlier one failing, the FIRST error
+// is captured and rethrown only once every phase has been attempted,
+// and Auth user deletion uses Promise.allSettled. The previous version
+// had no try/catch at all — a single throw anywhere in the FK-safe
+// chain aborted the whole function before users/Auth cleanup ran,
+// confirmed as the source of leaked isolation-test-coach-*/
+// isolation-test-client-* fixtures found during a production fixture
+// audit. Still defensive throughout: if beforeAll threw partway
+// through, some of these ids/rows may never have been created — every
+// phase below is safe to run against an empty/partial set.
 afterAll(async () => {
-  // Defensive throughout: if beforeAll threw partway through, some of
-  // these ids/rows may never have been created — every step below is
-  // safe to run against an empty/partial set.
+  let firstError: unknown;
+
+  const runPhase = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`[coach-tenant-isolation cleanup] ${label} failed:`, err instanceof Error ? err.message : err);
+      firstError = firstError ?? err;
+    }
+  };
+
   const clientIds = [clientA.id, clientB.id].filter(Boolean);
   const userIds = [coachA.id, coachB.id, clientA.id, clientB.id].filter(Boolean);
   const templateIds = [templateA, templateB].filter(Boolean);
 
   // Children before parents — every table here uses RESTRICT on these FKs.
-  if (clientIds.length > 0) {
+  await runPhase("delete weekly_check_ins/timeline_events", async () => {
+    if (clientIds.length === 0) return;
     await db.delete(weeklyCheckIns).where(inArray(weeklyCheckIns.clientId, clientIds));
     // assignProgram() (called both in fixture setup and in the
     // cross-tenant mutation test) writes a timeline_events row per call.
     await db.delete(timelineEvents).where(inArray(timelineEvents.clientId, clientIds));
-  }
-  if (clientProgramA) {
+  });
+
+  await runPhase("delete client_programs", async () => {
+    if (!clientProgramA) return;
     await db.delete(clientPrograms).where(eq(clientPrograms.id, clientProgramA));
-  }
-  if (templateIds.length > 0) {
+  });
+
+  await runPhase("delete program_templates", async () => {
+    if (templateIds.length === 0) return;
     await db.delete(programTemplates).where(inArray(programTemplates.id, templateIds));
-  }
-  if (clientIds.length > 0) {
+  });
+
+  await runPhase("delete coaching_enrollments/client_profiles", async () => {
+    if (clientIds.length === 0) return;
     await db.delete(coachingEnrollments).where(inArray(coachingEnrollments.clientId, clientIds));
     await db.delete(clientProfiles).where(inArray(clientProfiles.userId, clientIds));
-  }
+  });
+
   if (userIds.length > 0) {
-    await db.delete(users).where(inArray(users.id, userIds));
+    await runPhase("delete public.users rows", async () => {
+      await db.delete(users).where(inArray(users.id, userIds));
+    });
+
+    // Delete the underlying Supabase Auth users last, after every FK-
+    // dependent public.* row referencing them is gone.
+    await runPhase("delete Supabase Auth users", async () => {
+      const admin = createAdminClient();
+      const results = await Promise.allSettled(userIds.map((id) => admin.auth.admin.deleteUser(id)));
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+      }
+    });
   }
 
-  // Delete the underlying Supabase Auth users last, after every FK-
-  // dependent public.* row referencing them is gone.
-  if (userIds.length > 0) {
-    const admin = createAdminClient();
-    await Promise.all(userIds.map((id) => admin.auth.admin.deleteUser(id)));
-  }
+  if (firstError) throw firstError;
 });
 
 // ─────────────────────────────────────────────────────────────

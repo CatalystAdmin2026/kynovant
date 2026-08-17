@@ -93,30 +93,71 @@ beforeAll(async () => {
   ]);
 });
 
+// Cleanup robustness — same philosophy as program-generator-integration.
+// test.ts's afterAll: every phase runs in its own try/catch, ALL phases
+// are attempted regardless of an earlier one failing, the FIRST error
+// is captured and rethrown only once every phase has been attempted,
+// and Auth user deletion uses Promise.allSettled. The previous version
+// had no try/catch at all — a single throw anywhere in the chain
+// aborted the whole function before users/Auth cleanup ran, confirmed
+// as the source of leaked messaging-test-* fixtures found during a
+// production fixture audit.
 afterAll(async () => {
-  const userIds = [coachA.id, coachB.id, clientA.id, clientB.id].filter(Boolean);
+  let firstError: unknown;
 
-  // Children before parents.
-  const convRows = await db
-    .select({ id: conversations.id })
-    .from(conversations)
-    .where(inArray(conversations.coachId, [coachA.id, coachB.id].filter(Boolean)));
-  const convIds = convRows.map((r) => r.id);
-  if (convIds.length > 0) {
-    await db.delete(messages).where(inArray(messages.conversationId, convIds));
-    await db.delete(conversations).where(inArray(conversations.id, convIds));
-  }
-  await db.delete(coachNotifications).where(inArray(coachNotifications.coachId, [coachA.id, coachB.id].filter(Boolean)));
+  const runPhase = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`[messaging-tenant-isolation cleanup] ${label} failed:`, err instanceof Error ? err.message : err);
+      firstError = firstError ?? err;
+    }
+  };
+
+  const userIds = [coachA.id, coachB.id, clientA.id, clientB.id].filter(Boolean);
+  const coachIds = [coachA.id, coachB.id].filter(Boolean);
+  const clientIds = [clientA.id, clientB.id].filter(Boolean);
+
+  await runPhase("delete messages/conversations", async () => {
+    if (coachIds.length === 0) return;
+    const convRows = await db.select({ id: conversations.id }).from(conversations).where(inArray(conversations.coachId, coachIds));
+    const convIds = convRows.map((r) => r.id);
+    if (convIds.length > 0) {
+      await db.delete(messages).where(inArray(messages.conversationId, convIds));
+      await db.delete(conversations).where(inArray(conversations.id, convIds));
+    }
+  });
+
+  await runPhase("delete coach_notifications", async () => {
+    if (coachIds.length === 0) return;
+    await db.delete(coachNotifications).where(inArray(coachNotifications.coachId, coachIds));
+  });
+
+  await runPhase("delete coaching_enrollments/client_profiles/coach_profiles", async () => {
+    if (clientIds.length > 0) {
+      await db.delete(coachingEnrollments).where(inArray(coachingEnrollments.clientId, clientIds));
+      await db.delete(clientProfiles).where(inArray(clientProfiles.userId, clientIds));
+    }
+    if (coachIds.length > 0) {
+      await db.delete(coachProfiles).where(inArray(coachProfiles.userId, coachIds));
+    }
+  });
+
   if (userIds.length > 0) {
-    await db.delete(coachingEnrollments).where(inArray(coachingEnrollments.clientId, [clientA.id, clientB.id].filter(Boolean)));
-    await db.delete(clientProfiles).where(inArray(clientProfiles.userId, [clientA.id, clientB.id].filter(Boolean)));
-    await db.delete(coachProfiles).where(inArray(coachProfiles.userId, [coachA.id, coachB.id].filter(Boolean)));
-    await db.delete(users).where(inArray(users.id, userIds));
+    await runPhase("delete public.users rows", async () => {
+      await db.delete(users).where(inArray(users.id, userIds));
+    });
+
+    await runPhase("delete Supabase Auth users", async () => {
+      const admin = createAdminClient();
+      const results = await Promise.allSettled(userIds.map((id) => admin.auth.admin.deleteUser(id)));
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+      }
+    });
   }
-  if (userIds.length > 0) {
-    const admin = createAdminClient();
-    await Promise.all(userIds.map((id) => admin.auth.admin.deleteUser(id)));
-  }
+
+  if (firstError) throw firstError;
 });
 
 // ─────────────────────────────────────────────────────────────
