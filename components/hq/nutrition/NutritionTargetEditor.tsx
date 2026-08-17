@@ -55,6 +55,24 @@ type Status =
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────
 
+// The Height ft/in inputs (ClientMetricsPanel) share a single compact
+// row with two unit labels, so each Input renders far narrower
+// (~46px) than the shared Input primitive's default px-3.5 (14px)
+// horizontal padding was ever sized for — 28px of a 46px box was pure
+// padding, clipping a typed digit to a sliver. Chrome's native
+// number-input spinner arrows (on by default) then ate further into
+// the little that was left. `!` overrides FIELD_BASE's px-3.5 per
+// this file's established convention for overriding Input's shared
+// classes (see the gold/amber button overrides elsewhere in this
+// file); the [&::-webkit-*-spin-button] + [appearance:textfield] pair
+// removes the native spinners only on these two narrow inputs —
+// every other number input in this file (Weight, Calories, Protein,
+// Fat, Carbs) has ample width and keeps its spinners untouched.
+const COMPACT_NUMBER_INPUT =
+  "!px-2 [appearance:textfield] " +
+  "[&::-webkit-outer-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0 " +
+  "[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0";
+
 const GOAL_LABELS: Record<string, string> = {
   fat_loss:               "Fat Loss",
   muscle_gain:            "Muscle Gain",
@@ -215,7 +233,7 @@ function ClientMetricsPanel({
               onChange={(e) => setHeightFeet(e.target.value)}
               min={1}
               max={8}
-              className="min-w-0 flex-1 tabular-nums"
+              className={cx("min-w-0 flex-1 tabular-nums text-center", COMPACT_NUMBER_INPUT)}
             />
             <span className="shrink-0 text-xs text-white/25">ft</span>
             <Input
@@ -227,7 +245,7 @@ function ClientMetricsPanel({
               onChange={(e) => setHeightIn(e.target.value)}
               min={0}
               max={11}
-              className="min-w-0 flex-1 tabular-nums"
+              className={cx("min-w-0 flex-1 tabular-nums text-center", COMPACT_NUMBER_INPUT)}
             />
             <span className="shrink-0 text-xs text-white/25">in</span>
           </div>
