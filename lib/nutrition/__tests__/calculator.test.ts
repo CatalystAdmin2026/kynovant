@@ -114,6 +114,16 @@ describe("calculate — unit normalization + Mifflin-St Jeor", () => {
   });
 });
 
+describe("ageFromDob — date-only and UTC-stable", () => {
+  it("rejects calendar-invalid dates instead of allowing JavaScript normalization", () => {
+    expect(ageFromDob("2000-02-31")).toBeNull();
+  });
+
+  it("returns null for malformed dates", () => {
+    expect(ageFromDob("not-a-date")).toBeNull();
+  });
+});
+
 describe("calculate — activity multiplier applied exactly once", () => {
   it("TDEE is BMR × the activity multiplier for that level, no double application", () => {
     for (const level of Object.keys(ACTIVITY_MULTIPLIERS)) {

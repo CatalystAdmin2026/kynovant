@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import {
   Flame, Beef, Droplet, Wheat,
@@ -132,6 +133,7 @@ function ClientMetricsPanel({
   calcProfile: CalcProfile;
   firstName: string;
 }) {
+  const router = useRouter();
   const initialFeet = calcProfile.heightInches != null ? Math.floor(calcProfile.heightInches / 12) : "";
   const initialInches = calcProfile.heightInches != null ? Math.round(calcProfile.heightInches % 12) : "";
 
@@ -178,6 +180,10 @@ function ClientMetricsPanel({
     });
     if (result.ok) {
       setStatus({ type: "success", message: `Saved. ${firstName}'s calculator is ready.` });
+      // The action revalidates the server page, but this client component
+      // remains mounted until the new RSC payload arrives. Refresh so the
+      // calculator receives persisted metrics without a manual reload.
+      router.refresh();
     } else {
       setStatus({ type: "error", message: result.error ?? "Failed to save metrics." });
     }

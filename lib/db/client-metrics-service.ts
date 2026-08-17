@@ -24,6 +24,7 @@ import "server-only";
 import { getDb } from "./client";
 import { healthProfiles, bodyCompositionRecords } from "./schema-profile";
 import type { BiologicalSex } from "./schema-profile";
+import { ageFromDob } from "@/lib/nutrition/calculator";
 
 // Mirrors the bounds lib/nutrition/calculator.ts's validateInputs()
 // enforces, applied here too since this is a separate write path.
@@ -46,8 +47,15 @@ export interface ClientMetricsResult {
 
 function isValidDobString(dob: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) return false;
-  const date = new Date(dob + "T00:00:00");
-  if (Number.isNaN(date.getTime())) return false;
+  const [year, month, day] = dob.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return false;
+  }
   return date.getTime() <= Date.now(); // not in the future
 }
 
@@ -82,8 +90,15 @@ export async function saveClientMetrics(
       errors.push("Weight must be between 1 and 2000 lbs.");
     }
   }
-  if (input.dateOfBirth !== undefined && !isValidDobString(input.dateOfBirth)) {
-    errors.push("Date of birth must be a valid date, not in the future.");
+  if (input.dateOfBirth !== undefined) {
+    if (!isValidDobString(input.dateOfBirth)) {
+      errors.push("Date of birth must be a valid date, not in the future.");
+    } else {
+      const age = ageFromDob(input.dateOfBirth);
+      if (age === null || age < 13 || age > 120) {
+        errors.push("Age must be between 13 and 120.");
+      }
+    }
   }
 
   if (errors.length > 0) {
