@@ -12,6 +12,7 @@
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { Dumbbell } from "lucide-react";
 import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getCoachClientWorkspace } from "@/lib/db/coach-client-workspace-service";
 import { listAssignableBlueprints, getClientProgramHistory } from "@/lib/db/coach-program-assignment-service";
@@ -20,8 +21,9 @@ import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import AssignProgramButton from "@/components/hq/workspace/AssignProgramButton";
 import AssignProgramModal from "@/components/hq/workspace/AssignProgramModal";
 import ProgramTimeline from "@/components/hq/workspace/ProgramTimeline";
+import KpiRing, { KPI_RING_GOLD } from "@/components/hq/workspace/KpiRing";
 import { Card, EmptyState, cx } from "@/components/ui";
-import { SEVERITY_DOT, SEVERITY_TEXT, SEVERITY_BAR, type Severity } from "@/lib/ui/status";
+import { SEVERITY_DOT, SEVERITY_TEXT, SEVERITY_BAR, SEVERITY_STROKE, type Severity } from "@/lib/ui/status";
 import type {
   CoachClientWorkspace,
   ExercisePerformance,
@@ -127,6 +129,43 @@ function complianceColor(pct: number | null) {
   return SEVERITY_TEXT[complianceSeverity(pct)];
 }
 
+// ─────────────────────────────────────────────────────────────
+// "SETUP REQUIRED" vs. genuine CRITICAL — presentation only.
+//
+// computeAttention() (lib/db/coach-dashboard-service.ts) has exactly
+// ONE trigger that returns level="critical" today:
+// !activeProgramId -> reason="No active program". That is the normal,
+// expected state for a brand-new client who simply hasn't been
+// programmed yet — not an actual problem — so this page reinterprets
+// ONLY that specific (level, reason) pair as a calmer, gold/amber
+// "Setup Required" state instead of red CRITICAL.
+//
+// Deliberately keyed on the exact reason string, not just the level,
+// so a genuinely different future critical trigger (a real
+// interruption/problem computeAttention() doesn't detect yet) is never
+// silently caught by this branch and would still render as full red
+// CRITICAL below. computeAttention() itself — and the coach dashboard's
+// "No Active Program" client list/count, which reads its raw output —
+// is intentionally NOT touched by this file; this is a display-layer
+// decision local to the client workspace page only.
+// ─────────────────────────────────────────────────────────────
+
+function isSetupRequiredState(level: AttentionLevel, reason: string): boolean {
+  return level === "critical" && reason === "No active program";
+}
+
+// The level used to drive color/severity for display — substitutes
+// "medium" (this codebase's existing amber/caution tone) only for the
+// setup-required case. Never changes the real workspace.attentionLevel
+// value read anywhere else on the page or elsewhere in the app.
+function displayAttentionLevel(level: AttentionLevel, reason: string): AttentionLevel {
+  return isSetupRequiredState(level, reason) ? "medium" : level;
+}
+
+function displayAttentionLabel(level: AttentionLevel, reason: string): string {
+  return isSetupRequiredState(level, reason) ? "setup required" : level;
+}
+
 function humanize(value: string): string {
   return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -191,11 +230,11 @@ function ClientHeader({
             <span
               className={cx(
                 "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[9px] uppercase tracking-[0.25em] font-semibold",
-                attentionBorder(w.attentionLevel),
-                attentionColor(w.attentionLevel),
+                attentionBorder(displayAttentionLevel(w.attentionLevel, w.attentionReason)),
+                attentionColor(displayAttentionLevel(w.attentionLevel, w.attentionReason)),
               )}
             >
-              {w.attentionLevel}
+              {displayAttentionLabel(w.attentionLevel, w.attentionReason)}
             </span>
           )}
         </div>
@@ -236,7 +275,15 @@ function ClientHeader({
 // SECTION: ATTENTION BANNER
 // ─────────────────────────────────────────────────────────────
 
-function AttentionBanner({ level, reason }: { level: AttentionLevel; reason: string }) {
+function AttentionBanner({
+  level,
+  reason,
+  assignAction,
+}: {
+  level: AttentionLevel;
+  reason: string;
+  assignAction?: React.ReactNode;
+}) {
   if (level === "healthy") {
     return (
       <div className={cx("rounded-xl border px-4 py-3 flex items-center gap-3", attentionBorder(level))}>
@@ -248,17 +295,32 @@ function AttentionBanner({ level, reason }: { level: AttentionLevel; reason: str
     );
   }
 
+  // See isSetupRequiredState()'s own comment for the full reasoning —
+  // this is the ONE display-layer reinterpretation this page makes of
+  // computeAttention()'s raw output. Every other level/reason
+  // combination (including any future distinct critical trigger) falls
+  // through to the unchanged banner below, unmodified.
+  const setupRequired = isSetupRequiredState(level, reason);
+  const displayLevel = displayAttentionLevel(level, reason);
+  const heading = setupRequired
+    ? "Setup Required"
+    : level === "critical" ? "Critical" : level === "high" ? "Needs Attention" : "Review This Week";
+  const body = setupRequired ? "No program assigned yet." : reason;
+
   return (
-    <div className={cx("rounded-xl border px-4 py-3 flex items-start gap-3", attentionBorder(level))}>
+    <div className={cx("rounded-xl border px-4 py-3 flex items-start gap-3", attentionBorder(displayLevel))}>
       <div className={cx(
         "w-1.5 h-1.5 rounded-full mt-1 shrink-0",
-        SEVERITY_DOT[attentionSeverity(level)],
+        SEVERITY_DOT[attentionSeverity(displayLevel)],
       )} />
-      <div>
-        <p className={cx("text-xs font-semibold uppercase tracking-[0.15em]", attentionColor(level))}>
-          {level === "critical" ? "Critical" : level === "high" ? "Needs Attention" : "Review This Week"}
-        </p>
-        <p className="text-gray-300 text-xs mt-0.5">{reason}</p>
+      <div className="flex-1 flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p className={cx("text-xs font-semibold uppercase tracking-[0.15em]", attentionColor(displayLevel))}>
+            {heading}
+          </p>
+          <p className="text-gray-300 text-xs mt-0.5">{body}</p>
+        </div>
+        {setupRequired && assignAction}
       </div>
     </div>
   );
@@ -268,73 +330,218 @@ function AttentionBanner({ level, reason }: { level: AttentionLevel; reason: str
 // SECTION: COACHING SNAPSHOT
 // ─────────────────────────────────────────────────────────────
 
+// One KPI cell — ring (with a number or icon centered inside it) plus
+// label/sub-text below. Shared shape for all six metrics so the strip
+// reads as one coherent system rather than six independently designed
+// widgets; "Last Workout" is the one exception that also renders a
+// value BELOW the ring (see its own call site for why).
+function KpiCell({
+  ringPercent,
+  ringColor,
+  ringContent,
+  belowRingValue,
+  belowRingValueColor,
+  label,
+  sub,
+}: {
+  ringPercent?: number | null;
+  ringColor: string;
+  ringContent: React.ReactNode;
+  belowRingValue?: React.ReactNode;
+  belowRingValueColor?: string;
+  label: string;
+  sub?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center text-center gap-2 px-2 py-1 min-w-0">
+      <KpiRing percent={ringPercent ?? null} strokeColor={ringColor}>
+        {ringContent}
+      </KpiRing>
+      {belowRingValue !== undefined && (
+        <p className={cx("text-sm font-bold tabular-nums leading-none", belowRingValueColor ?? "text-white")}>
+          {belowRingValue}
+        </p>
+      )}
+      <div>
+        <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em] leading-relaxed">{label}</p>
+        {sub && <p className="text-[9px] text-gray-600 mt-0.5">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
 function CoachingSnapshot({ w }: { w: CoachClientWorkspace }) {
   const stats = w.sessionStats;
   const program = w.activeProgram;
+  const readiness = w.readiness;
 
-  const cards = [
-    {
-      label: "30d Compliance",
-      value: stats.compliancePct !== null ? `${stats.compliancePct}%` : "—",
-      color: complianceColor(stats.compliancePct),
-      sub: stats.compliancePct === null ? "<3 sessions" : `${stats.completedLast30d} completed`,
-    },
-    {
-      label: "Total Sessions",
-      value: String(stats.completedTotal),
-      color: "text-white",
-      sub: `${stats.skippedTotal} skipped all time`,
-    },
-    {
-      label: "Last Workout",
-      value: fmtRelative(stats.lastCompletedAt),
-      color: SEVERITY_TEXT[stats.completedLast7d > 0 ? "ok" : "caution"],
-      sub: `${stats.completedLast7d} this week`,
-    },
-    {
-      label: "Program Week",
-      value: program ? `${program.currentWeek}${program.totalWeeks ? `/${program.totalWeeks}` : ""}` : "—",
-      color: program ? "text-[#C9A24D]" : "text-gray-600",
-      sub: program?.daysRemaining !== null && program?.daysRemaining !== undefined
-        ? `${program.daysRemaining}d remaining`
-        : program
-        ? "No end date set"
-        : "No active program",
-    },
-    {
-      label: "Sets (30d)",
-      value: stats.setAnalytics.totalSetsLast30d > 0
-        ? String(stats.setAnalytics.totalSetsLast30d)
-        : "—",
-      color: "text-white",
-      sub: stats.setAnalytics.totalSetsLast7d > 0
-        ? `${stats.setAnalytics.totalSetsLast7d} this week`
-        : "None this week",
-    },
-    {
-      label: "Profile Ready",
-      value: `${w.readiness.overallPercent}%`,
-      color: readinessColor(w.readiness.overallPercent),
-      sub: w.readiness.blockersForWorkoutGeneration.length > 0
-        ? `${w.readiness.blockersForWorkoutGeneration.length} blocker${w.readiness.blockersForWorkoutGeneration.length > 1 ? "s" : ""}`
-        : "No blockers",
-    },
-  ];
+  // 30D Compliance — real progress arc when there's enough data to be
+  // meaningful (same <3-session null rule as before), plain muted
+  // outline when there isn't.
+  const complianceSev = complianceSeverity(stats.compliancePct);
+  const complianceStroke = stats.compliancePct !== null ? SEVERITY_STROKE[complianceSev] : SEVERITY_STROKE.unknown;
+
+  // Last Workout — neutral gold ring + icon when there's been activity
+  // in the last 7 days, muted amber when not (same signal the old
+  // card's text color already carried).
+  const lastWorkoutSeverity: Severity = stats.completedLast7d > 0 ? "ok" : "caution";
+  const lastWorkoutStroke = stats.completedLast7d > 0 ? KPI_RING_GOLD : SEVERITY_STROKE.caution;
+
+  const hasProgram = !!program;
+  const setsLast30d = stats.setAnalytics.totalSetsLast30d;
+
+  const readinessSev = readinessSeverity(readiness.overallPercent);
+  const blockers = readiness.blockersForWorkoutGeneration;
+
+  const ringTextSize = "text-sm font-bold tabular-nums";
 
   return (
     <section>
       <SectionHeader title="Coaching Snapshot" />
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        {cards.map(({ label, value, color, sub }) => (
-          <Card key={label} tone="dark" padding="sm" className="relative overflow-hidden">
-            <div className="h-px absolute top-0 inset-x-0 bg-gradient-to-r from-transparent via-white/[0.05] to-transparent" />
-            <p className={cx("text-2xl font-bold tabular-nums leading-none mb-1.5", color)}>{value}</p>
-            <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em] leading-relaxed">{label}</p>
-            {sub && <p className="text-[9px] text-gray-600 mt-0.5">{sub}</p>}
-          </Card>
-        ))}
+      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] px-4 py-7 sm:px-6">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-8 sm:grid-cols-3 sm:gap-x-6 lg:grid-cols-6 lg:gap-x-3">
+          <KpiCell
+            ringPercent={stats.compliancePct}
+            ringColor={complianceStroke}
+            ringContent={
+              <span className={cx(ringTextSize, complianceColor(stats.compliancePct))}>
+                {stats.compliancePct !== null ? `${stats.compliancePct}%` : "—"}
+              </span>
+            }
+            label="30D Compliance"
+            sub={stats.compliancePct === null ? "<3 sessions" : `${stats.completedLast30d} completed`}
+          />
+
+          <KpiCell
+            ringColor={KPI_RING_GOLD}
+            ringContent={<span className={cx(ringTextSize, "text-white")}>{stats.completedTotal}</span>}
+            label="Total Sessions"
+            sub={`${stats.skippedTotal} skipped all time`}
+          />
+
+          <KpiCell
+            ringColor={lastWorkoutStroke}
+            ringContent={<Dumbbell size={16} color={lastWorkoutStroke} aria-hidden />}
+            belowRingValue={fmtRelative(stats.lastCompletedAt)}
+            belowRingValueColor={SEVERITY_TEXT[lastWorkoutSeverity]}
+            label="Last Workout"
+            sub={`${stats.completedLast7d} this week`}
+          />
+
+          <KpiCell
+            ringColor={hasProgram ? KPI_RING_GOLD : SEVERITY_STROKE.unknown}
+            ringContent={
+              <span className={cx(ringTextSize, hasProgram ? "text-[#C9A24D]" : "text-gray-600")}>
+                {hasProgram ? `${program.currentWeek}${program.totalWeeks ? `/${program.totalWeeks}` : ""}` : "—"}
+              </span>
+            }
+            label="Program Week"
+            sub={
+              program?.daysRemaining !== null && program?.daysRemaining !== undefined
+                ? `${program.daysRemaining}d remaining`
+                : program
+                ? "No end date set"
+                : "No active program"
+            }
+          />
+
+          <KpiCell
+            ringColor={setsLast30d > 0 ? KPI_RING_GOLD : SEVERITY_STROKE.unknown}
+            ringContent={
+              <span className={cx(ringTextSize, setsLast30d > 0 ? "text-white" : "text-gray-600")}>
+                {setsLast30d > 0 ? setsLast30d : "—"}
+              </span>
+            }
+            label="Sets (30D)"
+            sub={stats.setAnalytics.totalSetsLast7d > 0 ? `${stats.setAnalytics.totalSetsLast7d} this week` : "None this week"}
+          />
+
+          <ProfileReadyKpi
+            percent={readiness.overallPercent}
+            strokeColor={SEVERITY_STROKE[readinessSev]}
+            textColor={SEVERITY_TEXT[readinessSev]}
+            blockers={blockers}
+            ringTextSize={ringTextSize}
+          />
+        </div>
       </div>
     </section>
+  );
+}
+
+// Profile Ready is the one interactive KPI (Goal 3): when the profile
+// readiness calculator (lib/db/profile-readiness.ts, unmodified) has
+// already identified real blockers, tapping/clicking the KPI discloses
+// their exact text — never an invented label. Built on <details>/
+// <summary> deliberately: free keyboard operability and expand/collapse
+// semantics with zero client JS, so the rest of this server-rendered
+// page stays server-rendered. Renders as a plain, non-interactive cell
+// (same visual, no disclosure affordance) when there are no blockers —
+// nothing to reveal.
+function ProfileReadyKpi({
+  percent,
+  strokeColor,
+  textColor,
+  blockers,
+  ringTextSize,
+}: {
+  percent: number;
+  strokeColor: string;
+  textColor: string;
+  blockers: string[];
+  ringTextSize: string;
+}) {
+  const ring = (
+    <KpiRing percent={percent} strokeColor={strokeColor}>
+      <span className={cx(ringTextSize, textColor)}>{percent}%</span>
+    </KpiRing>
+  );
+  const labelBlock = (
+    <div>
+      <p className="text-[9px] font-semibold text-gray-500 uppercase tracking-[0.25em] leading-relaxed">Profile Ready</p>
+      <p className="text-[9px] text-gray-600 mt-0.5">
+        {blockers.length > 0 ? `${blockers.length} blocker${blockers.length > 1 ? "s" : ""}` : "No blockers"}
+      </p>
+    </div>
+  );
+
+  if (blockers.length === 0) {
+    return (
+      <div className="flex flex-col items-center text-center gap-2 px-2 py-1 min-w-0">
+        {ring}
+        {labelBlock}
+      </div>
+    );
+  }
+
+  return (
+    <details className="group relative flex flex-col items-center text-center gap-2 px-2 py-1 min-w-0 [&_summary::-webkit-details-marker]:hidden">
+      <summary className="ds-focus-ring flex list-none cursor-pointer flex-col items-center gap-2 rounded-lg outline-none">
+        {ring}
+        {labelBlock}
+        <span className="text-[9px] text-[#C9A24D]/70 group-open:hidden">View details ↓</span>
+        <span className="hidden text-[9px] text-[#C9A24D]/70 group-open:inline">Hide ↑</span>
+      </summary>
+      {/* Absolutely positioned so the disclosure isn't squeezed into
+          this one grid track's column width (as narrow as ~1/6 of the
+          strip on desktop) — it floats above neighboring content
+          instead, anchored to this cell's right edge so it stays
+          within the section on every breakpoint regardless of which
+          grid position this cell wraps to. */}
+      <div className="absolute right-0 top-full z-10 mt-2 w-56 max-w-[80vw] rounded-lg border border-amber-500/20 bg-[#0b0c0d] px-3 py-2.5 text-left shadow-xl">
+        <p className="text-[9px] font-semibold text-amber-400/90 uppercase tracking-[0.2em] mb-1.5">
+          Complete Client Setup
+        </p>
+        <ul className="space-y-1">
+          {blockers.map((b, i) => (
+            <li key={i} className="text-[10px] text-amber-100/70 flex items-start gap-1.5 leading-relaxed">
+              <span className="shrink-0 mt-px text-amber-400/60">·</span>
+              {b}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </details>
   );
 }
 
@@ -934,7 +1141,11 @@ export default async function ClientWorkspacePage({
       />
 
       {/* Attention banner */}
-      <AttentionBanner level={workspace.attentionLevel} reason={workspace.attentionReason} />
+      <AttentionBanner
+        level={workspace.attentionLevel}
+        reason={workspace.attentionReason}
+        assignAction={<AssignProgramButton variant="section" hasActiveProgram={hasActiveProgram} />}
+      />
 
       {/* Coaching snapshot */}
       <CoachingSnapshot w={workspace} />

@@ -39,3 +39,18 @@ export const SEVERITY_BAR: Record<Severity, string> = {
   critical: "bg-red-400/80",
   unknown: "bg-white/15",
 };
+
+// Raw color values (not Tailwind classes) for the same severity hues —
+// needed anywhere a color has to be a literal SVG `stroke`/`fill`
+// attribute rather than a className (e.g. a circular progress ring).
+// Kept in exact hue-parity with SEVERITY_DOT/SEVERITY_TEXT above:
+// amber-400/orange-400/red-400 are Tailwind's own hex values; "ok"
+// mirrors SEVERITY_TEXT.ok's muted white (not gold) — a healthy/no-
+// concern reading is deliberately neutral, not an accent color.
+export const SEVERITY_STROKE: Record<Severity, string> = {
+  ok: "rgba(255,255,255,0.45)",
+  caution: "#fbbf24",
+  high: "#fb923c",
+  critical: "#f87171",
+  unknown: "rgba(255,255,255,0.18)",
+};
