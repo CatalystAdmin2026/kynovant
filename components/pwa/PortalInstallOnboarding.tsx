@@ -75,7 +75,14 @@ function markShownThisSession() {
 }
 
 export default function PortalInstallOnboarding() {
-  const { mounted, surface, dismissed, isMobile, install, dismiss } = usePwaInstallState();
+  // scope: "portal" — the client Portal's dismissal is tracked
+  // independently from Coach HQ and the public site (see
+  // lib/pwa/use-install-state.ts's InstallScope). Without this, a coach
+  // dismissing install inside HQ on a shared browser/device would
+  // silently suppress this exact onboarding for a genuinely first-time
+  // client using the same device — contradicting the invitation email's
+  // promise that Kynovant will show them how to install.
+  const { mounted, surface, dismissed, isMobile, install, dismiss } = usePwaInstallState("portal");
   // Lazy initializer, not an effect+setState: hasShownThisSession() is
   // itself SSR-safe (try/catch around window.sessionStorage, false when
   // window doesn't exist), and this component's actual rendered output
@@ -110,7 +117,7 @@ export default function PortalInstallOnboarding() {
     // already no-ops correctly for installed/unsupported/dismissed, so
     // this is a true no-op in every case except "desktop, install-
     // eligible" (its intended preserved affordance).
-    return <InstallKynovant variant="card" />;
+    return <InstallKynovant variant="card" scope="portal" />;
   }
 
   if (!revealed) return null;

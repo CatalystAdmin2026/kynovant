@@ -83,7 +83,7 @@ describe("PortalInstallOnboarding — visibility gate", () => {
 
   it("falls back to the existing InstallKynovant card — never renders nothing AND never renders both — when not eligible (desktop, installed, unsupported, or dismissed)", () => {
     expect(component).toContain("if (!eligible) {");
-    expect(component).toContain("return <InstallKynovant variant=\"card\" />;");
+    expect(component).toContain('return <InstallKynovant variant="card" scope="portal" />;');
   });
 
   it("delays the prominent sheet's first paint so it never pops in instantly on page load", () => {
@@ -147,7 +147,7 @@ describe("InstallKynovant — refactored onto the shared hook without changing i
   });
 
   it("uses the shared hook and shared InstallInstructions, not its own duplicated event wiring", () => {
-    expect(component).toContain('import { usePwaInstallState } from "@/lib/pwa/use-install-state"');
+    expect(component).toMatch(/import \{[^}]*usePwaInstallState[^}]*\} from "@\/lib\/pwa\/use-install-state"/);
     expect(component).toContain('import InstallInstructions from "./InstallInstructions"');
     expect(component).not.toMatch(/addEventListener\(["']beforeinstallprompt["']/);
   });
@@ -175,25 +175,41 @@ describe("usePwaInstallState.install() — no unhandled promise rejection on a s
 describe("Dismissal persistence — device-local only, never a new DB table", () => {
   it("uses localStorage, not a server/database call, for dismissal state", () => {
     const hook = source(HOOK);
-    expect(hook).toContain('const DISMISSED_KEY = "kynovant:pwa-install-dismissed";');
-    expect(hook).toContain("window.localStorage.getItem(DISMISSED_KEY)");
-    expect(hook).toContain("window.localStorage.setItem(DISMISSED_KEY");
+    expect(hook).toContain("window.localStorage.getItem(DISMISSED_KEYS[scope])");
+    expect(hook).toContain("window.localStorage.setItem(DISMISSED_KEYS[scope]");
     expect(hook).not.toMatch(/fetch\(|getDb\(|drizzle/);
   });
 
   it("localStorage reads/writes are wrapped in try/catch (private-browsing storage can throw)", () => {
     const hook = source(HOOK);
-    expect(hook).toMatch(/function readDismissed\(\): boolean \{\s*try \{/);
-    expect(hook).toMatch(/function writeDismissed\(value: boolean\) \{\s*try \{/);
+    expect(hook).toMatch(/function readDismissed\(scope: InstallScope\): boolean \{\s*try \{/);
+    expect(hook).toMatch(/function writeDismissed\(scope: InstallScope, value: boolean\) \{\s*try \{/);
   });
 
-  it("a new beforeinstallprompt firing clears any prior dismissal — a device that becomes newly install-eligible again is not stuck suppressed forever", () => {
+  // Root cause of "Install Kynovant reappears after every HQ navigation":
+  // Chromium re-fires beforeinstallprompt on essentially every qualifying
+  // page load, not just once ever — the previous handler treated every
+  // firing as "user hasn't decided yet" and unconditionally wiped the
+  // persisted dismissal, so a coach's explicit dismiss() was erased by
+  // the very next navigation's beforeinstallprompt event.
+  it("a fresh beforeinstallprompt firing does NOT clear a prior dismissal — only an explicit dismiss()/install() call changes dismissal state", () => {
     const hook = source(HOOK);
     const fnStart = hook.indexOf("function onBeforeInstallPrompt");
     const fnEnd = hook.indexOf("function onAppInstalled");
     const fnBody = hook.slice(fnStart, fnEnd);
-    expect(fnBody).toContain("setDismissed(false);");
-    expect(fnBody).toContain("writeDismissed(false);");
+    expect(fnBody).not.toContain("setDismissed(false)");
+    expect(fnBody).not.toContain("writeDismissed(");
+    // It still captures the event and re-derives surface — only the
+    // dismissal side effect was removed, not the event handling itself.
+    expect(fnBody).toContain("setPromptEvent(installEvent);");
+    expect(fnBody).toContain("update(installEvent);");
+  });
+
+  it("dismiss() and a real native-prompt 'dismissed' outcome are the ONLY two places dismissal is ever written", () => {
+    const hook = source(HOOK);
+    const writeCallSites = hook.match(/writeDismissed\(scope, true\)/g) ?? [];
+    // install()'s dismissed-outcome branch, and dismiss() itself.
+    expect(writeCallSites.length).toBe(2);
   });
 
   it("appinstalled immediately flips surface to 'installed', independent of the dismissed flag", () => {
@@ -202,6 +218,65 @@ describe("Dismissal persistence — device-local only, never a new DB table", ()
     const fnEnd = hook.indexOf("const initTimer");
     const fnBody = hook.slice(fnStart, fnEnd);
     expect(fnBody).toContain('setSurface("installed");');
+  });
+});
+
+describe("Scoped dismissal — HQ, Portal, and the public site never share one dismissal fact", () => {
+  const hook = source(HOOK);
+
+  it("defines three distinct storage keys, one per account context", () => {
+    expect(hook).toMatch(/default:\s*"kynovant:pwa-install-dismissed",/);
+    expect(hook).toMatch(/hq:\s*"kynovant:pwa-install-dismissed:hq",/);
+    expect(hook).toMatch(/portal:\s*"kynovant:pwa-install-dismissed:portal",/);
+  });
+
+  it("the public site's key is unchanged from before this fix — existing visitor dismissals keep working", () => {
+    expect(hook).toContain('"kynovant:pwa-install-dismissed"');
+  });
+
+  it("usePwaInstallState takes an explicit scope, defaulting to the public/unscoped key", () => {
+    expect(hook).toContain('export function usePwaInstallState(scope: InstallScope = "default")');
+    expect(hook).toContain("readDismissed(scope)");
+  });
+
+  it("Coach HQ's two InstallKynovant call sites (sidebar, mobile nav) both pass scope=\"hq\"", () => {
+    const sidebar = source("components/hq/HQSidebar.tsx");
+    const mobileNav = source("components/hq/HQMobileNav.tsx");
+    expect(sidebar).toMatch(/<InstallKynovant variant="card" scope="hq"/);
+    expect(mobileNav).toMatch(/<InstallKynovant variant="card" scope="hq"/);
+  });
+
+  it("the Portal onboarding hook and its InstallKynovant fallback both pass scope=\"portal\"", () => {
+    const component = source(PORTAL_ONBOARDING);
+    expect(component).toContain('usePwaInstallState("portal")');
+    expect(component).toMatch(/<InstallKynovant variant="card" scope="portal"/);
+  });
+
+  it("InstallKynovant forwards its scope prop straight into the shared hook, defaulting to \"default\"", () => {
+    const component = source(INSTALL_KYNOVANT);
+    expect(component).toMatch(/scope\s*=\s*"default"/);
+    expect(component).toContain("usePwaInstallState(scope)");
+  });
+});
+
+describe("Install-later affordance — /account, reachable after dismissal", () => {
+  const account = source("app/account/page.tsx");
+
+  it("renders InstallKynovant, scoped to the Portal, from the account page", () => {
+    expect(account).toContain('import InstallKynovant from "@/components/pwa/InstallKynovant"');
+    expect(account).toMatch(/<InstallKynovant variant="nav" scope="portal"/);
+  });
+
+  it("uses the \"nav\"/\"menu\" variant, not \"card\" — card is the only variant that hides once dismissed, which would defeat an install-later affordance", () => {
+    expect(account).not.toMatch(/<InstallKynovant variant="card"/);
+  });
+
+  it("is not a large new Settings feature — a single small addition alongside the existing Session/sign-out block, not a new page", () => {
+    const appMatch = account.match(/uppercase">\s*App\s*<\/p>/);
+    const sessionMatch = account.match(/uppercase">\s*Session\s*<\/p>/);
+    expect(appMatch).not.toBeNull();
+    expect(sessionMatch).not.toBeNull();
+    expect(account.indexOf(sessionMatch![0])).toBeGreaterThan(account.indexOf(appMatch![0]));
   });
 });
 

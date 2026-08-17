@@ -26,20 +26,38 @@ export interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 }
 
-const DISMISSED_KEY = "kynovant:pwa-install-dismissed";
+// Scoped dismissal storage — HQ and the client Portal each get their own
+// key, distinct from the public marketing site's ("default", unscoped —
+// unchanged, same key as before this fix, so existing public-site
+// dismissals on a visitor's browser keep working exactly as before).
+//
+// Root cause this scoping fixes: a single shared key meant a coach
+// dismissing install inside Coach HQ on a given browser/device silently
+// suppressed a completely different client's first-ever Portal install
+// onboarding on that SAME browser/device (e.g. a coach testing both
+// surfaces on their own laptop) — contradicting the per-client "first
+// eligible session" promise made in the invitation email. HQ and Portal
+// are different account contexts and must not share one dismissal fact.
+export type InstallScope = "default" | "hq" | "portal";
 
-function readDismissed(): boolean {
+const DISMISSED_KEYS: Record<InstallScope, string> = {
+  default: "kynovant:pwa-install-dismissed",
+  hq: "kynovant:pwa-install-dismissed:hq",
+  portal: "kynovant:pwa-install-dismissed:portal",
+};
+
+function readDismissed(scope: InstallScope): boolean {
   try {
-    return window.localStorage.getItem(DISMISSED_KEY) === "true";
+    return window.localStorage.getItem(DISMISSED_KEYS[scope]) === "true";
   } catch {
     return false;
   }
 }
 
-function writeDismissed(value: boolean) {
+function writeDismissed(scope: InstallScope, value: boolean) {
   try {
-    if (value) window.localStorage.setItem(DISMISSED_KEY, "true");
-    else window.localStorage.removeItem(DISMISSED_KEY);
+    if (value) window.localStorage.setItem(DISMISSED_KEYS[scope], "true");
+    else window.localStorage.removeItem(DISMISSED_KEYS[scope]);
   } catch {
     // Storage can be unavailable in some private browsing contexts.
   }
@@ -73,7 +91,7 @@ export interface UsePwaInstallStateResult {
   dismiss: () => void;
 }
 
-export function usePwaInstallState(): UsePwaInstallStateResult {
+export function usePwaInstallState(scope: InstallScope = "default"): UsePwaInstallStateResult {
   const [mounted, setMounted] = useState(false);
   const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [surface, setSurface] = useState<InstallSurface>("unsupported");
@@ -89,8 +107,18 @@ export function usePwaInstallState(): UsePwaInstallStateResult {
       event.preventDefault();
       const installEvent = event as BeforeInstallPromptEvent;
       setPromptEvent(installEvent);
-      setDismissed(false);
-      writeDismissed(false);
+      // Deliberately does NOT touch dismissal state. Chromium re-fires
+      // beforeinstallprompt on essentially every qualifying page load —
+      // not just once ever, and not only after an uninstall — so this
+      // handler runs on nearly every navigation while the app isn't
+      // installed. The previous version called
+      // set the dismissed flag back to false here unconditionally,
+      // silently wiping out an explicit prior dismissal on every single
+      // navigation — the exact root cause of "Install Kynovant reappears
+      // after every route change" in Coach HQ. Dismissal must only ever
+      // change in response to a real user action (dismiss()/install()
+      // below), never as a side effect of the browser re-offering the
+      // same install opportunity.
       update(installEvent);
     }
 
@@ -101,7 +129,7 @@ export function usePwaInstallState(): UsePwaInstallStateResult {
 
     const initTimer = window.setTimeout(() => {
       setMounted(true);
-      setDismissed(readDismissed());
+      setDismissed(readDismissed(scope));
       setIsMobile(
         isMobileDevice({
           userAgent: window.navigator.userAgent,
@@ -125,7 +153,7 @@ export function usePwaInstallState(): UsePwaInstallStateResult {
       window.removeEventListener("appinstalled", onAppInstalled);
       standaloneQuery?.removeEventListener?.("change", onStandaloneChange);
     };
-  }, []);
+  }, [scope]);
 
   const install = useCallback(async (): Promise<InstallOutcome> => {
     if (surface === "ios_instructions") return "ios_instructions";
@@ -136,7 +164,7 @@ export function usePwaInstallState(): UsePwaInstallStateResult {
       setPromptEvent(null);
       if (choice.outcome === "dismissed") {
         setDismissed(true);
-        writeDismissed(true);
+        writeDismissed(scope, true);
       }
       setSurface(resolveInstallSurface(getEnvironment(false)));
       return choice.outcome;
@@ -147,12 +175,12 @@ export function usePwaInstallState(): UsePwaInstallStateResult {
       setPromptEvent(null);
       return "unavailable";
     }
-  }, [surface, promptEvent]);
+  }, [surface, promptEvent, scope]);
 
   const dismiss = useCallback(() => {
     setDismissed(true);
-    writeDismissed(true);
-  }, []);
+    writeDismissed(scope, true);
+  }, [scope]);
 
   return { mounted, surface, dismissed, isMobile, install, dismiss };
 }

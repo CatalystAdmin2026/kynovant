@@ -18,6 +18,7 @@ import {
   getLatestOnboardingSubmission,
 } from "@/lib/db/profile-service";
 import LogoutButton from "@/components/portal/LogoutButton";
+import InstallKynovant from "@/components/pwa/InstallKynovant";
 
 export const dynamic = "force-dynamic";
 
@@ -235,6 +236,21 @@ export default async function AccountPage() {
 
         {/* Gold rule */}
         <div className="h-px w-full bg-[#c9a24d]/10" />
+
+        {/* App — the intentional "install later" affordance. Never nags:
+            InstallKynovant's "menu" variant only checks
+            mounted/installed/unsupported, never `dismissed` (unlike
+            "card"), so it stays available here even after a client has
+            dismissed the Portal's own onboarding sheet — a small,
+            always-reachable way to install later without repeating the
+            unprompted sheet. Renders nothing once actually installed or
+            on a browser that can't install at all. */}
+        <div className="flex flex-col gap-3">
+          <p className="text-[10px] font-semibold tracking-[0.14em] text-white/25 uppercase">
+            App
+          </p>
+          <InstallKynovant variant="nav" scope="portal" className="w-fit" />
+        </div>
 
         {/* Sign out */}
         <div className="flex flex-col gap-3">

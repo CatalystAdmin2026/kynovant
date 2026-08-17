@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Download, X } from "lucide-react";
-import { usePwaInstallState } from "@/lib/pwa/use-install-state";
+import { usePwaInstallState, type InstallScope } from "@/lib/pwa/use-install-state";
 import InstallInstructions from "./InstallInstructions";
 
 type Variant = "nav" | "menu" | "card";
@@ -10,10 +10,18 @@ type Variant = "nav" | "menu" | "card";
 interface Props {
   variant?: Variant;
   className?: string;
+  /** Which dismissal this instance reads/writes — "default" (the public
+   * marketing site, unscoped) unless a caller in a distinct account
+   * context (Coach HQ, the client Portal) opts into its own scope. See
+   * lib/pwa/use-install-state.ts's InstallScope for why this matters:
+   * without it, one coach's HQ dismissal on a shared browser/device
+   * silently suppresses a different client's first-ever Portal install
+   * onboarding. */
+  scope?: InstallScope;
 }
 
-export default function InstallKynovant({ variant = "nav", className = "" }: Props) {
-  const { mounted, surface, dismissed, install, dismiss } = usePwaInstallState();
+export default function InstallKynovant({ variant = "nav", className = "", scope = "default" }: Props) {
+  const { mounted, surface, dismissed, install, dismiss } = usePwaInstallState(scope);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
 
   const label = useMemo(() => {

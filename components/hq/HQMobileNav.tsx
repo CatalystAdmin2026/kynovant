@@ -129,7 +129,7 @@ export default function HQMobileNav({
 
             <div className="px-4 py-3 border-t border-white/[0.06]">
               <p className="text-[10px] text-white/30 truncate">{coachName}</p>
-              <InstallKynovant variant="card" className="mt-3" />
+              <InstallKynovant variant="card" scope="hq" className="mt-3" />
               <div className="mt-3">
                 <HQSignOutButton compact />
               </div>
