@@ -86,7 +86,8 @@ export default async function ClientNutritionPage({
     .limit(1);
 
   const heightInches = health?.heightInches ? parseFloat(String(health.heightInches)) : null;
-  const ageYears     = ageFromDob(health?.dateOfBirth ?? null);
+  const dateOfBirth  = health?.dateOfBirth ?? null;
+  const ageYears     = ageFromDob(dateOfBirth);
   const biologicalSex = (health?.biologicalSex as "male" | "female" | "unspecified" | null) ?? null;
   const suggestedActivityLevel = suggestActivityLevel(null);
 
@@ -94,6 +95,7 @@ export default async function ClientNutritionPage({
     heightInches,
     weightLbs,
     ageYears,
+    dateOfBirth,
     biologicalSex,
     suggestedActivityLevel,
     goalType,
@@ -197,12 +199,12 @@ export default async function ClientNutritionPage({
             {!canCalculate && (
               <p className="text-[10px] text-amber-400/35 text-right">
                 Missing {missingFields.join(", ")} ·{" "}
-                <Link
-                  href={`/hq/clients/${clientId}`}
+                <a
+                  href="#client-metrics"
                   className="underline underline-offset-2 hover:text-amber-400/60 transition-colors"
                 >
-                  complete profile
-                </Link>{" "}
+                  add below
+                </a>{" "}
                 to enable calculator
               </p>
             )}

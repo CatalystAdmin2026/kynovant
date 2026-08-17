@@ -10,6 +10,8 @@ import {
 } from "@/lib/db/nutrition-target-service";
 import type { NutritionDraftInput, NutritionDraftUpdate } from "@/lib/db/nutrition-target-service";
 import type { ActivityLevel } from "@/lib/db/schema-nutrition";
+import { saveClientMetrics } from "@/lib/db/client-metrics-service";
+import type { ClientMetricsInput } from "@/lib/db/client-metrics-service";
 
 // ─────────────────────────────────────────────────────────────
 // CREATE DRAFT
@@ -113,6 +115,32 @@ export async function publishTargetAction(
   if (result.ok) {
     revalidatePath(`/hq/clients/${clientId}/nutrition`);
     revalidatePath(`/portal/nutrition`);
+  }
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────
+// SAVE CLIENT METRICS
+//
+// Writes height / weight / date of birth / biological sex straight
+// through to the canonical profile tables (health_profiles,
+// body_composition_records) the calculator reads from — see
+// lib/db/client-metrics-service.ts. Not a nutrition-target write;
+// revalidates this page only (no draft/published target changes).
+// ─────────────────────────────────────────────────────────────
+
+export async function saveClientMetricsAction(
+  clientId: string,
+  data: ClientMetricsInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const guard = await requireCoachOrAdmin();
+  if (!guard.ok) return { ok: false, error: "Forbidden" };
+  const ownership = await assertCoachOwnsClient(guard.dbUser, clientId);
+  if (!ownership.ok) return { ok: false, error: ownership.error };
+
+  const result = await saveClientMetrics(clientId, data);
+  if (result.ok) {
+    revalidatePath(`/hq/clients/${clientId}/nutrition`);
   }
   return result;
 }

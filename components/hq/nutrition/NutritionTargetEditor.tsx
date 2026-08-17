@@ -5,10 +5,10 @@ import type { ReactNode } from "react";
 import {
   Flame, Beef, Droplet, Wheat,
   CheckCircle2, AlertCircle,
-  MessageSquare, FileEdit, Send, Plus, Salad, Calculator,
+  MessageSquare, FileEdit, Send, Plus, Salad, Calculator, Ruler,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { calculate, ACTIVITY_LABELS } from "@/lib/nutrition/calculator";
+import { calculate, ageFromDob, ACTIVITY_LABELS } from "@/lib/nutrition/calculator";
 import type { CalculationResult } from "@/lib/nutrition/calculator";
 import type { ClientNutritionTarget, ActivityLevel } from "@/lib/db/schema-nutrition";
 import {
@@ -16,6 +16,7 @@ import {
   updateDraftAction,
   publishTargetAction,
   archiveTargetAction,
+  saveClientMetricsAction,
 } from "@/app/hq/clients/[clientId]/nutrition/actions";
 import { Card, CardFooter, Button, Input, Textarea, Select, Label, EmptyState, cx } from "@/components/ui";
 
@@ -27,6 +28,7 @@ interface CalcProfile {
   heightInches: number | null;
   weightLbs: number | null;
   ageYears: number | null;
+  dateOfBirth: string | null;
   biologicalSex: "male" | "female" | "unspecified" | null;
   suggestedActivityLevel: string;
   goalType: string | null;
@@ -99,6 +101,199 @@ function MacroTile({
         {value}
       </p>
       {unit && <p className="mt-1.5 text-[10px] text-white/22">{unit}</p>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// CLIENT METRICS — the calculator's missing inputs
+//
+// health_profiles (height / biological sex / date of birth) and
+// body_composition_records (weight) previously had no coach-facing
+// write path anywhere in the app — only scripts/seed-demo-client.ts
+// ever populated them. For a real client those tables are empty, so
+// the calculator can never activate and there was nowhere on this
+// page (or anywhere in HQ) to fix that. This panel is the smallest
+// correct UI: it writes straight through to those same canonical
+// tables via saveClientMetricsAction (lib/db/client-metrics-service.ts)
+// rather than inventing nutrition-only duplicate columns.
+//
+// Only rendered while canCalculate is false. Each field prefills from
+// whatever calcProfile already has (partial-metrics case) — a coach
+// only needs to fill in what's actually missing.
+// ─────────────────────────────────────────────────────────────
+
+function ClientMetricsPanel({
+  clientId,
+  calcProfile,
+  firstName,
+}: {
+  clientId: string;
+  calcProfile: CalcProfile;
+  firstName: string;
+}) {
+  const initialFeet = calcProfile.heightInches != null ? Math.floor(calcProfile.heightInches / 12) : "";
+  const initialInches = calcProfile.heightInches != null ? Math.round(calcProfile.heightInches % 12) : "";
+
+  const [heightFeet, setHeightFeet] = useState(String(initialFeet));
+  const [heightIn, setHeightIn]     = useState(String(initialInches));
+  const [weightLbs, setWeightLbs]   = useState(calcProfile.weightLbs != null ? String(calcProfile.weightLbs) : "");
+  const [dob, setDob]               = useState(calcProfile.dateOfBirth ?? "");
+  const [sex, setSex]               = useState<"male" | "female" | "unspecified">(
+    calcProfile.biologicalSex ?? "unspecified",
+  );
+  const [status, setStatus] = useState<Status>({ type: "idle" });
+
+  const heightMissing = calcProfile.heightInches == null;
+  const weightMissing = calcProfile.weightLbs == null;
+  const dobMissing    = calcProfile.ageYears == null;
+
+  const heightProvided = heightFeet.trim() !== "" || heightIn.trim() !== "";
+  const weightProvided = weightLbs.trim() !== "";
+  const dobProvided    = dob.trim() !== "";
+
+  const combinedHeightInches = heightProvided
+    ? (Number(heightFeet) || 0) * 12 + (Number(heightIn) || 0)
+    : null;
+  const parsedWeight = weightProvided ? Number(weightLbs) : null;
+  const parsedAge = dobProvided ? ageFromDob(dob) : null;
+
+  // Height/weight/DOB save independently — a coach with only the
+  // client's weight on hand right now can save that alone and come
+  // back for the rest; the calculator activates once all three exist
+  // in the profile (across however many saves that takes).
+  const heightValid = !heightProvided || (!!combinedHeightInches && combinedHeightInches > 0 && combinedHeightInches <= 120);
+  const weightValid = !weightProvided || (!!parsedWeight && parsedWeight > 0 && parsedWeight <= 2000);
+  const dobValid = !dobProvided || (!!parsedAge && parsedAge >= 13 && parsedAge <= 120);
+
+  const canSave = (heightProvided || weightProvided || dobProvided) && heightValid && weightValid && dobValid;
+
+  async function handleSave() {
+    setStatus({ type: "saving" });
+    const result = await saveClientMetricsAction(clientId, {
+      heightInches: heightProvided ? combinedHeightInches ?? undefined : undefined,
+      weightLbs: weightProvided ? parsedWeight ?? undefined : undefined,
+      dateOfBirth: dobProvided ? dob.trim() : undefined,
+      biologicalSex: sex,
+    });
+    if (result.ok) {
+      setStatus({ type: "success", message: `Saved. ${firstName}'s calculator is ready.` });
+    } else {
+      setStatus({ type: "error", message: result.error ?? "Failed to save metrics." });
+    }
+  }
+
+  return (
+    <div id="client-metrics" className="rounded-lg border border-white/[0.06] bg-black/20 p-6">
+      <p className="mb-1 flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.3em] text-white/30">
+        <Ruler size={11} className="text-amber-400/60" aria-hidden /> Client Metrics
+      </p>
+      <p className="mb-5 text-xs leading-relaxed text-white/35">
+        The calculator needs {firstName}&apos;s height, weight, and date of birth.
+        Enter whatever&apos;s missing below — this saves to {firstName}&apos;s profile,
+        not just this page.
+      </p>
+
+      <div className="mb-5 grid grid-cols-2 gap-5 sm:grid-cols-4">
+        <div className="col-span-2 sm:col-span-1">
+          <Label tone="dark" className={heightMissing ? "!text-amber-400/60" : undefined}>
+            Height
+          </Label>
+          <div className="flex items-center gap-2">
+            <Input
+              tone="dark"
+              type="number"
+              inputMode="numeric"
+              aria-label="Height — feet"
+              value={heightFeet}
+              onChange={(e) => setHeightFeet(e.target.value)}
+              min={1}
+              max={8}
+              className="min-w-0 flex-1 tabular-nums"
+            />
+            <span className="shrink-0 text-xs text-white/25">ft</span>
+            <Input
+              tone="dark"
+              type="number"
+              inputMode="numeric"
+              aria-label="Height — inches"
+              value={heightIn}
+              onChange={(e) => setHeightIn(e.target.value)}
+              min={0}
+              max={11}
+              className="min-w-0 flex-1 tabular-nums"
+            />
+            <span className="shrink-0 text-xs text-white/25">in</span>
+          </div>
+        </div>
+        <div>
+          <Label tone="dark" className={weightMissing ? "!text-amber-400/60" : undefined}>
+            Weight (lbs)
+          </Label>
+          <Input
+            tone="dark"
+            type="number"
+            inputMode="numeric"
+            value={weightLbs}
+            onChange={(e) => setWeightLbs(e.target.value)}
+            min={1}
+            max={2000}
+            className="tabular-nums"
+          />
+        </div>
+        <div>
+          <Label tone="dark" className={dobMissing ? "!text-amber-400/60" : undefined}>
+            Date of Birth
+          </Label>
+          <Input
+            tone="dark"
+            type="date"
+            value={dob}
+            onChange={(e) => setDob(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label tone="dark">Biological Sex</Label>
+          <Select
+            tone="dark"
+            value={sex}
+            onChange={(e) => setSex(e.target.value as "male" | "female" | "unspecified")}
+          >
+            <option value="unspecified">Unspecified</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </Select>
+        </div>
+      </div>
+
+      {!heightValid && (
+        <p className="mb-3 text-xs text-red-400/70">Height must be between 1 and 120 inches.</p>
+      )}
+      {!weightValid && (
+        <p className="mb-3 text-xs text-red-400/70">Weight must be between 1 and 2000 lbs.</p>
+      )}
+      {!dobValid && (
+        <p className="mb-3 text-xs text-red-400/70">Date of birth must result in an age between 13 and 120.</p>
+      )}
+      {status.type === "error" && (
+        <p className="mb-4 text-xs text-red-400/70">{status.message}</p>
+      )}
+      {status.type === "success" && (
+        <p className="mb-4 text-xs text-emerald-400/70">{status.message}</p>
+      )}
+
+      <Button
+        tone="dark"
+        variant="outline"
+        size="sm"
+        type="button"
+        onClick={handleSave}
+        disabled={!canSave || status.type === "saving"}
+        loading={status.type === "saving"}
+        className="!border-amber-400/30 !text-amber-400/70 hover:!bg-amber-400/[0.08] hover:!text-amber-400"
+      >
+        {status.type === "saving" ? "Saving…" : "Save Metrics"}
+      </Button>
     </div>
   );
 }
@@ -580,12 +775,16 @@ export default function NutritionTargetEditor({
                 </div>
               </div>
             ) : (
-              <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-5 py-4">
-                <AlertCircle size={14} className="mt-0.5 shrink-0 text-amber-400/50" aria-hidden />
-                <p className="text-xs leading-relaxed text-amber-400/50">
-                  The calculator requires height, weight, and date of birth from the
-                  client profile. You can still enter targets manually below.
-                </p>
+              <div className="flex flex-col gap-4">
+                <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-5 py-4">
+                  <AlertCircle size={14} className="mt-0.5 shrink-0 text-amber-400/50" aria-hidden />
+                  <p className="text-xs leading-relaxed text-amber-400/50">
+                    The calculator needs {firstName}&apos;s height, weight, and date of
+                    birth to auto-fill targets. Add them below, or enter Calories,
+                    Protein, Fat, and Carbs manually in Daily Targets further down.
+                  </p>
+                </div>
+                <ClientMetricsPanel clientId={clientId} calcProfile={calcProfile} firstName={firstName} />
               </div>
             )}
           </Card>
