@@ -28,18 +28,38 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "crypto";
-import { eq, inArray } from "drizzle-orm";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { eq, inArray, desc } from "drizzle-orm";
 import { getDb } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { users, clientProfiles } from "../schema";
+import { users, clientProfiles, coachingEnrollments } from "../schema";
 import { healthProfiles, bodyCompositionRecords } from "../schema-profile";
 import { saveClientMetrics } from "../client-metrics-service";
 import { ageFromDob, calculate } from "@/lib/nutrition/calculator";
+import { coachOwnsClient, assertCoachOwnsClient } from "@/lib/auth/guards";
+import type { PublicUser } from "@/lib/supabase/session";
 
 const db = getDb();
 
 const clientA = { id: "" };
 const clientB = { id: "" };
+const coachA = { id: "" };
+const coachB = { id: "" };
+
+function fakeDbUser(id: string, role: "coach" | "admin"): PublicUser {
+  return {
+    id,
+    email: `${id}@isolation-test.invalid`,
+    normalizedEmail: `${id}@isolation-test.invalid`,
+    emailVerifiedAt: null,
+    role,
+    status: "active",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  } as PublicUser;
+}
 
 async function createAuthUser(label: string): Promise<string> {
   const admin = createAdminClient();
@@ -55,30 +75,86 @@ async function createAuthUser(label: string): Promise<string> {
 }
 
 beforeAll(async () => {
-  [clientA.id, clientB.id] = await Promise.all([
+  [clientA.id, clientB.id, coachA.id, coachB.id] = await Promise.all([
     createAuthUser("client-a"),
     createAuthUser("client-b"),
+    createAuthUser("coach-a"),
+    createAuthUser("coach-b"),
   ]);
   await Promise.all([
     db.update(users).set({ role: "client", status: "active" }).where(eq(users.id, clientA.id)),
     db.update(users).set({ role: "client", status: "active" }).where(eq(users.id, clientB.id)),
+    db.update(users).set({ role: "coach", status: "active" }).where(eq(users.id, coachA.id)),
+    db.update(users).set({ role: "coach", status: "active" }).where(eq(users.id, coachB.id)),
   ]);
   await db.insert(clientProfiles).values([
     { userId: clientA.id, fullName: "Client Metrics Test A" },
     { userId: clientB.id, fullName: "Client Metrics Test B" },
   ]);
+  // Only clientA is enrolled with coachA — clientB is deliberately left
+  // unenrolled with either coach so assertCoachOwnsClient has a real
+  // ownership boundary to fail against (not just "no enrollment exists
+  // for anyone").
+  await db.insert(coachingEnrollments).values([
+    { clientId: clientA.id, coachId: coachA.id, packageType: "Standard", monthlyRateCents: 0, status: "active" },
+  ]);
 });
 
+// Defensive per-phase cleanup (established pattern — see
+// coach-tenant-isolation.test.ts / program-generator-integration.test.ts):
+// beforeAll may have thrown partway through, so every phase below must be
+// safe to run against an empty/partial fixture set, and one phase's
+// failure must never block the rest from attempting cleanup.
 afterAll(async () => {
+  let firstError: unknown;
+  const runPhase = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`[client-metrics-service cleanup] ${label} failed:`, err instanceof Error ? err.message : err);
+      firstError = firstError ?? err;
+    }
+  };
+
   const clientIds = [clientA.id, clientB.id].filter(Boolean);
-  if (clientIds.length > 0) {
-    await db.delete(bodyCompositionRecords).where(inArray(bodyCompositionRecords.clientId, clientIds));
-    await db.delete(healthProfiles).where(inArray(healthProfiles.clientId, clientIds));
-    await db.delete(clientProfiles).where(inArray(clientProfiles.userId, clientIds));
-    await db.delete(users).where(inArray(users.id, clientIds));
-    const admin = createAdminClient();
-    await Promise.all(clientIds.map((id) => admin.auth.admin.deleteUser(id)));
-  }
+  const coachIds = [coachA.id, coachB.id].filter(Boolean);
+  const userIds = [...clientIds, ...coachIds];
+
+  await runPhase("delete body_composition_records", async () => {
+    if (clientIds.length > 0) {
+      await db.delete(bodyCompositionRecords).where(inArray(bodyCompositionRecords.clientId, clientIds));
+    }
+  });
+  await runPhase("delete health_profiles", async () => {
+    if (clientIds.length > 0) {
+      await db.delete(healthProfiles).where(inArray(healthProfiles.clientId, clientIds));
+    }
+  });
+  await runPhase("delete coaching_enrollments", async () => {
+    if (clientIds.length > 0) {
+      await db.delete(coachingEnrollments).where(inArray(coachingEnrollments.clientId, clientIds));
+    }
+  });
+  await runPhase("delete client_profiles", async () => {
+    if (clientIds.length > 0) {
+      await db.delete(clientProfiles).where(inArray(clientProfiles.userId, clientIds));
+    }
+  });
+  await runPhase("delete public.users rows", async () => {
+    if (userIds.length > 0) {
+      await db.delete(users).where(inArray(users.id, userIds));
+    }
+  });
+  await runPhase("delete Supabase Auth users", async () => {
+    if (userIds.length > 0) {
+      const admin = createAdminClient();
+      const results = await Promise.allSettled(userIds.map((id) => admin.auth.admin.deleteUser(id)));
+      const failed = results.filter((r) => r.status === "rejected");
+      if (failed.length > 0) throw new Error(`${failed.length}/${userIds.length} Auth deletions failed`);
+    }
+  });
+
+  if (firstError) throw firstError;
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -122,6 +198,31 @@ describe("saveClientMetrics — health_profiles upsert (height/sex/DOB)", () => 
     const [row] = await db.select().from(healthProfiles).where(eq(healthProfiles.clientId, clientB.id));
     expect(row.biologicalSex).toBe("unspecified");
   });
+
+  it("saving DOB only leaves height/sex untouched", async () => {
+    // clientB now has height=72/sex=unspecified/dob=1990-01-01 from above.
+    const result = await saveClientMetrics(clientB.id, { dateOfBirth: "1991-06-20" });
+    expect(result.ok).toBe(true);
+    const [row] = await db.select().from(healthProfiles).where(eq(healthProfiles.clientId, clientB.id));
+    expect(row.dateOfBirth).toBe("1991-06-20"); // updated
+    expect(parseFloat(String(row.heightInches))).toBe(72); // untouched
+    expect(row.biologicalSex).toBe("unspecified"); // untouched
+  });
+
+  it("saving sex only leaves height/DOB untouched", async () => {
+    const result = await saveClientMetrics(clientB.id, { biologicalSex: "female" });
+    expect(result.ok).toBe(true);
+    const [row] = await db.select().from(healthProfiles).where(eq(healthProfiles.clientId, clientB.id));
+    expect(row.biologicalSex).toBe("female"); // updated
+    expect(parseFloat(String(row.heightInches))).toBe(72); // untouched
+    expect(row.dateOfBirth).toBe("1991-06-20"); // untouched
+  });
+
+  it("is idempotent — saving the identical values twice does not create a second row", async () => {
+    await saveClientMetrics(clientB.id, { heightInches: 72, biologicalSex: "female", dateOfBirth: "1991-06-20" });
+    const rows = await db.select().from(healthProfiles).where(eq(healthProfiles.clientId, clientB.id));
+    expect(rows.length).toBe(1); // still exactly one row — upsert, not insert
+  });
 });
 
 describe("saveClientMetrics — body_composition_records append-only (weight)", () => {
@@ -152,6 +253,28 @@ describe("saveClientMetrics — body_composition_records append-only (weight)", 
       .from(bodyCompositionRecords)
       .where(eq(bodyCompositionRecords.clientId, clientA.id));
     expect(rows.every((r) => r.source === "coach_entry")).toBe(true);
+  });
+
+  it("'latest' weight is selected by recordedAt, matching coach-client-workspace-service.ts's ORDER BY recordedAt DESC LIMIT 1", async () => {
+    // clientA has two rows from the test above (165 then 163, both
+    // written back-to-back). A third, newer write must become "latest"
+    // even though its value is numerically neither the min nor the max —
+    // proving selection is by recency, not by value or insertion count.
+    await saveClientMetrics(clientA.id, { weightLbs: 164 });
+
+    const [latest] = await db
+      .select()
+      .from(bodyCompositionRecords)
+      .where(eq(bodyCompositionRecords.clientId, clientA.id))
+      .orderBy(desc(bodyCompositionRecords.recordedAt))
+      .limit(1);
+    expect(parseFloat(String(latest.weightPounds))).toBe(164);
+
+    const all = await db
+      .select()
+      .from(bodyCompositionRecords)
+      .where(eq(bodyCompositionRecords.clientId, clientA.id));
+    expect(all.length).toBe(3); // all three preserved, none overwritten
   });
 });
 
@@ -184,6 +307,96 @@ describe("saveClientMetrics — validation", () => {
   it("rejects a malformed date string", async () => {
     const result = await saveClientMetrics(clientB.id, { dateOfBirth: "not-a-date" });
     expect(result.ok).toBe(false);
+  });
+
+  it("rejects a calendar-invalid date (e.g. Feb 31) instead of silently rolling over", async () => {
+    const result = await saveClientMetrics(clientB.id, { dateOfBirth: "2000-02-31" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a DOB that yields age under 13", async () => {
+    const today = new Date();
+    const tooYoung = `${today.getUTCFullYear() - 10}-01-01`; // ~10yo
+    const result = await saveClientMetrics(clientB.id, { dateOfBirth: tooYoung });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a DOB that yields age over 120", async () => {
+    const today = new Date();
+    const tooOld = `${today.getUTCFullYear() - 130}-01-01`;
+    const result = await saveClientMetrics(clientB.id, { dateOfBirth: tooOld });
+    expect(result.ok).toBe(false);
+  });
+
+  it("accepts a DOB at the exact age-13 boundary", async () => {
+    const today = new Date();
+    // A birthday that has already occurred this year, exactly 13 years ago.
+    const dob = `${today.getUTCFullYear() - 13}-01-01`;
+    const result = await saveClientMetrics(clientB.id, { dateOfBirth: dob });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a DOB at the exact age-120 boundary", async () => {
+    const today = new Date();
+    const dob = `${today.getUTCFullYear() - 120}-01-01`;
+    const result = await saveClientMetrics(clientB.id, { dateOfBirth: dob });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("write authorization — saveClientMetricsAction (Coach A cannot write Coach B's client)", () => {
+  // Two kinds of proof, matching this codebase's own established
+  // precedent (see lib/auth/__tests__/rd-credential-gate.test.ts):
+  //   1. saveClientMetricsAction depends on requireCoachOrAdmin(),
+  //      which calls resolveSession() → next/headers cookies() → a real
+  //      Next.js request scope that does not exist inside a vitest
+  //      process. Source inspection proves the action calls the SAME
+  //      guard + ownership check every other action in this file uses —
+  //      not a weaker or missing check — which is as strong a proof as
+  //      executing it for a guard whose entire body is "call an
+  //      existing, separately-tested guard, then branch."
+  //   2. assertCoachOwnsClient/coachOwnsClient — the actual ownership
+  //      boundary saveClientMetricsAction delegates to — take a plain
+  //      PublicUser/id, no cookies needed, so THAT half is exercised
+  //      live against real fixtures below.
+
+  it("saveClientMetricsAction calls requireCoachOrAdmin() and assertCoachOwnsClient() — the same guard pair every sibling action in this file uses, not a weaker check", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "app/hq/clients/[clientId]/nutrition/actions.ts"),
+      "utf-8",
+    );
+    const start = source.indexOf("export async function saveClientMetricsAction");
+    expect(start).toBeGreaterThan(-1);
+    const rest = source.slice(start);
+    const nextExportIdx = rest.indexOf("export async function", 10);
+    const fn = nextExportIdx === -1 ? rest : rest.slice(0, nextExportIdx);
+
+    expect(fn).toContain("requireCoachOrAdmin()");
+    expect(fn).toContain("assertCoachOwnsClient(guard.dbUser, clientId)");
+    // No client-suppliable coachId parameter — coach identity comes only
+    // from the resolved session (guard.dbUser.id), never from the caller.
+    const signature = fn.slice(0, fn.indexOf(")"));
+    expect(signature).not.toContain("coachId");
+  });
+
+  it("coachOwnsClient is false for a coach not enrolled with that client (real fixtures)", async () => {
+    expect(await coachOwnsClient(coachA.id, clientA.id)).toBe(true); // real enrollment
+    expect(await coachOwnsClient(coachB.id, clientA.id)).toBe(false); // coachB has no enrollment with clientA
+  });
+
+  it("assertCoachOwnsClient denies Coach B acting on Coach A's client — the exact boundary saveClientMetricsAction enforces", async () => {
+    const result = await assertCoachOwnsClient(fakeDbUser(coachB.id, "coach"), clientA.id);
+    expect(result.ok).toBe(false);
+  });
+
+  it("assertCoachOwnsClient allows Coach A acting on their own client", async () => {
+    const result = await assertCoachOwnsClient(fakeDbUser(coachA.id, "coach"), clientA.id);
+    expect(result.ok).toBe(true);
+  });
+
+  it("admin bypasses client-ownership scoping — the same intentional bypass every other nutrition action allows", async () => {
+    const result = await assertCoachOwnsClient(fakeDbUser(coachB.id, "admin"), clientA.id);
+    expect(result.ok).toBe(true);
   });
 });
 
