@@ -207,8 +207,25 @@ async function validateOccurrenceDate(
 
   const scheduleState = await getClientScheduleState(clientId);
   if (scheduleState.configured) {
-    const requiredDays = await getClientScheduleAtDate(clientId, scheduledDate);
-    if (!requiredDays.includes(new Date(`${scheduledDate}T12:00:00Z`).getUTCDay() as Weekday)) {
+    const weekday = new Date(`${scheduledDate}T12:00:00Z`).getUTCDay() as Weekday;
+    // Within the current calendar week, a schedule change made TODAY
+    // governs the whole week — including days that already happened
+    // earlier this same week (e.g. a client configured for Wed+Sun on
+    // a Tuesday must still be able to submit this week's Sunday, even
+    // though Sunday's date is chronologically before the schedule
+    // row's effectiveFrom). getCurrentCheckInWindows already offers
+    // that Sunday as a real, writable window using this exact
+    // "currently active" truth; this guard must accept the write it
+    // invites, not silently reject it. Backdating into an EARLIER
+    // week still requires the strict point-in-time truth below, so a
+    // schedule set up today can't be used to retroactively create
+    // occurrences for a week that already ended before the change.
+    const weekStartDate = getWeekStartDateForCalendarDate(today);
+    const requiredDays =
+      scheduledDate >= weekStartDate
+        ? scheduleState.weekdays
+        : await getClientScheduleAtDate(clientId, scheduledDate);
+    if (!requiredDays.includes(weekday)) {
       return "That date is not a required check-in occurrence.";
     }
     return null;
@@ -282,15 +299,38 @@ export async function getCurrentCheckInWindows(
     date.setUTCDate(date.getUTCDate() + offset);
     const dateString = date.toISOString().split("T")[0];
     const weekday = date.getUTCDay();
-    const required = scheduleState.configured
-      ? scheduleHistory.some((row) =>
-          row.weekday === weekday &&
-          row.effectiveFrom <= dateString &&
-          (row.effectiveTo === null || row.effectiveTo > dateString),
-        )
-      : legacyWeekday === weekday;
     const isCurrentWeek = dateString >= weekStartDate;
     const isPriorOverdueWindow = dateString < weekStartDate && dateString <= todayStr;
+    // Current week vs. prior-week lookback intentionally use DIFFERENT
+    // truth: a schedule change made TODAY governs the WHOLE current
+    // week, including days that already happened earlier this same
+    // week (e.g. a client configured for Wed+Sun on a Tuesday must
+    // still see this week's Sunday window, even though Sunday's date
+    // is chronologically before the schedule row's effectiveFrom) — so
+    // "currently active" (effectiveTo IS NULL) is the right test for
+    // the current week, not a point-in-time effectiveFrom<=date check.
+    // The prior-week overdue lookback is different: it must NOT let
+    // today's schedule change retroactively invent an overdue day for
+    // a week that already ended before the change — that window uses
+    // the strict, point-in-time effectiveFrom/effectiveTo truth.
+    // The prior-week overdue lookback is a new-schedule-feature
+    // enhancement — it must NOT apply to the legacy single-day
+    // fallback (no client_check_in_schedule rows at all), which is
+    // documented and tested to match pre-multi-day behavior
+    // byte-for-byte: exactly one window, for the current week only.
+    // Without this gate, a legacy client who missed last week's single
+    // check-in would suddenly see a second, previously-nonexistent
+    // "overdue" card — a real behavior change for every single-day
+    // client, not just ones actually using the new schedule feature.
+    if (!scheduleState.configured) {
+      if (isCurrentWeek && legacyWeekday === weekday) candidateDates.push(dateString);
+      continue;
+    }
+    const required = scheduleHistory.some((row) => {
+      if (row.weekday !== weekday) return false;
+      if (isCurrentWeek) return row.effectiveTo === null;
+      return row.effectiveFrom <= dateString && (row.effectiveTo === null || row.effectiveTo > dateString);
+    });
     if (required && (isCurrentWeek || isPriorOverdueWindow)) candidateDates.push(dateString);
   }
 

@@ -609,22 +609,29 @@ export async function getClientCheckInSummary(
       .from(coachingEnrollments)
       .where(and(eq(coachingEnrollments.clientId, clientId), eq(coachingEnrollments.status, "active")))
       .limit(1);
-    legacyDay = enrollment?.checkInDayOfWeek ?? null;
+    // An active enrollment (even with checkInDayOfWeek left NULL)
+    // defaults to Sunday — matching getCurrentCheckInWindows' own
+    // legacyWeekday convention. Only the absence of any active
+    // enrollment at all leaves legacyDay genuinely null (no fallback
+    // possible — "no schedule" is real here, not just unconfigured).
+    if (enrollment) legacyDay = enrollment.checkInDayOfWeek ?? 0;
   }
   const requiredWeekdays: number[] = [];
   for (let offset = 0; offset < 7; offset += 1) {
     const date = new Date(`${currentWeekStart}T00:00:00Z`);
     date.setUTCDate(date.getUTCDate() + offset);
-    const dateString = date.toISOString().split("T")[0];
-    if (dateString > today) continue;
     const weekday = date.getUTCDay();
+    // "Currently active" (effectiveTo IS NULL), not a point-in-time
+    // effectiveFrom<=date check — a schedule change made today governs
+    // the WHOLE current week, including days that already happened
+    // earlier this same week. See the matching fix + full reasoning in
+    // getCurrentCheckInWindows (check-in-service.ts), which this
+    // duplicates the current-week half of. legacyDay stays null (never
+    // matches) when this client has no active enrollment at all, so an
+    // enrollment-less client correctly gets zero requiredWeekdays here.
     const required = scheduleState.configured
-      ? scheduleHistory.some((row) =>
-          row.weekday === weekday &&
-          row.effectiveFrom <= dateString &&
-          (row.effectiveTo === null || row.effectiveTo > dateString),
-        )
-      : (legacyDay ?? 0) === weekday;
+      ? scheduleHistory.some((row) => row.weekday === weekday && row.effectiveTo === null)
+      : legacyDay !== null && legacyDay === weekday;
     if (required) requiredWeekdays.push(weekday);
   }
   let currentWeekCompliance: ClientCheckInSummary["currentWeekCompliance"] = null;

@@ -105,13 +105,28 @@ afterAll(async () => {
   }
 });
 
+// No blanket schedule pre-seed at the top level — deliberately. Each
+// describe block below seeds exactly the schedule state it needs, in
+// its OWN local beforeEach. This replaced a single shared pre-seed
+// that caused a real cross-test bug: createOrUpdateDraftCheckIn
+// validates a requested scheduledDate against getClientScheduleAtDate
+// (point-in-time truth — see validateOccurrenceDate in
+// check-in-service.ts), so STORAGE/FLOW/SECURITY's WED/SUN writes
+// genuinely need an active schedule row dated BEFORE those calendar
+// dates. But setClientSchedule() diffs against the CURRENTLY ACTIVE
+// set and no-ops when the target already matches — so when
+// SCHEDULE/COMPLIANCE tests called setClientSchedule(clientA.id, [0,
+// 3]) against that same pre-seeded (pre-dated) row, effectiveFrom
+// never advanced to "today", and getCurrentCheckInWindows' prior-week
+// overdue lookback then (correctly, given that stale effectiveFrom)
+// surfaced STORAGE/FLOW's own past week as phantom "overdue" windows
+// on top of the current week's real ones. Scoping the pre-dated seed
+// to only the blocks that need it, and leaving SCHEDULE/COMPLIANCE
+// free to create their own fresh, today-dated rows, fixes both needs
+// without either block interfering with the other.
 beforeEach(async () => {
   await db.delete(weeklyCheckIns).where(inArray(weeklyCheckIns.clientId, [clientA.id, clientB.id]));
   await db.delete(clientCheckInSchedule).where(inArray(clientCheckInSchedule.clientId, [clientA.id, clientB.id]));
-  await db.insert(clientCheckInSchedule).values([
-    { clientId: clientA.id, weekday: 0, effectiveFrom: "2026-08-01" },
-    { clientId: clientA.id, weekday: 3, effectiveFrom: "2026-08-01" },
-  ]);
 });
 
 // A Wednesday + Sunday pair inside a single, fixed, known-past week —
@@ -123,7 +138,23 @@ const WED = "2026-08-12";
 const SUN = "2026-08-09"; // the Sunday that starts that same week
 const FUTURE_WED = "2026-08-19";
 
+// Seeds BOTH clients with an active Sunday+Wednesday schedule,
+// effective well before WED/SUN above, so createOrUpdateDraftCheckIn's
+// point-in-time validation (getClientScheduleAtDate) accepts writes to
+// those historical occurrence dates — the exact same schedule
+// STORAGE/FLOW/SECURITY's fixed WED/SUN pair was chosen to satisfy.
+async function seedHistoricalWedSunSchedule() {
+  await db.insert(clientCheckInSchedule).values([
+    { clientId: clientA.id, weekday: 0, effectiveFrom: "2026-08-01" },
+    { clientId: clientA.id, weekday: 3, effectiveFrom: "2026-08-01" },
+    { clientId: clientB.id, weekday: 0, effectiveFrom: "2026-08-01" },
+    { clientId: clientB.id, weekday: 3, effectiveFrom: "2026-08-01" },
+  ]);
+}
+
 describe("STORAGE — two occurrences in one week coexist", () => {
+  beforeEach(seedHistoricalWedSunSchedule);
+
   it("a Wednesday and a Sunday draft for the same client in the same week both persist as separate rows", async () => {
     const wed = await createOrUpdateDraftCheckIn(clientA.id, WED, { wins: "wed" });
     const sun = await createOrUpdateDraftCheckIn(clientA.id, SUN, { wins: "sun" });
@@ -179,6 +210,8 @@ describe("STORAGE — two occurrences in one week coexist", () => {
 });
 
 describe("FLOW — independent draft/submit per occurrence", () => {
+  beforeEach(seedHistoricalWedSunSchedule);
+
   it("submitting Wednesday does not affect Sunday's draft status", async () => {
     const wed = await createOrUpdateDraftCheckIn(clientA.id, WED, {});
     await createOrUpdateDraftCheckIn(clientA.id, SUN, {});
@@ -260,6 +293,14 @@ describe("SCHEDULE — getCurrentCheckInWindows reflects the client's actual con
   });
 
   it("an explicitly-empty schedule yields zero windows — no fake due-state", async () => {
+    // Establish an active schedule first, then explicitly clear it —
+    // setClientSchedule([]) on a client with NO active rows at all is
+    // a true no-op (nothing to close), which would leave 0 total rows
+    // and be indistinguishable from "never configured" rather than
+    // "configured, currently zero days" (see getClientScheduleState's
+    // configured flag). Going through an active state first is what
+    // actually exercises the "explicitly empty" branch this test names.
+    await setClientSchedule(clientA.id, [0]);
     await setClientSchedule(clientA.id, []);
     const windows = await getCurrentCheckInWindows(clientA.id, TZ);
     expect(windows).toEqual([]);
@@ -278,6 +319,16 @@ describe("SCHEDULE — getCurrentCheckInWindows reflects the client's actual con
 
 describe("COMPLIANCE — getClientCheckInSummary wires getRequiredDayStates into a real aggregate", () => {
   it("no schedule configured -> currentWeekCompliance is null, not a fake 0%", async () => {
+    // Explicitly-empty, not merely "never touched" — an untouched
+    // client with an active enrollment correctly falls back to a
+    // default Sunday requirement (see the SCHEDULE block's legacy-
+    // fallback test, which uses this same clientB to prove exactly
+    // that). Going through an active state first, same as the
+    // SCHEDULE block's "explicitly-empty" test, is what actually
+    // exercises "configured, currently zero required days" rather
+    // than the legacy-fallback path.
+    await setClientSchedule(clientB.id, [0]);
+    await setClientSchedule(clientB.id, []);
     const summary = await getClientCheckInSummary(clientB.id);
     expect(summary.currentWeekCompliance).toBeNull();
   });
@@ -291,11 +342,21 @@ describe("COMPLIANCE — getClientCheckInSummary wires getRequiredDayStates into
     expect(summary.currentWeekCompliance!.fullyCompliant).toBe(false);
   });
 
-  it("Wed+Sun, only Wednesday submitted this week -> 1/2, not fully compliant", async () => {
+  it("Wed+Sun, only Sunday submitted this week -> 1/2, not fully compliant", async () => {
+    // Submits Sunday specifically, not "whichever day the test finds
+    // first" — Sunday is guaranteed to already be reachable (today or
+    // in the past) within the current week no matter which real
+    // weekday this suite happens to run on, so the test is
+    // deterministic. Wednesday is deliberately left unsubmitted: on
+    // a day before Wednesday, createOrUpdateDraftCheckIn would
+    // correctly reject it anyway ("cannot be scheduled in the
+    // future") — that guard is exercised directly in the SECURITY
+    // block below; this test is about the compliance aggregation
+    // math, not re-proving that guard.
     await setClientSchedule(clientA.id, [0, 3]);
     const windows = await getCurrentCheckInWindows(clientA.id, TZ);
-    const wedWindow = windows.find((w) => w.weekday === 3)!;
-    const draft = await createOrUpdateDraftCheckIn(clientA.id, wedWindow.scheduledDate, {});
+    const sunWindow = windows.find((w) => w.weekday === 0)!;
+    const draft = await createOrUpdateDraftCheckIn(clientA.id, sunWindow.scheduledDate, {});
     if (!draft.ok) throw new Error("setup failed");
     await submitCheckIn(clientA.id, draft.checkInId);
 
@@ -303,17 +364,30 @@ describe("COMPLIANCE — getClientCheckInSummary wires getRequiredDayStates into
     expect(summary.currentWeekCompliance!.satisfiedCount).toBe(1);
     expect(summary.currentWeekCompliance!.fullyCompliant).toBe(false);
     const missing = summary.currentWeekCompliance!.days.filter((d) => !d.satisfied);
-    expect(missing.map((d) => d.weekday)).toEqual([0]); // Sunday still due
+    expect(missing.map((d) => d.weekday)).toEqual([3]); // Wednesday still due
   });
 
   it("Wed+Sun, both submitted this week -> 2/2, fully compliant", async () => {
+    // Writes both occurrences directly rather than through
+    // createOrUpdateDraftCheckIn/submitCheckIn — that path correctly
+    // refuses to submit a future date, and Wednesday genuinely IS in
+    // the future relative to "today" on some days this suite runs
+    // (e.g. any Sunday/Monday/Tuesday). "Both submitted -> fully
+    // compliant" is a claim about the COMPLIANCE AGGREGATION reading
+    // real submitted rows correctly, not a claim about how those rows
+    // legitimately got submitted early — that's covered elsewhere.
     await setClientSchedule(clientA.id, [0, 3]);
     const windows = await getCurrentCheckInWindows(clientA.id, TZ);
-    for (const w of windows) {
-      const draft = await createOrUpdateDraftCheckIn(clientA.id, w.scheduledDate, {});
-      if (!draft.ok) throw new Error("setup failed");
-      await submitCheckIn(clientA.id, draft.checkInId);
-    }
+    const now = new Date();
+    await db.insert(weeklyCheckIns).values(
+      windows.map((w) => ({
+        clientId: clientA.id,
+        scheduledDate: w.scheduledDate,
+        weekStartDate: w.weekStartDate,
+        status: "submitted" as const,
+        submittedAt: now,
+      })),
+    );
 
     const summary = await getClientCheckInSummary(clientA.id);
     expect(summary.currentWeekCompliance!.satisfiedCount).toBe(2);
@@ -322,6 +396,8 @@ describe("COMPLIANCE — getClientCheckInSummary wires getRequiredDayStates into
 });
 
 describe("SECURITY — occurrence writes stay scoped to the owning client", () => {
+  beforeEach(seedHistoricalWedSunSchedule);
+
   it("rejects an unscheduled and future occurrence date", async () => {
     const unscheduled = await createOrUpdateDraftCheckIn(clientA.id, "2026-08-10", {});
     expect(unscheduled.ok).toBe(false);
