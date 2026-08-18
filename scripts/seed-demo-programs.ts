@@ -797,6 +797,7 @@ async function main() {
     await db.insert(weeklyCheckIns).values({
       clientId:               CLIENT_ID,
       enrollmentId:           ENROLLMENT_ID,
+      scheduledDate:          ci.weekStartDate,
       weekStartDate:          ci.weekStartDate,
       status:                 ci.status,
       submittedAt:            submittedAt,

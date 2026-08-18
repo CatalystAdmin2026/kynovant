@@ -71,6 +71,11 @@ interface FormState {
 interface Props {
   initialData?: Partial<FormState>;
   existingCheckInId?: string;
+  // The exact occurrence date this form is for (e.g. this Wednesday's
+  // required check-in). Threaded through to every saveDraftCheckInAction
+  // call so a save always lands on the correct occurrence — a Wednesday
+  // draft can never collide with or overwrite a Sunday one.
+  scheduledDate: string;
   weekStartDate: string;
   previousCheckIn?: PreviousCheckInContext | null;
 }
@@ -396,7 +401,7 @@ function formToServiceData(f: FormState): CheckInDraftData {
   };
 }
 
-export default function CheckInForm({ initialData, existingCheckInId, weekStartDate, previousCheckIn }: Props) {
+export default function CheckInForm({ initialData, existingCheckInId, scheduledDate, weekStartDate, previousCheckIn }: Props) {
   const router = useRouter();
   const [form, setFormState] = useState<FormState>({
     ...EMPTY_STATE,
@@ -430,7 +435,7 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
 
         setFieldErrors({});
         startSaveTx(async () => {
-          const result = await saveDraftCheckInAction(serviceData);
+          const result = await saveDraftCheckInAction(scheduledDate, serviceData);
           if (result.ok) {
             setCheckInId(result.checkInId);
             setSavedAt(new Date());
@@ -445,7 +450,7 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
         });
       }, 800);
     },
-    [],
+    [scheduledDate],
   );
 
   const setField = useCallback(
@@ -471,7 +476,7 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
 
     if (!checkInId) {
       startSubmitTx(async () => {
-        const saveResult = await saveDraftCheckInAction(serviceData);
+        const saveResult = await saveDraftCheckInAction(scheduledDate, serviceData);
         if (!saveResult.ok) {
           if (saveResult.fieldErrors) {
             setFieldErrors(saveResult.fieldErrors);
@@ -496,7 +501,7 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
         if (saveTimerRef.current) {
           clearTimeout(saveTimerRef.current);
           saveTimerRef.current = null;
-          const flushResult = await saveDraftCheckInAction(serviceData);
+          const flushResult = await saveDraftCheckInAction(scheduledDate, serviceData);
           if (!flushResult.ok) {
             if (flushResult.fieldErrors) {
               setFieldErrors(flushResult.fieldErrors);

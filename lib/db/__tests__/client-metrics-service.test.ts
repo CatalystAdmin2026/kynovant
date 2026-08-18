@@ -35,7 +35,12 @@ import { getDb } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { users, clientProfiles, coachingEnrollments } from "../schema";
 import { healthProfiles, bodyCompositionRecords } from "../schema-profile";
-import { saveClientMetrics } from "../client-metrics-service";
+import { weeklyCheckIns } from "../schema-check-in";
+import {
+  saveClientMetrics,
+  getCheckInWeightPromotionCandidate,
+  promoteCheckInWeight,
+} from "../client-metrics-service";
 import { ageFromDob, calculate } from "@/lib/nutrition/calculator";
 import { coachOwnsClient, assertCoachOwnsClient } from "@/lib/auth/guards";
 import type { PublicUser } from "@/lib/supabase/session";
@@ -388,6 +393,52 @@ describe("write authorization — saveClientMetricsAction (Coach A cannot write 
     const result = await assertCoachOwnsClient(fakeDbUser(coachB.id, "coach"), clientA.id);
     expect(result.ok).toBe(false);
   });
+});
+
+describe("write authorization — Client Profile biometrics/schedule actions (app/hq/clients/[clientId]/actions.ts)", () => {
+  // Same two-part proof as saveClientMetricsAction above, applied to
+  // the three new actions this task adds: saveClientBiometricsAction,
+  // promoteCheckInWeightAction, setCheckInScheduleAction. This file's
+  // own local assertCoachOwnsClientAction() helper wraps
+  // requireCoachOrAdmin() + assertCoachOwnsClient() in one call — every
+  // pre-existing action (assignProgramAction, saveGoalAction,
+  // archiveGoalAction) already uses it, so proving the three new
+  // actions call the SAME helper is proof they get the identical
+  // guarantee, not a weaker bespoke check.
+  function extractFn(source: string, exportedName: string): string {
+    const start = source.indexOf(`export async function ${exportedName}`);
+    expect(start).toBeGreaterThan(-1);
+    const rest = source.slice(start);
+    const nextExportIdx = rest.indexOf("export async function", 10);
+    return nextExportIdx === -1 ? rest : rest.slice(0, nextExportIdx);
+  }
+
+  const source = readFileSync(
+    resolve(process.cwd(), "app/hq/clients/[clientId]/actions.ts"),
+    "utf-8",
+  );
+
+  it("assertCoachOwnsClientAction (the shared local helper) itself calls requireCoachOrAdmin() + assertCoachOwnsClient()", () => {
+    // Not `export`ed, so extractFn's "export async function" search
+    // doesn't apply — slice this one directly to its own blank-line end.
+    const start = source.indexOf("async function assertCoachOwnsClientAction");
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf("\n\n", start));
+    expect(body).toContain("requireCoachOrAdmin()");
+    expect(body).toContain("assertCoachOwnsClient(guard.dbUser, clientId)");
+  });
+
+  it.each([
+    "saveClientBiometricsAction",
+    "promoteCheckInWeightAction",
+    "setCheckInScheduleAction",
+  ])("%s calls assertCoachOwnsClientAction — no bespoke/weaker guard", (fnName) => {
+    const fn = extractFn(source, fnName);
+    expect(fn).toContain("assertCoachOwnsClientAction(clientId)");
+    // No client-suppliable coachId parameter on any of these.
+    const signature = fn.slice(0, fn.indexOf(")"));
+    expect(signature).not.toContain("coachId");
+  });
 
   it("assertCoachOwnsClient allows Coach A acting on their own client", async () => {
     const result = await assertCoachOwnsClient(fakeDbUser(coachA.id, "coach"), clientA.id);
@@ -468,5 +519,156 @@ describe("end-to-end — saved metrics feed the calculator exactly as the Nutrit
       const admin = createAdminClient();
       await admin.auth.admin.deleteUser(freshClient.id);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// CHECK-IN -> BIOMETRICS PROMOTION
+//
+// weekly_check_ins and body_composition_records both already exist —
+// no migration needed to test this (unlike client_check_in_schedule,
+// which is drafted-but-unapplied and so has no DB-integration test
+// in this pass; see the delivery report). Self-contained fixture
+// client, own beforeAll/afterAll, does not share state with clientA/
+// clientB above.
+// ─────────────────────────────────────────────────────────────
+
+describe("check-in -> biometrics promotion", () => {
+  const promoClient = { id: "" };
+
+  beforeAll(async () => {
+    const admin = createAdminClient();
+    const { data, error } = await admin.auth.admin.createUser({
+      email: `client-metrics-test-promo-${randomUUID()}@isolation-test.invalid`,
+      email_confirm: true,
+      password: randomUUID(),
+    });
+    if (error || !data.user) throw new Error(`Fixture setup failed: ${error?.message}`);
+    promoClient.id = data.user.id;
+    await db.update(users).set({ role: "client", status: "active" }).where(eq(users.id, promoClient.id));
+    await db.insert(clientProfiles).values({ userId: promoClient.id, fullName: "Promotion Test Client" });
+  });
+
+  afterAll(async () => {
+    let firstError: unknown;
+    const runPhase = async (label: string, fn: () => Promise<void>) => {
+      try {
+        await fn();
+      } catch (err) {
+        console.error(`[client-metrics-service promo cleanup] ${label} failed:`, err instanceof Error ? err.message : err);
+        firstError = firstError ?? err;
+      }
+    };
+    await runPhase("delete weekly_check_ins", async () => {
+      await db.delete(weeklyCheckIns).where(eq(weeklyCheckIns.clientId, promoClient.id));
+    });
+    await runPhase("delete body_composition_records", async () => {
+      await db.delete(bodyCompositionRecords).where(eq(bodyCompositionRecords.clientId, promoClient.id));
+    });
+    await runPhase("delete client_profiles", async () => {
+      await db.delete(clientProfiles).where(eq(clientProfiles.userId, promoClient.id));
+    });
+    await runPhase("delete public.users row", async () => {
+      await db.delete(users).where(eq(users.id, promoClient.id));
+    });
+    await runPhase("delete Supabase Auth user", async () => {
+      const admin = createAdminClient();
+      await admin.auth.admin.deleteUser(promoClient.id);
+    });
+    if (firstError) throw firstError;
+  });
+
+  it("returns null when there is no submitted check-in with a weight", async () => {
+    expect(await getCheckInWeightPromotionCandidate(promoClient.id)).toBeNull();
+  });
+
+  it("returns a candidate when a check-in has a newer weight than any body_composition_records entry", async () => {
+    const submittedAt = new Date("2026-08-10T12:00:00Z");
+    await db.insert(weeklyCheckIns).values({
+      clientId: promoClient.id,
+      scheduledDate: "2026-08-09",
+      weekStartDate: "2026-08-09",
+      status: "submitted",
+      submittedAt,
+      bodyWeightLbs: "171.0",
+    });
+
+    const candidate = await getCheckInWeightPromotionCandidate(promoClient.id);
+    expect(candidate).not.toBeNull();
+    expect(candidate!.weightLbs).toBe(171);
+    expect(candidate!.submittedAt.getTime()).toBe(submittedAt.getTime());
+  });
+
+  it("promoteCheckInWeight inserts a new body_composition_records row tagged source='check_in'", async () => {
+    const candidate = await getCheckInWeightPromotionCandidate(promoClient.id);
+    expect(candidate).not.toBeNull();
+
+    const result = await promoteCheckInWeight(promoClient.id, candidate!.weightLbs, candidate!.submittedAt);
+    expect(result.ok).toBe(true);
+
+    const rows = await db
+      .select()
+      .from(bodyCompositionRecords)
+      .where(eq(bodyCompositionRecords.clientId, promoClient.id));
+    expect(rows.length).toBe(1);
+    expect(rows[0].source).toBe("check_in");
+    expect(parseFloat(String(rows[0].weightPounds))).toBe(171);
+  });
+
+  it("is idempotent — promoting again after the weight already matches surfaces no candidate (no duplicate row)", async () => {
+    const candidate = await getCheckInWeightPromotionCandidate(promoClient.id);
+    expect(candidate).toBeNull(); // already promoted — nothing new to offer
+
+    const rows = await db
+      .select()
+      .from(bodyCompositionRecords)
+      .where(eq(bodyCompositionRecords.clientId, promoClient.id));
+    expect(rows.length).toBe(1); // still exactly one row — no duplicate
+  });
+
+  it("a newer check-in with a genuinely different weight becomes a fresh candidate", async () => {
+    const laterSubmittedAt = new Date("2026-08-17T12:00:00Z");
+    await db.insert(weeklyCheckIns).values({
+      clientId: promoClient.id,
+      scheduledDate: "2026-08-16",
+      weekStartDate: "2026-08-16",
+      status: "submitted",
+      submittedAt: laterSubmittedAt,
+      bodyWeightLbs: "168.5",
+    });
+
+    const candidate = await getCheckInWeightPromotionCandidate(promoClient.id);
+    expect(candidate).not.toBeNull();
+    expect(candidate!.weightLbs).toBe(168.5);
+
+    const promoted = await promoteCheckInWeight(promoClient.id, candidate!.weightLbs, candidate!.submittedAt);
+    expect(promoted.ok).toBe(true);
+
+    const rows = await db
+      .select()
+      .from(bodyCompositionRecords)
+      .where(eq(bodyCompositionRecords.clientId, promoClient.id));
+    expect(rows.length).toBe(2); // append-only — the first promoted row is preserved
+  });
+
+  it("a check-in older than the current body-comp record is never surfaced as a candidate", async () => {
+    // Insert a coach-entered, more recent weight directly — the
+    // existing check-in weights above are now both older.
+    await db.insert(bodyCompositionRecords).values({
+      clientId: promoClient.id,
+      recordedAt: new Date("2026-08-20T12:00:00Z"),
+      weightPounds: "165",
+      source: "coach_entry",
+    });
+    expect(await getCheckInWeightPromotionCandidate(promoClient.id)).toBeNull();
+  });
+
+  it("promoteCheckInWeight rejects an out-of-range weight", async () => {
+    const result = await promoteCheckInWeight(promoClient.id, 5000, new Date());
+    expect(result.ok).toBe(false);
+  });
+
+  it("cross-client isolation — clientA's promotion candidate is unaffected by promoClient's check-ins", async () => {
+    expect(await getCheckInWeightPromotionCandidate(clientA.id)).toBeNull();
   });
 });

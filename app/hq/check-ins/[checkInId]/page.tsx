@@ -376,7 +376,11 @@ export default async function CheckInReviewPage({
 
   const goalContext = await getClientGoalContext(checkIn.clientId);
 
-  const weekLabel = fmtDate(checkIn.weekStartDate);
+  // The exact scheduled occurrence date, not just the week — a
+  // Wednesday and a Sunday check-in from the same week must never
+  // render this header identically (Phase 7: coach must be able to
+  // tell which occurrence this is at a glance).
+  const occurrenceLabel = fmtDate(checkIn.scheduledDate);
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -397,7 +401,7 @@ export default async function CheckInReviewPage({
           <h1 className="text-white text-xl font-bold tracking-wide">
             {checkIn.clientName}
           </h1>
-          <p className="text-white/50 text-sm mt-0.5">Week of {weekLabel}</p>
+          <p className="text-white/50 text-sm mt-0.5">{occurrenceLabel}</p>
           <div className="flex items-center gap-3 mt-1.5 flex-wrap">
             {checkIn.submittedAt && (
               <span className="text-[10px] text-white/30">

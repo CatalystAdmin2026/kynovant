@@ -1,10 +1,15 @@
 // ─────────────────────────────────────────────────────────────
-// Catalyst OS — Weekly Check-In Schema (Sprint 6.3B)
+// Catalyst OS — Weekly Check-In Schema (Sprint 6.3B; multi-occurrence
+// model added in the Client Biometrics + Flexible Check-In Schedule
+// pass)
 //
 // SERVER-ONLY — never import from a Client Component.
 //
 // Tables:
-//   weekly_check_ins  — one row per client per week
+//   weekly_check_ins       — one row per client per SCHEDULED
+//                             OCCURRENCE (a specific calendar date),
+//                             not per week — see scheduledDate below.
+//   client_check_in_schedule — effective-dated required weekdays.
 //
 // Status lifecycle:
 //   draft → submitted → in_review → reviewed
@@ -44,12 +49,30 @@ export const weeklyCheckInStatusEnum = pgEnum("weekly_check_in_status", [
 // ─────────────────────────────────────────────────────────────
 // TABLE — weekly_check_ins
 //
-// One row per (client, week_start_date) — the unique index
-// uq_client_week_check_in enforces this at the DB level.
+// One row per (client, scheduled_date) — the unique index
+// uq_client_scheduled_check_in enforces this at the DB level.
+// scheduled_date is the EXACT calendar date (in the client's own
+// timezone, clientProfiles.timezone) this occurrence is required
+// for — the true occurrence identity. This replaces the old
+// (client, week_start_date) uniqueness, which allowed only one
+// check-in per client per week and could not represent a schedule
+// like "Wednesday + Sunday" (two occurrences, same week).
 //
-// week_start_date is always the Sunday of the client's check-in
-// week. If the client has no configured check-in day, Sunday is
-// the fallback (documented in check-in-service.ts).
+// week_start_date is RETAINED — still the Sunday of the calendar
+// week scheduled_date falls in — for grouping/display and backward
+// compatibility with existing queries/UI that group by week. It is
+// always derived consistently from scheduled_date at write time
+// (lib/db/check-in-service.ts's getScheduledDate/getWeekStartDate),
+// never set independently.
+//
+// For a client with only one required day (or no configured
+// schedule at all — the legacy/fallback case), scheduled_date for
+// any given week equals exactly what week_start_date already meant
+// before this change (weekStartDate + the client's single
+// checkInDayOfWeek, defaulting to Sunday) — so a single-day client's
+// observed behavior, and their EXISTING historical rows (backfilled
+// by drizzle/0032_check_in_occurrence_model.sql using this exact
+// same formula), are unchanged.
 //
 // coach_response is visible to the client only after status
 // transitions to 'reviewed'. The service layer enforces this;
@@ -75,7 +98,12 @@ export const weeklyCheckIns = pgTable(
       { onDelete: "set null" },
     ),
 
-    // The Sunday of the week this check-in covers.
+    // The exact calendar date this occurrence is required for — the
+    // true occurrence identity (see table comment above).
+    scheduledDate: date("scheduled_date").notNull(),
+
+    // The Sunday of the week scheduledDate falls in — retained for
+    // grouping/display/backward compatibility only (see table comment).
     weekStartDate: date("week_start_date").notNull(),
 
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
@@ -125,14 +153,18 @@ export const weeklyCheckIns = pgTable(
       .defaultNow(),
   },
   (table) => [
-    // Prevent duplicate check-ins for the same client/week
-    uniqueIndex("uq_client_week_check_in").on(table.clientId, table.weekStartDate),
+    // Prevent duplicate check-ins for the same client/occurrence.
+    // Replaces the old uq_client_week_check_in(client_id,
+    // week_start_date) — that constraint is exactly what made two
+    // occurrences in one week impossible; this is the actual fix.
+    uniqueIndex("uq_client_scheduled_check_in").on(table.clientId, table.scheduledDate),
 
     index("idx_check_ins_client_id").on(table.clientId),
     index("idx_check_ins_status").on(table.status),
     index("idx_check_ins_submitted_at").on(table.submittedAt),
     index("idx_check_ins_reviewed_by").on(table.reviewedBy),
     index("idx_check_ins_enrollment_id").on(table.enrollmentId),
+    index("idx_check_ins_week_start_date").on(table.weekStartDate),
 
     // Rating range checks (1–10)
     check(
@@ -197,3 +229,86 @@ export type NewWeeklyCheckIn = typeof weeklyCheckIns.$inferInsert;
 
 export type WeeklyCheckInStatus =
   (typeof weeklyCheckInStatusEnum.enumValues)[number];
+
+// ─────────────────────────────────────────────────────────────
+// TABLE — client_check_in_schedule
+//
+// Per-client configurable required check-in weekdays. Replaces the
+// single-day-only coachingEnrollments.checkInDayOfWeek as the source
+// of truth going forward — that column is left in place (still read
+// as the legacy fallback in check-in-service.ts for a client with
+// zero schedule rows) but is no longer written to by new code.
+//
+// EFFECTIVE-DATED, not just "currently required": each row records
+// effectiveFrom (when this weekday became required) and effectiveTo
+// (nullable — when it stopped being required; NULL = still active).
+// This is the smallest durable answer to "did a later schedule change
+// silently rewrite past compliance" (it must not): a query for what
+// was required on a PAST date filters
+// effectiveFrom <= date AND (effectiveTo IS NULL OR effectiveTo > date)
+// — see getClientScheduleAtDate in check-in-schedule-service.ts —
+// while "what's required now" (getClientSchedule) filters
+// effectiveTo IS NULL. Removing a day soft-closes its row
+// (effectiveTo = today) rather than deleting it, so the historical
+// record that it WAS required through that date is preserved
+// forever. Re-adding a previously-removed day opens a NEW row rather
+// than reusing the old one, for the same reason.
+//
+// This is deliberately NOT full occurrence materialization (Option B
+// in the design discussion) — proactively creating a
+// weekly_check_ins row for every future required date would be
+// overengineering. Effective-dating the SCHEDULE rows is enough:
+// "was Wednesday required on Aug 19" is answerable from this table
+// alone, and whether it was actually submitted is answered by
+// whether a weekly_check_ins row with that scheduled_date exists —
+// no need to materialize a placeholder for a missed day.
+//
+// weekday: 0=Sunday, 1=Monday, ..., 6=Saturday — identical convention
+// to coachingEnrollments.checkInDayOfWeek, so a migration reading one
+// to seed the other needs no remapping.
+//
+// FK behavior:
+//   clientId → RESTRICT: schedule tied to client identity, same as
+//   every other per-client fact table in this schema.
+// ─────────────────────────────────────────────────────────────
+
+export const clientCheckInSchedule = pgTable(
+  "client_check_in_schedule",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    weekday: integer("weekday").notNull(),
+    effectiveFrom: date("effective_from").notNull(),
+    // NULL = still active/required today.
+    effectiveTo: date("effective_to"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // At most ONE currently-active row per (client, weekday) — a
+    // partial unique index (WHERE effective_to IS NULL), the exact
+    // pattern already used for "exactly one published target per
+    // client" in schema-nutrition.ts's
+    // uq_active_published_nutrition_target. Historical (closed) rows
+    // for the same weekday are NOT constrained by this — a day can be
+    // added, removed, and re-added over time, each as its own row.
+    uniqueIndex("uq_client_check_in_schedule_active_day")
+      .on(table.clientId, table.weekday)
+      .where(sql`${table.effectiveTo} IS NULL`),
+    index("idx_check_in_schedule_client_id").on(table.clientId),
+    check(
+      "chk_check_in_schedule_weekday_range",
+      sql`${table.weekday} >= 0 AND ${table.weekday} <= 6`,
+    ),
+    check(
+      "chk_check_in_schedule_effective_order",
+      sql`${table.effectiveTo} IS NULL OR ${table.effectiveTo} > ${table.effectiveFrom}`,
+    ),
+  ],
+);
+
+export type ClientCheckInScheduleRow = typeof clientCheckInSchedule.$inferSelect;
+export type NewClientCheckInScheduleRow = typeof clientCheckInSchedule.$inferInsert;

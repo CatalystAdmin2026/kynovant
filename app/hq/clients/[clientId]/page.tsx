@@ -1200,6 +1200,28 @@ export default async function ClientWorkspacePage({
             </Link>
           }
         />
+        {/* Current-week required-day compliance (Phase 8) — additive,
+            only rendered when a schedule is actually configured. No
+            fake 0% for a client with no schedule. */}
+        {checkInSummary.currentWeekCompliance && (
+          <p className="text-[10px] text-gray-500 mb-3">
+            This week: {checkInSummary.currentWeekCompliance.satisfiedCount}/
+            {checkInSummary.currentWeekCompliance.requiredCount} required check-ins
+            {checkInSummary.currentWeekCompliance.fullyCompliant ? (
+              <span className="text-emerald-400/70 ml-1.5">· Fully compliant</span>
+            ) : (
+              <span className={cx("ml-1.5", SEVERITY_TEXT.caution)}>
+                ·{" "}
+                {checkInSummary.currentWeekCompliance.days
+                  .filter((d) => !d.satisfied)
+                  .map((d) => d.label)
+                  .join(", ")}{" "}
+                still due
+              </span>
+            )}
+          </p>
+        )}
+
         {checkInSummary.totalCheckIns === 0 ? (
           <EmptyState tone="dark" title="No check-ins submitted yet." />
         ) : (
@@ -1227,7 +1249,7 @@ export default async function ClientWorkspacePage({
               {checkInSummary.lastCheckIn ? (
                 <>
                   <p className="text-sm font-semibold text-white">
-                    Week of {fmtDate(checkInSummary.lastCheckIn.weekStartDate, true)}
+                    {fmtDate(checkInSummary.lastCheckIn.scheduledDate, true)}
                   </p>
                   <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] mt-1">
                     Last Check-In · {humanize(checkInSummary.lastCheckIn.status)}

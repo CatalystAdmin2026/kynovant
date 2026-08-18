@@ -23,11 +23,16 @@ import {
 // ─────────────────────────────────────────────────────────────
 
 export async function saveDraftCheckInAction(
+  scheduledDate: string,
   data: CheckInDraftData,
 ): Promise<{ ok: boolean; checkInId?: string; error?: string; fieldErrors?: CheckInFieldErrors }> {
   const { dbUser } = await requireClientUser();
   if (dbUser.role !== "client") {
     return { ok: false, error: "Forbidden" };
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate)) {
+    return { ok: false, error: "Invalid check-in date." };
   }
 
   const fieldErrors = validateCheckInDraft(data);
@@ -36,7 +41,7 @@ export async function saveDraftCheckInAction(
   }
 
   try {
-    const result = await createOrUpdateDraftCheckIn(dbUser.id, data);
+    const result = await createOrUpdateDraftCheckIn(dbUser.id, scheduledDate, data);
     if (result.ok) {
       revalidatePath("/portal/check-ins");
     }
