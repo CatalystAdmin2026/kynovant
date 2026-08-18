@@ -19,6 +19,36 @@ export function normalizeWeekdays(weekdays: number[]): Weekday[] {
     .sort((a, b) => a - b);
 }
 
+export type WeekdayValidationResult =
+  | { ok: true; weekdays: Weekday[] }
+  | { ok: false; error: string };
+
+// Validates a raw, caller-supplied weekday list at the write boundary
+// (a server action) BEFORE any DB or auth work — a malformed request
+// fails fast with a clear, specific message instead of being silently
+// coerced. normalizeWeekdays' own dedupe/range-filter is a defensive
+// SECOND layer for already-trusted internal callers (tests, seed
+// scripts), not a substitute for this explicit, user-facing check.
+// [] is valid — "no required schedule" is a real, intentional,
+// explicitly-settable state, not an error. Pure — no DB/session
+// dependency, so it's fully unit-testable on its own.
+export function validateScheduleWeekdays(weekdays: unknown): WeekdayValidationResult {
+  if (!Array.isArray(weekdays)) {
+    return { ok: false, error: "Invalid schedule." };
+  }
+  const seen = new Set<number>();
+  for (const day of weekdays) {
+    if (typeof day !== "number" || !Number.isInteger(day) || day < 0 || day > 6) {
+      return { ok: false, error: "Invalid weekday value." };
+    }
+    if (seen.has(day)) {
+      return { ok: false, error: "Duplicate weekday in schedule." };
+    }
+    seen.add(day);
+  }
+  return { ok: true, weekdays: weekdays as Weekday[] };
+}
+
 export function describeSchedule(weekdays: number[]): string {
   const labels = normalizeWeekdays(weekdays)
     .sort((a, b) => (a === 0 ? 7 : a) - (b === 0 ? 7 : b))

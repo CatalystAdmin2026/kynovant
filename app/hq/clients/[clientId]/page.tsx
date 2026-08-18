@@ -17,6 +17,7 @@ import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getCoachClientWorkspace } from "@/lib/db/coach-client-workspace-service";
 import { listAssignableBlueprints, getClientProgramHistory } from "@/lib/db/coach-program-assignment-service";
 import { getClientCheckInSummary } from "@/lib/db/coach-check-in-service";
+import { getClientScheduleState } from "@/lib/db/check-in-schedule-service";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import AssignProgramButton from "@/components/hq/workspace/AssignProgramButton";
 import AssignProgramModal from "@/components/hq/workspace/AssignProgramModal";
@@ -37,6 +38,7 @@ import type { ProfileReadiness } from "@/lib/db/profile-readiness";
 import type { HistorySession } from "@/lib/db/workout-session-service";
 import SensitiveHealthPanel from "@/components/hq/workspace/SensitiveHealthPanel";
 import GoalManager from "@/components/hq/workspace/GoalManager";
+import CheckInScheduleEditor from "@/components/hq/workspace/CheckInScheduleEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -1101,11 +1103,12 @@ export default async function ClientWorkspacePage({
   const { dbUser } = await requireCoachOrAdminPage();
   const { coachId } = resolveTenantScope(dbUser);
 
-  const [workspace, blueprints, programHistory, checkInSummary] = await Promise.all([
+  const [workspace, blueprints, programHistory, checkInSummary, checkInSchedule] = await Promise.all([
     getCoachClientWorkspace(clientId, coachId),
     listAssignableBlueprints(coachId),
     getClientProgramHistory(clientId),
     getClientCheckInSummary(clientId),
+    getClientScheduleState(clientId),
   ]);
 
   // getCoachClientWorkspace returns null both when clientId doesn't exist
@@ -1267,6 +1270,18 @@ export default async function ClientWorkspacePage({
             </Card>
           </div>
         )}
+      </section>
+
+      {/* Check-In Schedule — the canonical, coach-only write surface
+          for client_check_in_schedule. Current active rows populate
+          the selector directly; nothing derives from the legacy
+          coachingEnrollments.checkInDayOfWeek here once this table is
+          the thing being edited. */}
+      <section>
+        <SectionHeader title="Check-In Schedule" />
+        <Card tone="dark" padding="sm">
+          <CheckInScheduleEditor clientId={clientId} initialWeekdays={checkInSchedule.weekdays} />
+        </Card>
       </section>
 
       {/* Nutrition quick-link */}
