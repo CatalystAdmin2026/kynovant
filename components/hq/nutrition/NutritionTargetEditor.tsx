@@ -1,16 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import {
   Flame, Beef, Droplet, Wheat,
   CheckCircle2, AlertCircle,
-  MessageSquare, FileEdit, Send, Plus, Salad, Calculator, Ruler,
+  MessageSquare, FileEdit, Plus, Salad, Calculator, Ruler,
+  Sparkles, RotateCcw, ChevronDown, Lock,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { calculate, ageFromDob, ACTIVITY_LABELS } from "@/lib/nutrition/calculator";
 import type { CalculationResult } from "@/lib/nutrition/calculator";
+import { buildKynovantInsight } from "@/lib/nutrition/insight";
 import type { ClientNutritionTarget, ActivityLevel } from "@/lib/db/schema-nutrition";
 import {
   createDraftAction,
@@ -354,6 +356,15 @@ export default function NutritionTargetEditor({
   const [adjustReason, setAdjustReason]   = useState("");
   const [effectiveDate, setEffectiveDate] = useState(today);
 
+  // Tracks whether the coach has manually diverged the four working
+  // targets away from Kynovant's live recommendation. false = still
+  // "tracking" the recommendation (activity/goal changes, or newly
+  // completed metrics, keep auto-refreshing the working fields — see
+  // the effect below). true = the coach has made an intentional
+  // choice; nothing auto-overwrites it again until they explicitly
+  // click "Use recommendation."
+  const [hasManualEdit, setHasManualEdit] = useState(false);
+
   // ── UI state ─────────────────────────────────────────────────
   const [showForm, setShowForm] = useState(
     !activeTarget && draftTargets.length === 0,
@@ -361,6 +372,7 @@ export default function NutritionTargetEditor({
   const [editingDraftId, setEditingDraftId] = useState<string | null>(
     draftTargets[0]?.id ?? null,
   );
+  const [notesExpanded, setNotesExpanded] = useState(false);
   const [status, setStatus] = useState<Status>({ type: "idle" });
 
   // ── Recommendation (pure, computed inline) ───────────────────
@@ -384,18 +396,44 @@ export default function NutritionTargetEditor({
 
   const rec = computeRec();
 
+  // Auto-populate/refresh the working targets from the live
+  // recommendation whenever the coach hasn't manually diverged from it
+  // yet. Fires both on first availability (metrics just completed) and
+  // whenever Activity Level/Goal changes while still "tracking" — but
+  // never once hasManualEdit is true, so an intentional coach edit is
+  // never silently overwritten by a later Activity/Goal change or a
+  // client profile update that shifts the recommendation.
+  useEffect(() => {
+    if (rec && !hasManualEdit) {
+      setCalories(String(rec.recommendedCalories));
+      setProtein(String(rec.recommendedProteinG));
+      setFat(String(rec.recommendedFatG));
+      setCarbs(String(rec.recommendedCarbG));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rec?.recommendedCalories, rec?.recommendedProteinG, rec?.recommendedFatG, rec?.recommendedCarbG, hasManualEdit]);
+
   // ── Helpers ──────────────────────────────────────────────────
 
-  function applyRecommendation() {
+  function handleTargetFieldChange(setter: (v: string) => void) {
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      setter(e.target.value);
+      setHasManualEdit(true);
+    };
+  }
+
+  function useRecommendation() {
     if (!rec) return;
     setCalories(String(rec.recommendedCalories));
     setProtein(String(rec.recommendedProteinG));
     setFat(String(rec.recommendedFatG));
     setCarbs(String(rec.recommendedCarbG));
+    setHasManualEdit(false);
   }
 
   function openForNewTarget() {
     setEditingDraftId(null);
+    setHasManualEdit(false);
     if (rec) {
       setCalories(String(rec.recommendedCalories));
       setProtein(String(rec.recommendedProteinG));
@@ -408,6 +446,7 @@ export default function NutritionTargetEditor({
     setInternalNotes("");
     setAdjustReason("");
     setEffectiveDate(today);
+    setNotesExpanded(false);
     setStatus({ type: "idle" });
     setShowForm(true);
   }
@@ -424,6 +463,19 @@ export default function NutritionTargetEditor({
     setEffectiveDate(draft.effectiveDate ?? today);
     setActivityLevel(draft.calcActivityLevel ?? calcProfile.suggestedActivityLevel);
     setGoalType(draft.calcGoalType ?? calcProfile.goalType ?? "fat_loss");
+    // A draft whose coach-decision fields (Stage 3) still exactly match
+    // its own stored recommendation (Stage 2 — schema-nutrition.ts)
+    // was never manually adjusted at save time — reopen it "tracking"
+    // the recommendation so it keeps auto-refreshing like a fresh
+    // target. Any real divergence reopens as manually adjusted, so a
+    // past intentional override is never silently replaced.
+    const matchesOwnRecommendation =
+      draft.recCalories === draft.calorieTarget &&
+      draft.recProteinG === draft.proteinGrams &&
+      draft.recFatG === draft.fatGrams &&
+      draft.recCarbG === draft.carbGrams;
+    setHasManualEdit(!matchesOwnRecommendation);
+    setNotesExpanded(!!draft.internalNotes);
     setStatus({ type: "idle" });
     setShowForm(true);
   }
@@ -552,6 +604,32 @@ export default function NutritionTargetEditor({
     protein.trim() !== "" &&
     Number(calories) > 0 &&
     Number(protein) > 0;
+
+  // ── Kynovant Insight (deterministic, generated from `rec` + the
+  //    coach's live working values — see lib/nutrition/insight.ts) ──
+  function parsedNum(v: string): number | null {
+    return v.trim() !== "" && !Number.isNaN(Number(v)) ? Number(v) : null;
+  }
+  const currentCaloriesNum = parsedNum(calories);
+  const currentProteinNum = parsedNum(protein);
+  const currentFatNum = parsedNum(fat);
+  const currentCarbNum = parsedNum(carbs);
+
+  const insightParagraphs = rec
+    ? buildKynovantInsight({
+        firstName,
+        rec,
+        goalLabel: GOAL_LABELS[goalType] ?? goalType,
+        activityLabel: ACTIVITY_LABELS[activityLevel] ?? activityLevel,
+        activityLevel,
+        hasManualEdit,
+        currentCalories: currentCaloriesNum,
+        currentProteinG: currentProteinNum,
+        currentFatG: currentFatNum,
+        currentCarbG: currentCarbNum,
+        adjustmentReason: adjustReason,
+      })
+    : null;
 
   // ─────────────────────────────────────────────────────────────
   // RENDER
@@ -743,11 +821,21 @@ export default function NutritionTargetEditor({
           </div>
 
           {/* ════════════════════════════════════════════════════
-              SECTION 1: RECOMMENDATION
+              RECOMMENDED NUTRITION PLAN — one consolidated surface.
+              Mental model: client inputs -> Kynovant recommendation ->
+              optional coach adjustment -> Kynovant explanation ->
+              optional client-facing note -> publish. The four macro
+              fields below are the ONLY place calorie/protein/fat/carb
+              numbers appear in this form — they start as Kynovant's
+              live recommendation and become the coach's working
+              values directly, instead of a separate read-only
+              "Recommended Targets" box the coach had to explicitly
+              Apply into a second "Your Decision" box, previewed again
+              in a third "Publishing" box before Publish.
           ════════════════════════════════════════════════════ */}
           <Card tone="dark" padding="lg" className="mb-8">
             <p className="mb-6 flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.4em] text-white/30">
-              <Calculator size={11} className="text-gold/60" aria-hidden /> Recommended Targets
+              <Calculator size={11} className="text-gold/60" aria-hidden /> Nutrition Plan
             </p>
 
             {/* Activity Level + Goal selects */}
@@ -770,36 +858,15 @@ export default function NutritionTargetEditor({
               </div>
             </div>
 
-            {/* Recommendation display */}
             {canCalculate && rec ? (
-              <div className="rounded-lg border border-white/[0.06] bg-black/20 p-6">
-                <div className="mb-6 flex items-start justify-between gap-4">
-                  <p className="text-[10px] leading-snug text-white/30">
-                    BMR {rec.bmr.toLocaleString()} &middot; TDEE {rec.tdee.toLocaleString()}
-                    {rec.calorieAdjustment !== 0 && (
-                      <> &middot; {rec.calorieAdjustment > 0 ? "+" : ""}{rec.calorieAdjustment} ({GOAL_LABELS[goalType] ?? goalType})</>
-                    )}
-                  </p>
-                  <Button
-                    tone="dark"
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    onClick={applyRecommendation}
-                    className="!border-gold/30 !text-gold/65 hover:!bg-gold/[0.08] hover:!text-gold shrink-0"
-                  >
-                    Apply
-                  </Button>
-                </div>
-                <div className="grid grid-cols-2 gap-6 sm:grid-cols-4">
-                  <MacroTile icon={Flame} label="Calories" value={rec.recommendedCalories.toLocaleString()} unit="kcal" accent size="md" />
-                  <MacroTile icon={Beef} label="Protein" value={rec.recommendedProteinG.toLocaleString()} unit="g" valueClassName="text-white/65" size="md" />
-                  <MacroTile icon={Droplet} label="Fat" value={rec.recommendedFatG.toLocaleString()} unit="g" valueClassName="text-white/65" size="md" />
-                  <MacroTile icon={Wheat} label="Carbs" value={rec.recommendedCarbG.toLocaleString()} unit="g" valueClassName="text-white/65" size="md" />
-                </div>
-              </div>
+              <p className="mb-6 text-[10px] leading-snug text-white/30">
+                BMR {rec.bmr.toLocaleString()} &middot; TDEE {rec.tdee.toLocaleString()}
+                {rec.calorieAdjustment !== 0 && (
+                  <> &middot; {rec.calorieAdjustment > 0 ? "+" : ""}{rec.calorieAdjustment} kcal ({GOAL_LABELS[goalType] ?? goalType})</>
+                )}
+              </p>
             ) : (
-              <div className="flex flex-col gap-4">
+              <div className="mb-6 flex flex-col gap-4">
                 <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-5 py-4">
                   <AlertCircle size={14} className="mt-0.5 shrink-0 text-amber-400/50" aria-hidden />
                   <p className="text-xs leading-relaxed text-amber-400/50">
@@ -811,24 +878,53 @@ export default function NutritionTargetEditor({
                 <ClientMetricsPanel clientId={clientId} calcProfile={calcProfile} firstName={firstName} />
               </div>
             )}
-          </Card>
 
-          {/* ════════════════════════════════════════════════════
-              SECTION 2: TARGET VALUES
-          ════════════════════════════════════════════════════ */}
-          <Card tone="dark" padding="lg" className="mb-8">
-            <p className="mb-6 text-[9px] font-bold uppercase tracking-[0.4em] text-white/30">
-              {canCalculate ? "Your Decision" : "Daily Targets"}
-            </p>
+            {/* Working targets — auto-populated from the live
+                recommendation until the coach edits one directly (see
+                the effect + handleTargetFieldChange above); the pill
+                and "Use recommendation" control make the two states
+                (tracking vs. adjusted) visually unambiguous. */}
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <p className="text-[9px] font-bold uppercase tracking-[0.4em] text-white/30">
+                  {canCalculate ? "Nutrition Targets" : "Daily Targets"}
+                </p>
+                {rec && (
+                  <span
+                    className={cx(
+                      "inline-flex items-center rounded-full px-2 py-0.5 text-[8px] font-semibold uppercase tracking-[0.15em]",
+                      hasManualEdit
+                        ? "bg-amber-500/10 text-amber-400/70"
+                        : "bg-emerald-500/10 text-emerald-400/70",
+                    )}
+                  >
+                    {hasManualEdit ? "Adjusted" : "Kynovant Recommendation"}
+                  </span>
+                )}
+              </div>
+              {rec && hasManualEdit && (
+                <Button
+                  tone="dark"
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={useRecommendation}
+                  leftIcon={<RotateCcw size={11} aria-hidden />}
+                  className="!text-gold/50 hover:!text-gold"
+                >
+                  Use recommendation
+                </Button>
+              )}
+            </div>
 
-            <div className="mb-5 grid grid-cols-2 gap-5">
+            <div className="mb-6 grid grid-cols-2 gap-5 sm:grid-cols-4">
               <div>
                 <Label tone="dark">Calories (kcal)</Label>
                 <Input
                   tone="dark"
                   type="number"
                   value={calories}
-                  onChange={(e) => setCalories(e.target.value)}
+                  onChange={handleTargetFieldChange(setCalories)}
                   min={800}
                   max={8000}
                   className="tabular-nums"
@@ -840,7 +936,7 @@ export default function NutritionTargetEditor({
                   tone="dark"
                   type="number"
                   value={protein}
-                  onChange={(e) => setProtein(e.target.value)}
+                  onChange={handleTargetFieldChange(setProtein)}
                   min={1}
                   max={500}
                   className="tabular-nums"
@@ -854,7 +950,7 @@ export default function NutritionTargetEditor({
                   tone="dark"
                   type="number"
                   value={fat}
-                  onChange={(e) => setFat(e.target.value)}
+                  onChange={handleTargetFieldChange(setFat)}
                   min={0}
                   max={500}
                   className="tabular-nums"
@@ -868,7 +964,7 @@ export default function NutritionTargetEditor({
                   tone="dark"
                   type="number"
                   value={carbs}
-                  onChange={(e) => setCarbs(e.target.value)}
+                  onChange={handleTargetFieldChange(setCarbs)}
                   min={0}
                   max={1200}
                   className="tabular-nums"
@@ -876,9 +972,94 @@ export default function NutritionTargetEditor({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            {/* Kynovant Insight — deterministic, generated from the
+                exact calculation result (lib/nutrition/insight.ts).
+                Coach-facing decision support only; never published to
+                the client (see app/portal/nutrition/page.tsx). */}
+            {insightParagraphs && (
+              <div className="mb-6 rounded-lg border border-gold/[0.12] bg-gold/[0.03] p-5">
+                <p className="mb-3 flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.3em] text-gold/60">
+                  <Sparkles size={11} aria-hidden /> Kynovant Insight
+                </p>
+                <div className="space-y-2.5">
+                  {insightParagraphs.map((paragraph, i) => (
+                    <p key={i} className="text-xs leading-relaxed text-white/45">
+                      {paragraph}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Message to {firstName} — client-visible (renamed from
+                "Coaching Guidance"; same coachNotes field, same
+                publish-time behavior, unchanged). */}
+            <div className="mb-6 border-l-2 border-gold/20 pl-6">
+              <div className="mb-3 flex items-baseline justify-between">
+                <p className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.3em] text-white/30">
+                  <MessageSquare size={11} className="text-gold/60" aria-hidden /> Message to {firstName}
+                </p>
+                <p className="text-[10px] text-gold/35">
+                  {firstName} will see this
+                </p>
+              </div>
+
+              {/* Gold border-left treatment — guidance as a letter, not a form field.
+                  Custom hand-rolled textarea (not the Input/Textarea primitive):
+                  the transparent, borderless "letter" look is a deliberate one-off
+                  visual the boxed field primitive doesn't cover. */}
+              <textarea
+                rows={4}
+                value={coachNotes}
+                onChange={(e) => setCoachNotes(e.target.value)}
+                placeholder={`Context for ${firstName} — what do these targets mean for their goal? What should they prioritize? Clients who understand the why are far more consistent.`}
+                className="w-full resize-none bg-transparent text-sm leading-relaxed text-white/65 placeholder:text-white/14 focus:outline-none"
+              />
+            </div>
+
+            {/* Private Coach Note — collapsible, coach-only (renamed
+                from "Internal Notes"; same internalNotes field, never
+                sent to the client — see nutrition-target-service.ts's
+                getPublishedTargetForClient projection, unchanged). */}
+            <div className="mb-6">
+              <button
+                type="button"
+                onClick={() => setNotesExpanded((v) => !v)}
+                aria-expanded={notesExpanded}
+                className="ds-focus-ring flex w-full items-center justify-between gap-2 rounded-md text-left"
+              >
+                <span className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.3em] text-white/25">
+                  <Lock size={10} aria-hidden /> Private Coach Note
+                </span>
+                <span className="flex items-center gap-1.5 text-[10px] text-white/20">
+                  Only you can see this
+                  <ChevronDown
+                    size={12}
+                    className={cx("transition-transform", notesExpanded && "rotate-180")}
+                    aria-hidden
+                  />
+                </span>
+              </button>
+              {notesExpanded && (
+                <Textarea
+                  tone="dark"
+                  rows={2}
+                  value={internalNotes}
+                  onChange={(e) => setInternalNotes(e.target.value)}
+                  placeholder="Notes for your reference. Not visible to the client."
+                  className="mt-3 text-xs leading-relaxed"
+                />
+              )}
+            </div>
+
+            {/* Effective Date + Adjustment Note — compact, secondary;
+                both persist exactly as before (effectiveDate is
+                required by the schema; adjustmentReason feeds the
+                Archive history table and Kynovant Insight's override
+                paragraph). */}
+            <div className="grid grid-cols-1 gap-4 border-t border-white/[0.05] pt-5 sm:grid-cols-2">
               <div>
-                <Label tone="dark">Effective Date</Label>
+                <Label tone="dark" className="!text-white/25">Effective Date</Label>
                 <Input
                   tone="dark"
                   type="date"
@@ -901,79 +1082,6 @@ export default function NutritionTargetEditor({
                   placeholder="e.g. Starting lower, adjusting after next check-in"
                 />
               </div>
-            </div>
-          </Card>
-
-          {/* ════════════════════════════════════════════════════
-              SECTION 3: COACHING GUIDANCE
-          ════════════════════════════════════════════════════ */}
-          <Card tone="dark" padding="lg" className="mb-8">
-            <div className="mb-6 flex items-baseline justify-between">
-              <p className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.4em] text-white/30">
-                <MessageSquare size={11} className="text-gold/60" aria-hidden /> Coaching Guidance
-              </p>
-              <p className="text-[10px] text-gold/35">
-                {firstName} will read this
-              </p>
-            </div>
-
-            {/* Gold border-left treatment — guidance as a letter, not a form field.
-                Custom hand-rolled textarea (not the Input/Textarea primitive):
-                the transparent, borderless "letter" look is a deliberate one-off
-                visual the boxed field primitive doesn't cover. */}
-            <div className="mb-6 border-l-2 border-gold/20 pl-6">
-              <textarea
-                rows={5}
-                value={coachNotes}
-                onChange={(e) => setCoachNotes(e.target.value)}
-                placeholder={`Context for ${firstName} — what do these targets mean for their goal? What should they prioritize? Clients who understand the why are far more consistent.`}
-                className="w-full resize-none bg-transparent text-sm leading-relaxed text-white/65 placeholder:text-white/14 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <Label tone="dark" className="!text-white/18">Internal Notes — coach only</Label>
-              <Textarea
-                tone="dark"
-                rows={2}
-                value={internalNotes}
-                onChange={(e) => setInternalNotes(e.target.value)}
-                placeholder="Notes for your reference. Not visible to the client."
-                className="text-xs leading-relaxed"
-              />
-            </div>
-          </Card>
-
-          {/* ════════════════════════════════════════════════════
-              SECTION 4: REVIEW + PUBLISH
-          ════════════════════════════════════════════════════ */}
-          <Card tone="dark" padding="lg" className="mb-6">
-            <p className="mb-5 flex items-center gap-2 text-[9px] uppercase tracking-[0.4em] text-white/25">
-              <Send size={11} aria-hidden /> Publishing
-            </p>
-
-            {/* Macro preview */}
-            <div className="mb-5 grid grid-cols-4 gap-5">
-              <MacroTile icon={Flame} label="Calories" value={calories || "—"} accent size="sm" />
-              <MacroTile icon={Beef} label="Protein" value={protein || "—"} size="sm" />
-              <MacroTile icon={Droplet} label="Fat" value={fat || "—"} valueClassName="text-white/40" size="sm" />
-              <MacroTile icon={Wheat} label="Carbs" value={carbs || "—"} valueClassName="text-white/40" size="sm" />
-            </div>
-
-            {/* Guidance preview */}
-            {coachNotes.trim() && (
-              <div className="mb-4 border-t border-white/[0.05] pt-4">
-                <p className="mb-2 text-[9px] uppercase tracking-[0.3em] text-gold/28">
-                  Guidance
-                </p>
-                <p className="line-clamp-2 text-xs leading-relaxed text-white/28">
-                  {coachNotes}
-                </p>
-              </div>
-            )}
-
-            <div className="border-t border-white/[0.05] pt-4">
-              <p className="text-[10px] text-white/25">Effective {effectiveDate}</p>
             </div>
           </Card>
 
