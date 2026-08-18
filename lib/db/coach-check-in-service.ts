@@ -27,13 +27,13 @@ import { clientGoals } from "./schema-profile";
 import { weeklyCheckIns } from "./schema-check-in";
 import type { WeeklyCheckInStatus } from "./schema-check-in";
 import type { CheckInDetail } from "./check-in-service";
-import { getPreviousCheckIn, getWeekStartDate } from "./check-in-service";
-import { getClientSchedule } from "./check-in-schedule-service";
+import { getPreviousCheckIn, getWeekStartDateForCalendarDate } from "./check-in-service";
+import { getClientScheduleHistory, getClientScheduleState } from "./check-in-schedule-service";
 import {
+  getDateInTimezone,
   getRequiredDayStates,
   isWeekFullyCompliant,
   type RequiredDayState,
-  type Weekday,
 } from "@/lib/checkin/schedule";
 
 // ─────────────────────────────────────────────────────────────
@@ -590,15 +590,48 @@ export async function getClientCheckInSummary(
       }
     : null;
 
-  // Current-week compliance — see the field's own doc comment on
-  // ClientCheckInSummary for why this uses the CURRENT schedule.
-  const requiredWeekdays = await getClientSchedule(clientId);
+  // Compliance is evaluated in the client's calendar, against the
+  // effective schedule for each date. A later schedule edit must not
+  // rewrite the current week's historical obligation set.
+  const [profile] = await db
+    .select({ timezone: clientProfiles.timezone })
+    .from(clientProfiles)
+    .where(eq(clientProfiles.userId, clientId))
+    .limit(1);
+  const today = getDateInTimezone(new Date(), profile?.timezone ?? "America/Chicago");
+  const currentWeekStart = getWeekStartDateForCalendarDate(today);
+  const scheduleState = await getClientScheduleState(clientId);
+  const scheduleHistory = scheduleState.configured ? await getClientScheduleHistory(clientId) : [];
+  let legacyDay: number | null = null;
+  if (!scheduleState.configured) {
+    const [enrollment] = await db
+      .select({ checkInDayOfWeek: coachingEnrollments.checkInDayOfWeek })
+      .from(coachingEnrollments)
+      .where(and(eq(coachingEnrollments.clientId, clientId), eq(coachingEnrollments.status, "active")))
+      .limit(1);
+    legacyDay = enrollment?.checkInDayOfWeek ?? null;
+  }
+  const requiredWeekdays: number[] = [];
+  for (let offset = 0; offset < 7; offset += 1) {
+    const date = new Date(`${currentWeekStart}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + offset);
+    const dateString = date.toISOString().split("T")[0];
+    if (dateString > today) continue;
+    const weekday = date.getUTCDay();
+    const required = scheduleState.configured
+      ? scheduleHistory.some((row) =>
+          row.weekday === weekday &&
+          row.effectiveFrom <= dateString &&
+          (row.effectiveTo === null || row.effectiveTo > dateString),
+        )
+      : (legacyDay ?? 0) === weekday;
+    if (required) requiredWeekdays.push(weekday);
+  }
   let currentWeekCompliance: ClientCheckInSummary["currentWeekCompliance"] = null;
   if (requiredWeekdays.length > 0) {
-    const currentWeekStart = getWeekStartDate();
     const submittedWeekdaysThisWeek = rows
       .filter((r) => r.weekStartDate === currentWeekStart && r.status !== "draft")
-      .map((r) => new Date(r.scheduledDate + "T12:00:00Z").getUTCDay() as Weekday);
+      .map((r) => new Date(r.scheduledDate + "T12:00:00Z").getUTCDay());
     const days = getRequiredDayStates(requiredWeekdays, submittedWeekdaysThisWeek);
     currentWeekCompliance = {
       requiredCount: days.length,

@@ -66,6 +66,7 @@ export interface Achievement {
 }
 
 export interface BodyMetricEntry {
+  scheduledDate?: string;
   weekStartDate: string;
   weekLabel: string;
   weightLbs: number | null;
@@ -178,7 +179,7 @@ function computeDailyStreak(completedDates: string[]): number {
 
   const dateSet = new Set(completedDates);
   const todayStr = new Date().toISOString().slice(0, 10);
-  let cursor = new Date(todayStr + "T12:00:00Z");
+  const cursor = new Date(todayStr + "T12:00:00Z");
 
   if (!dateSet.has(todayStr)) {
     cursor.setUTCDate(cursor.getUTCDate() - 1);
@@ -488,7 +489,7 @@ export async function getWeeklyComplianceSnapshot(
     ptr.setUTCDate(ptr.getUTCDate() + 1);
   }
 
-  const [checkIn] = await db
+  const checkIns = await db
     .select({ status: weeklyCheckIns.status })
     .from(weeklyCheckIns)
     .where(
@@ -497,13 +498,16 @@ export async function getWeeklyComplianceSnapshot(
         eq(weeklyCheckIns.weekStartDate, weekStart),
       ),
     )
-    .limit(1);
+    ;
+  const checkInStatus = checkIns.some((row) => row.status !== "draft")
+    ? checkIns.find((row) => row.status === "submitted")?.status ?? checkIns[0]?.status ?? null
+    : checkIns[0]?.status ?? null;
 
   return {
     sessionsThisWeek: sessions.length,
     completedThisWeek,
     skippedThisWeek,
-    checkInStatus: checkIn?.status ?? null,
+    checkInStatus,
     weekStartDate: weekStart,
     weekEndDate: weekEnd,
     dailyStatuses,
@@ -709,6 +713,7 @@ export async function getProgressData(clientId: string): Promise<ProgressData> {
       // Last 12 submitted/reviewed check-ins with body metrics
       db
         .select({
+          scheduledDate: weeklyCheckIns.scheduledDate,
           weekStartDate: weeklyCheckIns.weekStartDate,
           bodyWeightLbs: weeklyCheckIns.bodyWeightLbs,
           waistInches: weeklyCheckIns.waistInches,
@@ -724,7 +729,7 @@ export async function getProgressData(clientId: string): Promise<ProgressData> {
             ne(weeklyCheckIns.status, "draft"),
           ),
         )
-        .orderBy(desc(weeklyCheckIns.weekStartDate))
+        .orderBy(desc(weeklyCheckIns.scheduledDate))
         .limit(12),
 
       // Sessions per week for consistency chart
@@ -785,6 +790,7 @@ export async function getProgressData(clientId: string): Promise<ProgressData> {
     ]);
 
   const bodyMetrics: BodyMetricEntry[] = checkIns.map((c) => ({
+    scheduledDate: c.scheduledDate,
     weekStartDate: c.weekStartDate,
     weekLabel: fmtWeekLabel(c.weekStartDate),
     weightLbs: c.bodyWeightLbs ? parseFloat(c.bodyWeightLbs) : null,

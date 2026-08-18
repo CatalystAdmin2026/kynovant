@@ -42,59 +42,25 @@
 --
 -- BACKFILL POLICY (Phase 2 — "safest documented rule, no invented
 -- precision"):
---   For each existing row, scheduled_date = week_start_date + the
---   weekday offset from the enrollment that was active for that
---   check-in (weekly_check_ins.enrollment_id when set; falls back to
---   the client's currently-active enrollment when enrollment_id is
---   NULL — e.g. an enrollment that has since ended, per its
---   ON DELETE SET NULL behavior; falls back to week_start_date itself,
---   i.e. Sunday, when no enrollment info exists at all — the same
---   ultimate default getCheckInDueDate() already applies for
---   checkInDayOfWeek IS NULL). This is not an approximation invented
---   for this migration — it is the EXACT formula
---   (lib/db/check-in-service.ts's getCheckInDueDate) the product
---   already used to decide "when is this client's check-in due" for
---   every single-day client before this pass existed. Every existing
---   historical row was created under exactly this single-day model,
---   so recomputing its due date with the same formula is recovering
---   real information, not inventing false precision.
+--   Existing rows predate occurrence dates. Their old schema proves
+--   only the Sunday week bucket, not the required weekday on that
+--   historical date; enrollment.check_in_day_of_week was mutable and
+--   was not history-tracked. Therefore scheduled_date is anchored to
+--   week_start_date for every legacy row. New rows written after this
+--   migration receive the exact required occurrence date from the
+--   effective-dated schedule. This preserves every legacy row without
+--   making a false weekday claim.
 --
 -- WHY NO COLLISION IS POSSIBLE:
---   The OLD unique constraint already guaranteed at most one row per
---   (client_id, week_start_date). scheduled_date is a deterministic
---   function of week_start_date (plus a per-client offset that does
---   not vary within a single UPDATE pass), so two DIFFERENT
---   week_start_date values for the same client always produce two
---   DIFFERENT scheduled_date values (different weeks land on
---   different calendar dates even with the same weekday offset).
---   Backfill therefore cannot itself create a (client_id,
---   scheduled_date) duplicate — the new unique index is safe to add
---   immediately after backfill with no pre-cleanup step required.
+--   The old unique constraint already guaranteed at most one row per
+--   (client_id, week_start_date), and the backfill copies that unique
+--   week anchor directly.
 -- ─────────────────────────────────────────────────────────────
 
 -- 1. Add the column, nullable for now (populated by the backfill below).
 ALTER TABLE "weekly_check_ins" ADD COLUMN "scheduled_date" date;--> statement-breakpoint
 
--- 2a. Backfill using the check-in's own linked enrollment, when set.
-UPDATE "weekly_check_ins" wci
-SET "scheduled_date" = (wci."week_start_date"::date + (COALESCE(ce."check_in_day_of_week", 0) || ' days')::interval)::date
-FROM "coaching_enrollments" ce
-WHERE ce."id" = wci."enrollment_id"
-  AND wci."scheduled_date" IS NULL;--> statement-breakpoint
-
--- 2b. Fallback for rows whose enrollment_id is NULL (enrollment ended
--- and was cleared via ON DELETE SET NULL, or was never linked) — use
--- the client's currently-active enrollment, if any.
-UPDATE "weekly_check_ins" wci
-SET "scheduled_date" = (wci."week_start_date"::date + (COALESCE(ce."check_in_day_of_week", 0) || ' days')::interval)::date
-FROM "coaching_enrollments" ce
-WHERE wci."scheduled_date" IS NULL
-  AND ce."client_id" = wci."client_id"
-  AND ce."status" = 'active';--> statement-breakpoint
-
--- 2c. Final fallback for fully orphaned rows (no enrollment info at
--- all) — same ultimate default getCheckInDueDate() already applies:
--- scheduled_date = week_start_date (Sunday).
+-- 2a. Use the legacy week bucket as a neutral occurrence anchor.
 UPDATE "weekly_check_ins"
 SET "scheduled_date" = "week_start_date"
 WHERE "scheduled_date" IS NULL;--> statement-breakpoint

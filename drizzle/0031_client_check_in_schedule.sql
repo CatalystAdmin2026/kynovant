@@ -37,15 +37,11 @@
 --   today), so their observed behavior does not silently change the
 --   moment this table exists.
 --
---   effective_from is backfilled from the enrollment's own
---   start_date (falling back to the enrollment's created_at date if
---   start_date was never set) — the earliest point in time this
---   client could possibly have had ANY check-in schedule. This is a
---   truthful lower bound, not invented precision: before this
---   migration, checkInDayOfWeek was the ONLY schedule representation
---   that ever existed for any client, so asserting it was required
---   starting from enrollment start is exactly what already happened,
---   just not previously recorded in a dedicated table.
+--   effective_from is CURRENT_DATE. The old single-day field is not
+--   effective-dated, so a migration cannot prove which weekday was
+--   required on every historical date if that field was edited. The
+--   new schedule history starts at this migration boundary rather
+--   than inventing retrospective weekday precision.
 --
 --   New clients (no active enrollment at migration time, or created
 --   afterward) intentionally get ZERO rows — "no required schedule
@@ -100,8 +96,9 @@ CREATE POLICY "check_in_schedule_client_select"
   USING (auth.uid() = client_id);--> statement-breakpoint
 
 -- ─────────────────────────────────────────────────────────────
--- BACKFILL — existing clients preserve their current effective day,
--- with a truthful (not invented) effective_from lower bound.
+-- BACKFILL — existing clients preserve their current effective day
+-- from the migration boundary forward. No retrospective schedule
+-- history is invented.
 --
 -- The ON CONFLICT target names the partial unique index's columns AND
 -- its WHERE predicate — required for Postgres to accept it as the
@@ -111,7 +108,7 @@ INSERT INTO "client_check_in_schedule" ("client_id", "weekday", "effective_from"
 SELECT DISTINCT ON (ce."client_id")
   ce."client_id",
   COALESCE(ce."check_in_day_of_week", 0),
-  COALESCE(ce."start_date", ce."created_at"::date)
+  CURRENT_DATE
 FROM "coaching_enrollments" ce
 WHERE ce."status" = 'active'
 ORDER BY ce."client_id", ce."created_at" DESC

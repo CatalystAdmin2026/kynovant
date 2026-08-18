@@ -604,7 +604,7 @@ export default function CheckInForm({ initialData, existingCheckInId, scheduledD
             />
             <FieldError message={fieldErrors.waistInches} />
             {previousCheckIn?.waistInches && (
-              <PrevHint>{previousCheckIn.waistInches}"</PrevHint>
+              <PrevHint>{previousCheckIn.waistInches}&quot;</PrevHint>
             )}
           </div>
         </div>

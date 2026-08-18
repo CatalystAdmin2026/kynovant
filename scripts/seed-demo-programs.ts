@@ -138,11 +138,6 @@ function addDays(d: Date, n: number): Date {
   return new Date(d.getTime() + n * 86_400_000);
 }
 
-function sundayOf(d: Date): Date {
-  const dow = d.getUTCDay();
-  return addDays(d, -dow);
-}
-
 // Returns all dates in [start, end] that fall on one of daysOfWeek.
 // daysOfWeek: 0=Sun, 1=Mon … 6=Sat (UTC)
 function sessionDates(
@@ -935,7 +930,7 @@ async function cleanupDemoData(clientId: string) {
   }
 
   // Clean up check-ins
-  const deletedCIs = await db
+  await db
     .delete(weeklyCheckIns)
     .where(
       and(

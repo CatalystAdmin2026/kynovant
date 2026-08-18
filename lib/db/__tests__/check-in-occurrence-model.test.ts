@@ -108,6 +108,10 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.delete(weeklyCheckIns).where(inArray(weeklyCheckIns.clientId, [clientA.id, clientB.id]));
   await db.delete(clientCheckInSchedule).where(inArray(clientCheckInSchedule.clientId, [clientA.id, clientB.id]));
+  await db.insert(clientCheckInSchedule).values([
+    { clientId: clientA.id, weekday: 0, effectiveFrom: "2026-08-01" },
+    { clientId: clientA.id, weekday: 3, effectiveFrom: "2026-08-01" },
+  ]);
 });
 
 // A Wednesday + Sunday pair inside a single, fixed, known-past week —
@@ -115,8 +119,9 @@ beforeEach(async () => {
 // always after it, so isOverdue/isToday assertions on THESE specific
 // dates aren't used; getCurrentCheckInWindows itself always computes
 // against the real current week, tested separately below.
-const WED = "2026-08-19";
-const SUN = "2026-08-16"; // the Sunday that starts that same week
+const WED = "2026-08-12";
+const SUN = "2026-08-09"; // the Sunday that starts that same week
+const FUTURE_WED = "2026-08-19";
 
 describe("STORAGE — two occurrences in one week coexist", () => {
   it("a Wednesday and a Sunday draft for the same client in the same week both persist as separate rows", async () => {
@@ -317,6 +322,13 @@ describe("COMPLIANCE — getClientCheckInSummary wires getRequiredDayStates into
 });
 
 describe("SECURITY — occurrence writes stay scoped to the owning client", () => {
+  it("rejects an unscheduled and future occurrence date", async () => {
+    const unscheduled = await createOrUpdateDraftCheckIn(clientA.id, "2026-08-10", {});
+    expect(unscheduled.ok).toBe(false);
+    const future = await createOrUpdateDraftCheckIn(clientA.id, FUTURE_WED, {});
+    expect(future.ok).toBe(false);
+  });
+
   it("submitCheckIn rejects a checkInId that belongs to a different client", async () => {
     const draft = await createOrUpdateDraftCheckIn(clientA.id, WED, {});
     if (!draft.ok) throw new Error("setup failed");
@@ -331,6 +343,7 @@ describe("SECURITY — occurrence writes stay scoped to the owning client", () =
 
   it("two different clients scheduling the same calendar date do not collide (unique index is per-client)", async () => {
     const a = await createOrUpdateDraftCheckIn(clientA.id, WED, {});
+    await setClientSchedule(clientB.id, [3]);
     const b = await createOrUpdateDraftCheckIn(clientB.id, WED, {});
     expect(a.ok).toBe(true);
     expect(b.ok).toBe(true);

@@ -36,9 +36,9 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, desc, inArray, lt } from "drizzle-orm";
 import { getDb } from "./client";
-import { users, coachingEnrollments, timelineEvents } from "./schema";
+import { users, clientProfiles, coachingEnrollments, timelineEvents } from "./schema";
 import { weeklyCheckIns, type WeeklyCheckInStatus } from "./schema-check-in";
 import {
   validateCheckInDraft,
@@ -46,7 +46,11 @@ import {
   type CheckInFieldErrors,
 } from "./check-in-validation";
 import { notifyCheckInSubmitted } from "./coach-notification-service";
-import { getClientSchedule } from "./check-in-schedule-service";
+import {
+  getClientScheduleAtDate,
+  getClientScheduleHistory,
+  getClientScheduleState,
+} from "./check-in-schedule-service";
 import { getDateInTimezone } from "@/lib/checkin/schedule";
 import type { Weekday } from "@/lib/checkin/schedule";
 
@@ -184,6 +188,39 @@ export interface CheckInDetail {
   updatedAt: Date;
 }
 
+function isValidCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(`${value}T`);
+}
+
+async function validateOccurrenceDate(
+  clientId: string,
+  scheduledDate: string,
+  timezone: string,
+  activeEnrollmentDay: number | null | undefined,
+): Promise<string | null> {
+  if (!isValidCalendarDate(scheduledDate)) return "Invalid check-in date.";
+
+  const today = getDateInTimezone(new Date(), timezone);
+  if (scheduledDate > today) return "A check-in cannot be scheduled in the future.";
+
+  const scheduleState = await getClientScheduleState(clientId);
+  if (scheduleState.configured) {
+    const requiredDays = await getClientScheduleAtDate(clientId, scheduledDate);
+    if (!requiredDays.includes(new Date(`${scheduledDate}T12:00:00Z`).getUTCDay() as Weekday)) {
+      return "That date is not a required check-in occurrence.";
+    }
+    return null;
+  }
+
+  // Legacy clients with no schedule rows retain the old single-day
+  // enrollment fallback. An explicit empty schedule never reaches this path.
+  const requiredDay = activeEnrollmentDay ?? 0;
+  const actualDay = new Date(`${scheduledDate}T12:00:00Z`).getUTCDay();
+  return actualDay === requiredDay ? null : "That date is not a required check-in occurrence.";
+}
+
 // ─────────────────────────────────────────────────────────────
 // CURRENT WINDOWS (plural — one per required occurrence this week)
 //
@@ -206,11 +243,11 @@ export async function getCurrentCheckInWindows(
 
   const todayStr = getDateInTimezone(new Date(), timezone);
   const weekStartDate = getWeekStartDateForCalendarDate(todayStr);
-  const weekEndDate = getWeekEndDate(new Date(weekStartDate + "T00:00:00Z"));
+  const scheduleState = await getClientScheduleState(clientId);
+  const scheduleHistory = scheduleState.configured ? await getClientScheduleHistory(clientId) : [];
+  let legacyWeekday: Weekday | null = null;
 
-  let requiredWeekdays: Weekday[] = await getClientSchedule(clientId);
-
-  if (requiredWeekdays.length === 0) {
+  if (!scheduleState.configured) {
     // Legacy fallback: this client has no client_check_in_schedule
     // rows at all (not "explicitly configured to zero days" — that
     // case is indistinguishable at this layer, which is exactly why
@@ -229,13 +266,35 @@ export async function getCurrentCheckInWindows(
       )
       .limit(1);
     if (enrollment) {
-      requiredWeekdays = [(enrollment.checkInDayOfWeek ?? 0) as Weekday];
+      legacyWeekday = (enrollment.checkInDayOfWeek ?? 0) as Weekday;
     }
   }
 
-  if (requiredWeekdays.length === 0) return [];
+  if (!scheduleState.configured && legacyWeekday === null) return [];
 
-  const scheduledDates = requiredWeekdays.map((wd) => getCheckInDueDate(weekStartDate, wd));
+  const previousWeekStart = getWeekStartDateForCalendarDate(
+    getCheckInDueDate(weekStartDate, -1),
+  );
+  const candidateDates: string[] = [];
+  const candidateStart = new Date(`${previousWeekStart}T00:00:00Z`);
+  for (let offset = 0; offset < 14; offset += 1) {
+    const date = new Date(candidateStart);
+    date.setUTCDate(date.getUTCDate() + offset);
+    const dateString = date.toISOString().split("T")[0];
+    const weekday = date.getUTCDay();
+    const required = scheduleState.configured
+      ? scheduleHistory.some((row) =>
+          row.weekday === weekday &&
+          row.effectiveFrom <= dateString &&
+          (row.effectiveTo === null || row.effectiveTo > dateString),
+        )
+      : legacyWeekday === weekday;
+    const isCurrentWeek = dateString >= weekStartDate;
+    const isPriorOverdueWindow = dateString < weekStartDate && dateString <= todayStr;
+    if (required && (isCurrentWeek || isPriorOverdueWindow)) candidateDates.push(dateString);
+  }
+
+  if (candidateDates.length === 0) return [];
 
   const existingRows = await db
     .select({
@@ -251,19 +310,20 @@ export async function getCurrentCheckInWindows(
     .where(
       and(
         eq(weeklyCheckIns.clientId, clientId),
-        inArray(weeklyCheckIns.scheduledDate, scheduledDates),
+        inArray(weeklyCheckIns.scheduledDate, candidateDates),
       ),
     );
   const byScheduledDate = new Map(existingRows.map((r) => [r.scheduledDate, r]));
 
-  return requiredWeekdays.map((weekday, i) => {
-    const scheduledDate = scheduledDates[i];
+  return candidateDates.map((scheduledDate) => {
+    const weekday = new Date(`${scheduledDate}T12:00:00Z`).getUTCDay() as Weekday;
     const existing = byScheduledDate.get(scheduledDate) ?? null;
+    const windowWeekStart = getWeekStartDateForCalendarDate(scheduledDate);
     return {
       scheduledDate,
       weekday,
-      weekStartDate,
-      weekEndDate,
+      weekStartDate: windowWeekStart,
+      weekEndDate: getWeekEndDate(new Date(`${windowWeekStart}T00:00:00Z`)),
       isToday: scheduledDate === todayStr,
       isOverdue: !existing && scheduledDate < todayStr,
       existingCheckIn: existing
@@ -307,12 +367,32 @@ export async function createOrUpdateDraftCheckIn(
 
   // Verify client exists
   const [client] = await db
-    .select({ id: users.id })
+    .select({ id: users.id, timezone: clientProfiles.timezone })
     .from(users)
+    .leftJoin(clientProfiles, eq(clientProfiles.userId, users.id))
     .where(and(eq(users.id, clientId), eq(users.role, "client")))
     .limit(1);
 
   if (!client) return { ok: false, error: "Client not found." };
+
+  const [enrollment] = await db
+    .select({ id: coachingEnrollments.id, checkInDayOfWeek: coachingEnrollments.checkInDayOfWeek })
+    .from(coachingEnrollments)
+    .where(
+      and(
+        eq(coachingEnrollments.clientId, clientId),
+        eq(coachingEnrollments.status, "active"),
+      ),
+    )
+    .limit(1);
+
+  const occurrenceError = await validateOccurrenceDate(
+    clientId,
+    scheduledDate,
+    client.timezone ?? "America/Chicago",
+    enrollment?.checkInDayOfWeek,
+  );
+  if (occurrenceError) return { ok: false, error: occurrenceError };
 
   // Fast-path check — the common case where no race is happening.
   // The ON CONFLICT WHERE guard below is the actual authoritative
@@ -335,18 +415,6 @@ export async function createOrUpdateDraftCheckIn(
       error: `This check-in has already been ${existing.status === "submitted" ? "submitted" : "reviewed"}. It cannot be edited.`,
     };
   }
-
-  // Look up active enrollment for enrollmentId
-  const [enrollment] = await db
-    .select({ id: coachingEnrollments.id })
-    .from(coachingEnrollments)
-    .where(
-      and(
-        eq(coachingEnrollments.clientId, clientId),
-        eq(coachingEnrollments.status, "active"),
-      ),
-    )
-    .limit(1);
 
   const weekStartDate = getWeekStartDateForCalendarDate(scheduledDate);
 
@@ -670,13 +738,13 @@ export async function getPreviousCheckIn(
       and(
         eq(weeklyCheckIns.clientId, clientId),
         eq(weeklyCheckIns.status, "reviewed"),
+        lt(weeklyCheckIns.weekStartDate, beforeWeekStartDate),
       ),
     )
     .orderBy(desc(weeklyCheckIns.scheduledDate))
     .limit(1);
 
-  // Manual filter for "before" since we need to avoid complex sql<>
-  if (!row || row.weekStartDate >= beforeWeekStartDate) return null;
+  if (!row) return null;
 
   return {
     id: row.id,

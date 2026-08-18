@@ -19,30 +19,63 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { eq, and, isNull, lte, or, gt } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { getDb } from "./client";
+import { clientProfiles } from "./schema";
 import { clientCheckInSchedule } from "./schema-check-in";
 import { normalizeWeekdays } from "@/lib/checkin/schedule";
+import { getDateInTimezone } from "@/lib/checkin/schedule";
 import type { Weekday } from "@/lib/checkin/schedule";
 
-function today(): string {
-  return new Date().toISOString().split("T")[0];
+async function clientToday(clientId: string): Promise<string> {
+  const db = getDb();
+  const [profile] = await db
+    .select({ timezone: clientProfiles.timezone })
+    .from(clientProfiles)
+    .where(eq(clientProfiles.userId, clientId))
+    .limit(1);
+  return getDateInTimezone(new Date(), profile?.timezone ?? "America/Chicago");
+}
+
+function addCalendarDay(date: string): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + 1);
+  return value.toISOString().split("T")[0];
+}
+
+export interface ClientScheduleState {
+  configured: boolean;
+  weekdays: ReturnType<typeof normalizeWeekdays>;
+}
+
+export async function getClientScheduleHistory(clientId: string): Promise<
+  Array<{ weekday: number; effectiveFrom: string; effectiveTo: string | null }>
+> {
+  const db = getDb();
+  return db
+    .select({
+      weekday: clientCheckInSchedule.weekday,
+      effectiveFrom: clientCheckInSchedule.effectiveFrom,
+      effectiveTo: clientCheckInSchedule.effectiveTo,
+    })
+    .from(clientCheckInSchedule)
+    .where(eq(clientCheckInSchedule.clientId, clientId));
+}
+
+// `[]` is a valid configured state. Callers that need legacy fallback must
+// distinguish it from a client with no schedule rows at all.
+export async function getClientScheduleState(clientId: string): Promise<ClientScheduleState> {
+  const rows = await getClientScheduleHistory(clientId);
+  return {
+    configured: rows.length > 0,
+    weekdays: normalizeWeekdays(rows.filter((row) => row.effectiveTo === null).map((row) => row.weekday)),
+  };
 }
 
 // Returns the CURRENTLY required weekdays — [] means "no required
 // schedule," a real, distinct, intentional state.
 export async function getClientSchedule(clientId: string): Promise<Weekday[]> {
-  const db = getDb();
-  const rows = await db
-    .select({ weekday: clientCheckInSchedule.weekday })
-    .from(clientCheckInSchedule)
-    .where(
-      and(
-        eq(clientCheckInSchedule.clientId, clientId),
-        isNull(clientCheckInSchedule.effectiveTo),
-      ),
-    );
-  return normalizeWeekdays(rows.map((r) => r.weekday));
+  return (await getClientScheduleState(clientId)).weekdays;
 }
 
 // Returns the weekdays that were required ON a specific past (or
@@ -51,18 +84,12 @@ export async function getClientSchedule(clientId: string): Promise<Weekday[]> {
 // getClientSchedule, so a later schedule change never silently
 // rewrites what was actually required at the time.
 export async function getClientScheduleAtDate(clientId: string, date: string): Promise<Weekday[]> {
-  const db = getDb();
-  const rows = await db
-    .select({ weekday: clientCheckInSchedule.weekday })
-    .from(clientCheckInSchedule)
-    .where(
-      and(
-        eq(clientCheckInSchedule.clientId, clientId),
-        lte(clientCheckInSchedule.effectiveFrom, date),
-        or(isNull(clientCheckInSchedule.effectiveTo), gt(clientCheckInSchedule.effectiveTo, date)),
-      ),
-    );
-  return normalizeWeekdays(rows.map((r) => r.weekday));
+  const rows = await getClientScheduleHistory(clientId);
+  return normalizeWeekdays(
+    rows
+      .filter((row) => row.effectiveFrom <= date && (row.effectiveTo === null || row.effectiveTo > date))
+      .map((row) => row.weekday),
+  );
 }
 
 // Replaces the client's CURRENTLY required weekday set with
@@ -85,7 +112,7 @@ export async function setClientSchedule(
   weekdays: number[],
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const target = normalizeWeekdays(weekdays);
-  const now = today();
+  const now = await clientToday(clientId);
 
   try {
     const db = getDb();
@@ -108,19 +135,14 @@ export async function setClientSchedule(
     const toRemove = activeRows.filter((r) => !target.includes(r.weekday as Weekday));
 
     for (const row of toRemove) {
-      // chk_check_in_schedule_effective_order requires effectiveTo
-      // STRICTLY > effectiveFrom. A row opened earlier and removed
-      // today soft-closes normally (today > effectiveFrom). But a row
-      // opened TODAY (e.g. added in an earlier call this same day,
-      // then removed in a later, separate call — same-day add-then-
-      // undo) can never satisfy that with effectiveTo = today, since
-      // today == effectiveFrom. That row never became historically
-      // true for any past date, so it's deleted outright instead of
-      // soft-closed — there is no history to preserve for a row whose
-      // entire lifetime was today.
+      // A same-day row may already have represented a real obligation
+      // (and may already have a submitted occurrence). Close it after
+      // today rather than deleting it, so today's historical lookup
+      // remains truthful while the row is absent from the active set.
       if (row.effectiveFrom === now) {
         await db
-          .delete(clientCheckInSchedule)
+          .update(clientCheckInSchedule)
+          .set({ effectiveTo: addCalendarDay(now) })
           .where(and(eq(clientCheckInSchedule.id, row.id), eq(clientCheckInSchedule.clientId, clientId)));
       } else {
         await db

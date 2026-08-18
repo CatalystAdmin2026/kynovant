@@ -3,10 +3,8 @@
 //
 // Covers: current vs historical schedule queries, add/remove
 // diffing, idempotency, and the same-day add-then-remove edge case
-// (a row opened and closed on the same calendar date can never
-// satisfy chk_check_in_schedule_effective_order's effectiveTo >
-// effectiveFrom via a soft-close — setClientSchedule must delete it
-// outright instead).
+// (a same-day removal must preserve today's obligation while removing
+// the row from the active set).
 //
 // Requires a reachable DATABASE_URL. vitest.config.ts loads .env.local
 // automatically.
@@ -140,7 +138,7 @@ describe("getClientScheduleAtDate — historical truth is preserved across sched
 });
 
 describe("same-day add-then-remove — chk_check_in_schedule_effective_order edge case", () => {
-  it("adding a day and removing it again the same day does not throw and leaves no orphaned row", async () => {
+  it("adding a day and removing it again the same day preserves today's obligation", async () => {
     const first = await setClientSchedule(client.id, [3]); // add Wednesday
     expect(first.ok).toBe(true);
 
@@ -153,14 +151,16 @@ describe("same-day add-then-remove — chk_check_in_schedule_effective_order edg
 
     expect(await getClientSchedule(client.id)).toEqual([]);
 
-    // No dangling row of any kind (open or closed) should remain for
-    // a day whose entire lifetime was today — it never became
-    // historically true for any date.
+    // The row is closed after today, so today's historical lookup
+    // remains truthful while the day is no longer active.
     const rows = await db
       .select()
       .from(clientCheckInSchedule)
       .where(and_(client.id));
-    expect(rows.filter((r) => r.weekday === 3)).toHaveLength(0);
+    const wednesday = rows.find((r) => r.weekday === 3);
+    expect(wednesday).toBeDefined();
+    expect(wednesday!.effectiveTo).not.toBeNull();
+    expect(await getClientScheduleAtDate(client.id, isoDaysAgo(0))).toContain(3);
   });
 
   it("same-day add-then-remove of one day while another day stays active only touches the removed day", async () => {
@@ -181,7 +181,7 @@ describe("same-day add-then-remove — chk_check_in_schedule_effective_order edg
       .select()
       .from(clientCheckInSchedule)
       .where(and_(client.id));
-    expect(rows.filter((r) => r.weekday === 3)).toHaveLength(0); // Wednesday deleted outright
+    expect(rows.filter((r) => r.weekday === 3)).toHaveLength(1); // Wednesday history preserved
     const sundayRow = rows.find((r) => r.weekday === 0);
     expect(sundayRow).toBeDefined();
     expect(sundayRow!.effectiveTo).toBeNull(); // Sunday's long history is untouched
