@@ -112,51 +112,53 @@ export async function setClientSchedule(
   weekdays: number[],
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const target = normalizeWeekdays(weekdays);
-  const now = await clientToday(clientId);
 
   try {
     const db = getDb();
-    const activeRows = await db
-      .select({
-        id: clientCheckInSchedule.id,
-        weekday: clientCheckInSchedule.weekday,
-        effectiveFrom: clientCheckInSchedule.effectiveFrom,
-      })
-      .from(clientCheckInSchedule)
-      .where(
-        and(
-          eq(clientCheckInSchedule.clientId, clientId),
-          isNull(clientCheckInSchedule.effectiveTo),
-        ),
-      );
-    const activeWeekdays = new Set(activeRows.map((r) => r.weekday));
+    const now = await clientToday(clientId);
+    await db.transaction(async (tx) => {
+      const activeRows = await tx
+        .select({
+          id: clientCheckInSchedule.id,
+          weekday: clientCheckInSchedule.weekday,
+          effectiveFrom: clientCheckInSchedule.effectiveFrom,
+        })
+        .from(clientCheckInSchedule)
+        .where(
+          and(
+            eq(clientCheckInSchedule.clientId, clientId),
+            isNull(clientCheckInSchedule.effectiveTo),
+          ),
+        );
+      const activeWeekdays = new Set(activeRows.map((r) => r.weekday));
 
-    const toAdd = target.filter((d) => !activeWeekdays.has(d));
-    const toRemove = activeRows.filter((r) => !target.includes(r.weekday as Weekday));
+      const toAdd = target.filter((d) => !activeWeekdays.has(d));
+      const toRemove = activeRows.filter((r) => !target.includes(r.weekday as Weekday));
 
-    for (const row of toRemove) {
-      // A same-day row may already have represented a real obligation
-      // (and may already have a submitted occurrence). Close it after
-      // today rather than deleting it, so today's historical lookup
-      // remains truthful while the row is absent from the active set.
-      if (row.effectiveFrom === now) {
-        await db
-          .update(clientCheckInSchedule)
-          .set({ effectiveTo: addCalendarDay(now) })
-          .where(and(eq(clientCheckInSchedule.id, row.id), eq(clientCheckInSchedule.clientId, clientId)));
-      } else {
-        await db
-          .update(clientCheckInSchedule)
-          .set({ effectiveTo: now })
-          .where(and(eq(clientCheckInSchedule.id, row.id), eq(clientCheckInSchedule.clientId, clientId)));
+      for (const row of toRemove) {
+        // A same-day row may already have represented a real obligation
+        // (and may already have a submitted occurrence). Close it after
+        // today rather than deleting it, so today's historical lookup
+        // remains truthful while the row is absent from the active set.
+        if (row.effectiveFrom === now) {
+          await tx
+            .update(clientCheckInSchedule)
+            .set({ effectiveTo: addCalendarDay(now) })
+            .where(and(eq(clientCheckInSchedule.id, row.id), eq(clientCheckInSchedule.clientId, clientId)));
+        } else {
+          await tx
+            .update(clientCheckInSchedule)
+            .set({ effectiveTo: now })
+            .where(and(eq(clientCheckInSchedule.id, row.id), eq(clientCheckInSchedule.clientId, clientId)));
+        }
       }
-    }
 
-    if (toAdd.length > 0) {
-      await db.insert(clientCheckInSchedule).values(
-        toAdd.map((weekday) => ({ clientId, weekday, effectiveFrom: now })),
-      );
-    }
+      if (toAdd.length > 0) {
+        await tx.insert(clientCheckInSchedule).values(
+          toAdd.map((weekday) => ({ clientId, weekday, effectiveFrom: now })),
+        );
+      }
+    });
 
     return { ok: true };
   } catch (err) {
