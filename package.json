@@ -10,7 +10,8 @@
     "seed:demo": "npx tsx scripts/seed-demo-client.ts",
     "seed:demo:programs": "npx tsx scripts/seed-demo-programs.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:staging": "bash scripts/test-staging.sh"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

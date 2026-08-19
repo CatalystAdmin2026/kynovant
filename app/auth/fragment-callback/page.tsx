@@ -72,6 +72,29 @@ function FragmentCallbackContent() {
       }
 
       if (type === "invite") {
+        // Activation-gate follow-up: /setup-password now requires a
+        // short-lived onboarding-authorization cookie that only server
+        // code can mint, and only in direct response to a genuine
+        // token redemption. setSession() above just redeemed the
+        // fragment tokens, but this page has no token_hash left to
+        // hand a server route the way app/auth/accept's flow does —
+        // fragment tokens are consumed once, here, client-side. So
+        // this asks the server to check the JWT it just received for
+        // itself (amr claim = fresh "otp", not "password" — see that
+        // route's header comment) and mint the cookie only if so. This
+        // is what currently still carries the coach-invite pipeline
+        // (app/api/coach-signup, .../invite-coach), which hasn't been
+        // migrated off Supabase's raw action_link in this pass. If the
+        // check fails for any reason, still continue to /setup-password
+        // as before — its own server-side guard is what actually
+        // enforces the gate; failing here just means that guard will
+        // (correctly) redirect the user onward instead of showing the
+        // form.
+        try {
+          await fetch("/api/auth/confirm-invite-session", { method: "POST" });
+        } catch {
+          // Ignored — see comment above.
+        }
         const destination = overwatch === "1"
           ? `/setup-password?overwatch=1&next=${encodeURIComponent(safeOverwatchNext(next))}`
           : "/setup-password";

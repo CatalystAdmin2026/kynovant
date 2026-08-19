@@ -25,6 +25,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { syncUserToPublic, getPublicUser } from "@/lib/auth/sync";
 import { resolvePostLoginRedirect } from "@/lib/auth/redirect";
+import { ONBOARDING_COOKIE_NAME, onboardingCookieOptions, signOnboardingToken } from "@/lib/auth/onboarding-token";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
@@ -107,6 +108,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}${destination}`);
   }
   if (type === "invite") {
+    // Direct, server-observed proof of invite-token redemption in
+    // THIS request (exchangeCodeForSession just succeeded above) —
+    // exactly the trust level the activation gate requires. Mints the
+    // same short-lived cookie app/api/auth/verify-invite/route.ts
+    // mints for the (currently primary) /auth/accept path, so
+    // /setup-password's gate works identically regardless of which
+    // entry point got the user here — including the still-unmigrated
+    // coach-invite pipeline, if it or Supabase's project settings
+    // ever produce a PKCE-style `?code=` link instead of the implicit-
+    // flow fragment tokens app/auth/fragment-callback/page.tsx handles
+    // today.
+    cookieStore.set(ONBOARDING_COOKIE_NAME, signOnboardingToken(authUser.id), onboardingCookieOptions());
+
     const destination = overwatch === "1"
       ? `/setup-password?overwatch=1&next=${encodeURIComponent(next ?? "/overwatch")}`
       : "/setup-password";
