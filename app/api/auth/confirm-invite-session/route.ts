@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import {
@@ -7,6 +7,7 @@ import {
   signOnboardingToken,
 } from "@/lib/auth/onboarding-token";
 import { isFreshOtpAmr } from "@/lib/auth/session-claims";
+import { verifyInviteHandoffToken } from "@/lib/auth/onboarding-token";
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/auth/confirm-invite-session
@@ -46,7 +47,15 @@ import { isFreshOtpAmr } from "@/lib/auth/session-claims";
 // it's the same access the legitimate flow already grants.
 // ─────────────────────────────────────────────────────────────
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  let body: { handoff?: unknown } = {};
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ ok: false, error: "Invitation handoff is required." }, { status: 400 });
+  }
+  const handoff = typeof body.handoff === "string" ? body.handoff : null;
+
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -82,6 +91,13 @@ export async function POST() {
 
   if (!isFreshOtpAmr(claims.amr)) {
     return NextResponse.json({ ok: false, error: "This session was not just established by an invitation link." }, { status: 403 });
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.email || !verifyInviteHandoffToken(handoff, user.email)) {
+    return NextResponse.json({ ok: false, error: "This session was not established by a valid invitation." }, { status: 403 });
   }
 
   cookieStore.set(ONBOARDING_COOKIE_NAME, signOnboardingToken(claims.sub as string), onboardingCookieOptions());

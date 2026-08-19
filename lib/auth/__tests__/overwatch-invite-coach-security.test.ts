@@ -132,8 +132,9 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — no parallel onboa
     );
   });
 
-  it("uses the existing redirectTo target (/auth/callback) — the same landing point every other invite in this codebase uses, not a bespoke callback route", () => {
-    expect(route).toContain("redirectTo: `${siteOrigin}/auth/callback`");
+  it("uses /auth/callback with a signed invitation handoff marker, preserving the existing callback route", () => {
+    expect(route).toContain("/auth/callback?type=invite&handoff=");
+    expect(route).toContain("signInviteHandoffToken(email)");
   });
 
   it("never creates a Stripe Checkout Session, Customer, or subscription — trial/billing stays exclusively in the existing post-login flow", () => {

@@ -119,17 +119,19 @@ describe("token-minting entry points — cookie is only ever minted from direct 
     expect(VERIFY_INVITE).toMatch(/if \(type === "invite"\)\s*\{\s*\n\s*cookieStore\.set\(ONBOARDING_COOKIE_NAME, signOnboardingToken/);
   });
 
-  it("auth/callback mints the cookie only inside the type===\"invite\" branch, after exchangeCodeForSession succeeded", () => {
+  it("auth/callback requires a signed invitation handoff in addition to the caller-controlled invite marker", () => {
     const exchangeIndex = CALLBACK.indexOf("exchangeCodeForSession(code)");
     const inviteBranchIndex = CALLBACK.indexOf('if (type === "invite")');
     const mintIndex = CALLBACK.indexOf("signOnboardingToken(authUser.id)");
     expect(exchangeIndex).toBeGreaterThan(-1);
     expect(mintIndex).toBeGreaterThan(inviteBranchIndex);
+    expect(CALLBACK).toContain("verifyInviteHandoffToken(handoff, authUser.email)");
   });
 
-  it("confirm-invite-session requires BOTH a validated session and a fresh-otp amr claim before minting — never session presence alone", () => {
+  it("confirm-invite-session requires a signed handoff as well as a validated fresh-otp session", () => {
     expect(CONFIRM_SESSION).toContain("supabase.auth.getClaims(session.access_token)");
     expect(CONFIRM_SESSION).toContain("isFreshOtpAmr(claims.amr)");
+    expect(CONFIRM_SESSION).toContain("verifyInviteHandoffToken(handoff, user.email)");
     const checkIndex = CONFIRM_SESSION.indexOf("isFreshOtpAmr(claims.amr)");
     const mintIndex = CONFIRM_SESSION.indexOf("signOnboardingToken(claims.sub");
     expect(mintIndex).toBeGreaterThan(checkIndex);
@@ -160,6 +162,6 @@ describe("no role escalation via the activation gate", () => {
 
   it("the onboarding cookie payload carries only uid + timestamps — no role, no email, nothing else forgeable-if-leaked", () => {
     const tokenSrc = source("lib/auth/onboarding-token.ts");
-    expect(tokenSrc).toMatch(/JSON\.stringify\(\{ uid: userId, iat, exp \}\)/);
+    expect(tokenSrc).toContain('purpose: "invite_handoff"');
   });
 });

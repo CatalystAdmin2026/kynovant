@@ -34,6 +34,7 @@ function FragmentCallbackContent() {
       const accessToken = params.get("access_token");
       const refreshToken = params.get("refresh_token");
       const type = searchParams.get("type") ?? params.get("type");
+      const handoff = searchParams.get("handoff");
       const overwatch = searchParams.get("overwatch");
       const next = searchParams.get("next");
 
@@ -91,7 +92,11 @@ function FragmentCallbackContent() {
         // (correctly) redirect the user onward instead of showing the
         // form.
         try {
-          await fetch("/api/auth/confirm-invite-session", { method: "POST" });
+          await fetch("/api/auth/confirm-invite-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ handoff }),
+          });
         } catch {
           // Ignored — see comment above.
         }

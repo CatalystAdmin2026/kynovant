@@ -24,6 +24,7 @@ import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin"
 import { getDb } from "@/lib/db/client";
 import { users, coachProfiles } from "@/lib/db/schema";
 import { provisionInvitedCoach } from "@/lib/db/coach-provisioning-service";
+import { signInviteHandoffToken } from "@/lib/auth/onboarding-token";
 
 export const dynamic = "force-dynamic";
 
@@ -82,7 +83,7 @@ export async function POST(req: NextRequest) {
     const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.kynovant.com";
 
     const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${siteOrigin}/auth/callback`,
+      redirectTo: `${siteOrigin}/auth/callback?type=invite&handoff=${encodeURIComponent(signInviteHandoffToken(email))}`,
     });
 
     if (error || !data.user) {

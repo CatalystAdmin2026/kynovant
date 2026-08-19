@@ -55,6 +55,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin";
 import { provisionInvitedCoach } from "@/lib/db/coach-provisioning-service";
+import { signInviteHandoffToken } from "@/lib/auth/onboarding-token";
 import {
   findExistingAccountByEmail,
   recordSignupAttempt,
@@ -228,7 +229,7 @@ export async function POST(req: NextRequest) {
       // then /auth/role-redirect sends a freshly-provisioned coach to
       // /hq, whose entitlement guard immediately bounces them to
       // /account-status to start their trial. No next param needed.
-      redirectTo: `${siteOrigin}/auth/callback`,
+      redirectTo: `${siteOrigin}/auth/callback?type=invite&handoff=${encodeURIComponent(signInviteHandoffToken(email))}`,
     });
 
     if (error || !data.user) {

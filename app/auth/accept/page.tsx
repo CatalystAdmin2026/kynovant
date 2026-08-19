@@ -106,6 +106,17 @@ function AcceptContent() {
     };
   }, []);
 
+  // Do not leave the one-time token in browser history after the inert
+  // landing page has captured it. The token remains in component memory for
+  // the explicit action, but same-origin navigation cannot inherit it via
+  // the Referer header after this replacement.
+  useEffect(() => {
+    const cleanUrl = new URL(window.location.href);
+    if (!cleanUrl.searchParams.has("token_hash")) return;
+    cleanUrl.searchParams.delete("token_hash");
+    window.history.replaceState(null, document.title, cleanUrl.toString());
+  }, []);
+
   async function handleAccept() {
     if (!tokenHash || !type) {
       setState("error");

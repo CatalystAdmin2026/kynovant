@@ -45,6 +45,7 @@ export const ONBOARDING_COOKIE_NAME = "kv_onboarding";
 // invited" screen and set a password, short enough that a leaked or
 // abandoned cookie is worthless shortly after.
 const TTL_SECONDS = 15 * 60;
+const INVITE_HANDOFF_TTL_SECONDS = 60 * 60;
 
 function signingKey(): Buffer {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -63,6 +64,29 @@ function b64url(input: Buffer): string {
   return input.toString("base64url");
 }
 
+function signPayload(payload: Record<string, unknown>): string {
+  const payloadB64 = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
+  const sig = createHmac("sha256", signingKey()).update(payloadB64).digest();
+  return `${payloadB64}.${b64url(sig)}`;
+}
+
+function verifySignature(token: string): { payloadB64: string; payload: Record<string, unknown> } | null {
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [payloadB64, sigB64] = parts;
+
+  try {
+    const expectedSig = createHmac("sha256", signingKey()).update(payloadB64).digest();
+    const actualSig = Buffer.from(sigB64, "base64url");
+    if (expectedSig.length !== actualSig.length || !timingSafeEqual(expectedSig, actualSig)) return null;
+    const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    return { payloadB64, payload };
+  } catch {
+    return null;
+  }
+}
+
 // Mints a signed token authorizing `userId` to complete invitation
 // onboarding (i.e. render/submit /setup-password) for the next 15
 // minutes. Call this ONLY immediately after directly observing a
@@ -72,10 +96,7 @@ function b64url(input: Buffer): string {
 export function signOnboardingToken(userId: string): string {
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + TTL_SECONDS;
-  const payload = JSON.stringify({ uid: userId, iat, exp });
-  const payloadB64 = b64url(Buffer.from(payload, "utf8"));
-  const sig = createHmac("sha256", signingKey()).update(payloadB64).digest();
-  return `${payloadB64}.${b64url(sig)}`;
+  return signPayload({ uid: userId, iat, exp });
 }
 
 // Verifies a token was (a) signed by us, (b) not expired, and (c)
@@ -88,33 +109,57 @@ export function verifyOnboardingToken(
   expectedUserId: string,
 ): boolean {
   if (!token) return false;
-  const parts = token.split(".");
-  if (parts.length !== 2) return false;
-  const [payloadB64, sigB64] = parts;
-
-  let expectedSig: Buffer;
-  let actualSig: Buffer;
-  try {
-    expectedSig = createHmac("sha256", signingKey()).update(payloadB64).digest();
-    actualSig = Buffer.from(sigB64, "base64url");
-  } catch {
-    return false;
-  }
-  if (expectedSig.length !== actualSig.length) return false;
-  if (!timingSafeEqual(expectedSig, actualSig)) return false;
-
-  let payload: { uid?: string; iat?: number; exp?: number };
-  try {
-    payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
-  } catch {
-    return false;
-  }
-
-  if (typeof payload.uid !== "string" || typeof payload.exp !== "number") return false;
+  const signed = verifySignature(token);
+  if (!signed) return false;
+  const payload = signed.payload as { uid?: unknown; iat?: unknown; exp?: unknown };
+  if (
+    typeof payload.uid !== "string" ||
+    typeof payload.iat !== "number" ||
+    typeof payload.exp !== "number" ||
+    !Number.isSafeInteger(payload.iat) ||
+    !Number.isSafeInteger(payload.exp) ||
+    payload.exp <= payload.iat
+  ) return false;
   if (payload.uid !== expectedUserId) return false;
   if (Math.floor(Date.now() / 1000) >= payload.exp) return false;
 
   return true;
+}
+
+// Signed marker carried only by invitation redirect URLs. It binds the
+// callback/fragment handoff to the invited email, so a recovery OTP cannot
+// be relabeled with `type=invite` to mint onboarding permission.
+export function signInviteHandoffToken(email: string): string {
+  const iat = Math.floor(Date.now() / 1000);
+  return signPayload({
+    purpose: "invite_handoff",
+    email: email.trim().toLowerCase(),
+    iat,
+    exp: iat + INVITE_HANDOFF_TTL_SECONDS,
+  });
+}
+
+export function verifyInviteHandoffToken(token: string | undefined | null, expectedEmail: string): boolean {
+  if (!token) return false;
+  const signed = verifySignature(token);
+  if (!signed) return false;
+  const payload = signed.payload as {
+    purpose?: unknown;
+    email?: unknown;
+    iat?: unknown;
+    exp?: unknown;
+  };
+  if (
+    payload.purpose !== "invite_handoff" ||
+    typeof payload.email !== "string" ||
+    typeof payload.iat !== "number" ||
+    typeof payload.exp !== "number" ||
+    !Number.isSafeInteger(payload.iat) ||
+    !Number.isSafeInteger(payload.exp) ||
+    payload.exp <= payload.iat ||
+    payload.email !== expectedEmail.trim().toLowerCase()
+  ) return false;
+  return Math.floor(Date.now() / 1000) < payload.exp;
 }
 
 // Shared Set-Cookie options so every call site (mint + clear) agrees.

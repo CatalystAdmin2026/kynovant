@@ -58,6 +58,7 @@ import {
   recordAcquisitionSignup,
 } from "@/lib/db/coach-acquisition-service";
 import { getKynovantResendConfig } from "@/lib/email/resend-brand-config";
+import { signInviteHandoffToken } from "@/lib/auth/onboarding-token";
 import { getOverwatchFounderProfile } from "@/lib/db/overwatch-service";
 import { grantComplimentaryAccess } from "@/lib/db/coach-complimentary-access-service";
 
@@ -93,7 +94,7 @@ async function resendPendingInvite(email: string): Promise<{ ok: true; userId: s
   const admin = createAdminClient();
   const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.kynovant.com";
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-    redirectTo: `${siteOrigin}/auth/callback`,
+    redirectTo: `${siteOrigin}/auth/callback?type=invite&handoff=${encodeURIComponent(signInviteHandoffToken(email))}`,
   });
   if (error || !data.user) return { ok: false };
   return { ok: true, userId: data.user.id };
@@ -428,7 +429,9 @@ export async function POST(req: NextRequest) {
     const { data, error } = await admin.auth.admin.generateLink({
       type: "invite",
       email,
-      options: { redirectTo: `${siteOrigin}/auth/callback` },
+      options: {
+        redirectTo: `${siteOrigin}/auth/callback?type=invite&handoff=${encodeURIComponent(signInviteHandoffToken(email))}`,
+      },
     });
 
     if (error || !data.user || !data.properties?.action_link) {

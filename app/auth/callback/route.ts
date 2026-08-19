@@ -25,13 +25,19 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { syncUserToPublic, getPublicUser } from "@/lib/auth/sync";
 import { resolvePostLoginRedirect } from "@/lib/auth/redirect";
-import { ONBOARDING_COOKIE_NAME, onboardingCookieOptions, signOnboardingToken } from "@/lib/auth/onboarding-token";
+import {
+  ONBOARDING_COOKIE_NAME,
+  onboardingCookieOptions,
+  signOnboardingToken,
+  verifyInviteHandoffToken,
+} from "@/lib/auth/onboarding-token";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const next = url.searchParams.get("next");
   const type = url.searchParams.get("type"); // "recovery" | "invite" | "email" | null
+  const handoff = url.searchParams.get("handoff");
   const overwatch = url.searchParams.get("overwatch");
   const origin = url.origin;
 
@@ -119,7 +125,9 @@ export async function GET(request: NextRequest) {
     // ever produce a PKCE-style `?code=` link instead of the implicit-
     // flow fragment tokens app/auth/fragment-callback/page.tsx handles
     // today.
-    cookieStore.set(ONBOARDING_COOKIE_NAME, signOnboardingToken(authUser.id), onboardingCookieOptions());
+    if (authUser.email && verifyInviteHandoffToken(handoff, authUser.email)) {
+      cookieStore.set(ONBOARDING_COOKIE_NAME, signOnboardingToken(authUser.id), onboardingCookieOptions());
+    }
 
     const destination = overwatch === "1"
       ? `/setup-password?overwatch=1&next=${encodeURIComponent(next ?? "/overwatch")}`

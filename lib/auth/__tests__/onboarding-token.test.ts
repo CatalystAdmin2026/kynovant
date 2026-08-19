@@ -13,6 +13,8 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vite
 import {
   signOnboardingToken,
   verifyOnboardingToken,
+  signInviteHandoffToken,
+  verifyInviteHandoffToken,
   ONBOARDING_COOKIE_NAME,
   onboardingCookieOptions,
   clearedOnboardingCookieOptions,
@@ -83,6 +85,18 @@ describe("signOnboardingToken / verifyOnboardingToken", () => {
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     expect(() => signOnboardingToken("user-123")).toThrow();
     process.env.SUPABASE_SERVICE_ROLE_KEY = original;
+  });
+});
+
+describe("signed invitation handoff", () => {
+  it("binds the callback marker to the invited email", () => {
+    const token = signInviteHandoffToken(" Coach@Example.com ");
+    expect(verifyInviteHandoffToken(token, "coach@example.com")).toBe(true);
+    expect(verifyInviteHandoffToken(token, "other@example.com")).toBe(false);
+  });
+
+  it("rejects a handoff token for a recovery session with no marker", () => {
+    expect(verifyInviteHandoffToken(null, "coach@example.com")).toBe(false);
   });
 });
 
