@@ -36,26 +36,49 @@ export async function GET() {
 // ─────────────────────────────────────────────────────────────
 // POST /api/internal/clients — invite email
 //
-// Uses admin.auth.admin.generateLink({ type: "invite" }) instead of
-// inviteUserByEmail() for a BRAND-NEW client — generateLink performs
-// the identical Auth-user-creation side effect but returns the action
-// link instead of Supabase auto-sending its own generic template, so
-// this route can send its own Kynovant-branded email (with the PWA
-// Home Screen copy from the launch brief) instead. Same technique, same
-// redirectTo, same eventual /auth/callback -> /setup-password ->
-// /auth/role-redirect -> /portal path as every other invite in this
-// codebase (see app/api/internal/overwatch/invite-coach/route.ts,
-// which established this exact pattern for coach invites) — the auth
-// flow itself is unchanged, only how the invite email gets sent.
+// P0 FIX (production incident, all 6 real client invitations sent
+// before this fix failed): the emailed link used to be Supabase's own
+// `action_link` (admin.auth.admin.generateLink's `data.properties
+// .action_link`), which points directly at Supabase's
+// `/auth/v1/verify` endpoint — a GET request that CONSUMES the
+// one-time invite token immediately, no user interaction required.
+// Proven on staging with a controlled repro (see
+// lib/db/__tests__/invite-link-security.test.ts): a second bare HTTP
+// GET to that same link — indistinguishable from what email security
+// gateways (Microsoft Defender for Office 365 Safe Links, Google
+// Workspace link scanning, etc.) routinely do to every link in an
+// incoming email to scan its destination — permanently invalidates
+// it. The real human's own, genuinely-first click then fails with
+// Supabase's own "Email link is invalid or has expired", surfaced by
+// this app as "The sign-in link was invalid or expired."
 //
-// A still-pending invite (coach re-submits the same email, or a prior
-// Resend outage left it unsent) is resent through the existing
-// inviteUserByEmail path — the same proven-safe fallback Invite Coach
-// uses, since generateLink's behavior for an ALREADY-existing Auth user
-// is not reliable. This path uses Supabase's own generic template
-// (no PWA copy) rather than re-deriving a fresh action link — accepted,
-// intentional, matches the established precedent.
+// Fix: never email a link that auto-consumes on GET. buildAcceptLink
+// constructs a link to THIS APP's own /auth/accept page instead,
+// carrying the raw token_hash (generateLink's data.properties
+// .hashed_token) as a normal, static query string. A passive GET —
+// scanner, mail-client preview, search-bot — only renders inert HTML;
+// nothing is verified until the human performs a real interaction (a
+// button click there, which calls supabase.auth.verifyOtp()).
+// Scanners don't click buttons.
+//
+// Uses admin.auth.admin.generateLink({ type: "invite" }) — creates the
+// Supabase Auth user, same as before — for a BRAND-NEW client. A
+// still-pending invite (coach re-submits the same email, or a prior
+// Resend outage left it unsent) now ALSO uses generateLink (not
+// inviteUserByEmail, which only offers Supabase's own generic
+// template embedding the same unsafe auto-consuming action_link) —
+// same safe accept-link, same custom email, for both paths.
 // ─────────────────────────────────────────────────────────────
+
+// The one and only place this app constructs an invite/accept link.
+// See the file header above for why this must never be Supabase's own
+// action_link.
+function buildAcceptLink(siteOrigin: string, hashedToken: string): string {
+  const url = new URL("/auth/accept", siteOrigin);
+  url.searchParams.set("type", "invite");
+  url.searchParams.set("token_hash", hashedToken);
+  return url.toString();
+}
 
 function escapeHtml(value: string): string {
   return value
@@ -258,11 +281,13 @@ export async function POST(req: NextRequest) {
     const isCoach = guard.dbUser.role === "coach";
 
     // A still-pending invite (repeat submission, or a prior email
-    // failure) — resend via Supabase's own established invite path
-    // rather than a fresh generateLink, and skip the custom email (see
-    // file header). Any OTHER existing account (active/suspended/
-    // archived, or a different role) is rejected — never silently
-    // reused or promoted.
+    // failure) — resend via a FRESH generateLink call (not
+    // inviteUserByEmail's own auto-consuming action_link + generic
+    // template — see buildAcceptLink's header comment for why),
+    // through the same safe accept-link + custom email as a brand-new
+    // invite. Any OTHER existing account (active/suspended/archived,
+    // or a different role) is rejected — never silently reused or
+    // promoted.
     const existing = await findExistingAccountByEmail(email);
     if (existing) {
       // An invited coach/admin is still a different account type. Never
@@ -280,32 +305,54 @@ export async function POST(req: NextRequest) {
           { status: 409 },
         );
       }
-      const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-        redirectTo: `${siteOrigin}/auth/callback`,
+      const { data, error } = await admin.auth.admin.generateLink({
+        type: "invite",
+        email,
+        options: { redirectTo: `${siteOrigin}/auth/callback` },
       });
-      if (error || !data.user) {
+      if (error || !data.user || !data.properties?.hashed_token) {
         return NextResponse.json(
           { ok: false, error: "The client invitation could not be sent. Please try again." },
           { status: 422 },
         );
       }
       await upsertClientRecords({ userId: data.user.id, fullName, isCoach, coachId: guard.dbUser.id });
+      const resendResult = await sendClientInviteEmail({
+        toEmail: email,
+        firstName,
+        actionLink: buildAcceptLink(siteOrigin, data.properties.hashed_token),
+      });
+      if (!resendResult.ok) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "The invitation was created, but the email couldn't be sent. Please try inviting them again.",
+          },
+          { status: 502 },
+        );
+      }
       return NextResponse.json(
         { ok: true, client: { id: data.user.id, name: fullName, email } },
         { status: 201 },
       );
     }
 
-    // generateLink (not inviteUserByEmail) — creates the Supabase Auth
-    // user identically, but returns the action link instead of
-    // Supabase auto-sending its own generic template.
+    // generateLink creates the Supabase Auth user and returns a
+    // one-time OTP (hashed_token) instead of Supabase auto-sending its
+    // own generic template. Critically, the EMAILED link points at
+    // THIS app's own /auth/accept page — never at Supabase's own
+    // auto-consuming action_link — see buildAcceptLink's header
+    // comment for the full reasoning (proven root cause of the P0
+    // invitation failure: any GET to Supabase's action_link, including
+    // an automated email-security prefetch, permanently burns the
+    // token before the real human ever clicks).
     const { data, error } = await admin.auth.admin.generateLink({
       type: "invite",
       email,
       options: { redirectTo: `${siteOrigin}/auth/callback` },
     });
 
-    if (error || !data.user || !data.properties?.action_link) {
+    if (error || !data.user || !data.properties?.hashed_token) {
       return NextResponse.json(
         { ok: false, error: "The client invitation could not be created. Please try again." },
         { status: 422 },
@@ -313,7 +360,7 @@ export async function POST(req: NextRequest) {
     }
 
     const newUserId = data.user.id;
-    const actionLink = data.properties.action_link;
+    const actionLink = buildAcceptLink(siteOrigin, data.properties.hashed_token);
 
     await upsertClientRecords({ userId: newUserId, fullName, isCoach, coachId: guard.dbUser.id });
 

@@ -65,13 +65,36 @@ describe("app/api/internal/clients/route.ts — invite mechanism and redirect ta
     );
   });
 
-  it("resends a still-pending invite via inviteUserByEmail (the proven-safe fallback), never a second generateLink for an existing user", () => {
+  it("resends a still-pending invite via a FRESH generateLink + the app's own safe accept-link — never inviteUserByEmail", () => {
+    // P0 fix: inviteUserByEmail only offers Supabase's own generic
+    // template, which embeds the SAME auto-consuming action_link the
+    // fresh-invite path used to (and no longer does) — vulnerable to
+    // the exact single-use-token-burned-by-prefetch failure that broke
+    // all 6 real client invitations. The resend path must use the same
+    // safe construction as a brand-new invite, not a different,
+    // still-vulnerable one.
     const pendingBranchStart = route.indexOf('if (existing.status !== "invited")');
-    const pendingBranchEnd = route.indexOf("// generateLink (not inviteUserByEmail)");
+    const pendingBranchEnd = route.indexOf("// generateLink creates the Supabase Auth user");
     expect(pendingBranchStart).toBeGreaterThan(-1);
     const pendingBranch = route.slice(pendingBranchStart, pendingBranchEnd);
-    expect(pendingBranch).toContain("admin.auth.admin.inviteUserByEmail(email, {");
-    expect(pendingBranch).not.toContain("generateLink");
+    expect(pendingBranch).toContain("admin.auth.admin.generateLink({");
+    expect(pendingBranch).toContain('type: "invite"');
+    expect(pendingBranch).toContain("buildAcceptLink(siteOrigin, data.properties.hashed_token)");
+    expect(pendingBranch).not.toContain("inviteUserByEmail");
+  });
+
+  it("both the fresh-invite and resend paths email a link to this app's own /auth/accept page, never Supabase's raw action_link", () => {
+    // The actual P0 fix: Supabase's action_link auto-consumes the
+    // one-time token on a bare GET (proven on staging — see
+    // lib/db/__tests__/invite-link-security.test.ts) — an email
+    // security scanner's routine prefetch burns it before the real
+    // human ever clicks. buildAcceptLink instead emails a link to our
+    // own page, carrying only the raw token_hash; nothing is consumed
+    // until an explicit user click calls verifyOtp() there.
+    expect(route).toContain("function buildAcceptLink(siteOrigin: string, hashedToken: string): string {");
+    expect(route).toContain('new URL("/auth/accept", siteOrigin)');
+    expect(route).not.toContain("actionLink: data.properties.action_link");
+    expect(route).not.toContain("actionLink: data.properties?.action_link");
   });
 
   it("rejects re-inviting an email that already belongs to a non-pending account, never silently reuses or promotes it", () => {

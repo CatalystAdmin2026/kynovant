@@ -101,6 +101,20 @@ export async function requireClientUser(): Promise<ClientSession> {
     redirect("/login?error=access_denied");
   }
 
+  // NOTE — deliberately NOT enforced here: whether an invited client
+  // has actually completed /setup-password (as opposed to reaching
+  // the Portal on an already-live session without ever setting a
+  // password they know). An `encrypted_password IS NOT NULL` check
+  // was tried and DISPROVEN empirically on staging — Supabase sets a
+  // real random password hash on every invited user at creation time
+  // (before generateLink is even clicked), so that column can never
+  // distinguish "user set their own password" from "never touched
+  // setup-password." A real fix needs a new, explicit signal (e.g. an
+  // onboarding-completed timestamp column written by /setup-password's
+  // own submit handler) — out of scope for this pass; see the P0
+  // client-invitation-flow report for the full reasoning and the
+  // recommended follow-up.
+
   return { authUser, dbUser };
 }
 
