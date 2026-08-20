@@ -137,49 +137,58 @@ export default function PortalInstallOnboarding() {
 
   return (
     <>
-      <div
-        role="region"
-        aria-label="Install Kynovant"
-        className="fixed inset-x-0 bottom-0 z-[90] flex justify-center px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-      >
-        <div className="w-full max-w-sm rounded-2xl border border-[#C9A24D]/20 bg-[#0b0c0d] p-4 text-white shadow-2xl">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#C9A24D]/25 bg-[#C9A24D]/10 text-[#C9A24D]">
-              <Download size={18} />
+      {/* P0 FIX: hide the sheet itself while InstallInstructions is open,
+          rather than stacking both. InstallInstructions.tsx now also
+          renders above this sheet's z-index regardless (belt-and-
+          suspenders — see its header comment for the full root-cause
+          proof), but there is no reason to keep a second, redundant
+          "install Kynovant" surface visible underneath the one the user
+          is actually looking at. */}
+      {!instructionsOpen && (
+        <div
+          role="region"
+          aria-label="Install Kynovant"
+          className="fixed inset-x-0 bottom-0 z-[90] flex justify-center px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-[#C9A24D]/20 bg-[#0b0c0d] p-4 text-white shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#C9A24D]/25 bg-[#C9A24D]/10 text-[#C9A24D]">
+                <Download size={18} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-white">Add Kynovant to your Home Screen</p>
+                <p className="mt-1 text-xs leading-relaxed text-white/50">
+                  It works like an app — faster to open, no browser bar, no App Store download needed.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleDismiss}
+                aria-label="Dismiss install prompt"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-white/35 transition-colors hover:bg-white/[0.05] hover:text-white/70"
+              >
+                <X size={16} />
+              </button>
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-white">Add Kynovant to your Home Screen</p>
-              <p className="mt-1 text-xs leading-relaxed text-white/50">
-                It works like an app — faster to open, no browser bar, no App Store download needed.
-              </p>
+            <div className="mt-4 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handlePrimaryAction}
+                className="min-h-11 flex-1 rounded-lg bg-[#C9A24D] px-4 text-xs font-semibold text-black transition-colors hover:bg-[#D4B56A]"
+              >
+                {surface === "ios_instructions" ? "Show Me How" : "Add to Home Screen"}
+              </button>
+              <button
+                type="button"
+                onClick={handleDismiss}
+                className="min-h-11 rounded-lg px-4 text-xs font-semibold text-white/50 transition-colors hover:text-white/80"
+              >
+                Not now
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={handleDismiss}
-              aria-label="Dismiss install prompt"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-white/35 transition-colors hover:bg-white/[0.05] hover:text-white/70"
-            >
-              <X size={16} />
-            </button>
-          </div>
-          <div className="mt-4 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handlePrimaryAction}
-              className="min-h-11 flex-1 rounded-lg bg-[#C9A24D] px-4 text-xs font-semibold text-black transition-colors hover:bg-[#D4B56A]"
-            >
-              {surface === "ios_instructions" ? "Show Me How" : "Add to Home Screen"}
-            </button>
-            <button
-              type="button"
-              onClick={handleDismiss}
-              className="min-h-11 rounded-lg px-4 text-xs font-semibold text-white/50 transition-colors hover:text-white/80"
-            >
-              Not now
-            </button>
           </div>
         </div>
-      </div>
+      )}
       {instructionsOpen && <InstallInstructions onClose={() => setInstructionsOpen(false)} />}
     </>
   );

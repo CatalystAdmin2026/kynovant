@@ -7,7 +7,13 @@ describe("Kynovant web app manifest", () => {
 
     expect(data.name).toBe("Kynovant");
     expect(data.short_name).toBe("Kynovant");
-    expect(data.start_url).toBe("/");
+    // P0 fix: start_url is the role-agnostic PWA launch delegator
+    // (app/app/route.ts), never the marketing homepage or a single
+    // hardcoded role destination — see that route's header comment.
+    expect(data.start_url).toBe("/app");
+    expect(data.start_url).not.toBe("/");
+    // scope stays broad — the whole app counts as "inside" the
+    // installed PWA, not just the launch route itself.
     expect(data.scope).toBe("/");
     expect(data.display).toBe("standalone");
     expect(data.theme_color).toBe("#080909");

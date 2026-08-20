@@ -325,3 +325,41 @@ describe("InstallInstructions — single shared iOS instructions surface", () =>
     expect(instructions).toContain('aria-label="Close install instructions"');
   });
 });
+
+describe("P0 FIX — iOS 'tapping does nothing': InstallInstructions must never be visually obscured", () => {
+  // Real production incident (Fiona Walczynski): the button correctly
+  // set instructionsOpen=true and InstallInstructions correctly
+  // mounted, but PortalInstallOnboarding's own bottom sheet (fixed,
+  // bottom-0, z-[90]) stayed rendered on top of it — both fixed and
+  // bottom-anchored on mobile — fully occluding the modal. Proven via
+  // a direct visual reproduction of the exact class names (see this
+  // task's report) before this fix, and again after.
+  const instructions = source(INSTALL_INSTRUCTIONS);
+  const onboarding = source(PORTAL_ONBOARDING);
+
+  function zIndexOf(src: string, marker: string): number {
+    const idx = src.indexOf(marker);
+    expect(idx).toBeGreaterThan(-1);
+    const slice = src.slice(idx, idx + 400);
+    const match = slice.match(/z-\[(\d+)\]/);
+    expect(match).not.toBeNull();
+    return Number(match![1]);
+  }
+
+  it("InstallInstructions renders at a strictly higher z-index than PortalInstallOnboarding's own sheet", () => {
+    const instructionsZ = zIndexOf(instructions, 'className="fixed inset-0');
+    const sheetZ = zIndexOf(onboarding, 'className="fixed inset-x-0 bottom-0');
+    expect(instructionsZ).toBeGreaterThan(sheetZ);
+  });
+
+  it("PortalInstallOnboarding stops rendering its own sheet while InstallInstructions is open — never two overlapping install surfaces at once", () => {
+    expect(onboarding).toContain("{!instructionsOpen && (");
+    // The sheet's own region markup must be gated behind that check,
+    // not rendered unconditionally alongside the instructions modal.
+    const gateIndex = onboarding.indexOf("{!instructionsOpen && (");
+    const regionIndex = onboarding.indexOf('role="region"');
+    const instructionsMountIndex = onboarding.indexOf("{instructionsOpen && <InstallInstructions");
+    expect(regionIndex).toBeGreaterThan(gateIndex);
+    expect(instructionsMountIndex).toBeGreaterThan(regionIndex);
+  });
+});

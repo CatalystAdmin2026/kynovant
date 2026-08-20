@@ -7,13 +7,33 @@
 // show the exact same, already-shipped instructions rather than a second,
 // duplicated copy — there is only one iOS install-instructions surface
 // in the app, reused by both entry points.
+//
+// P0 FIX (real iPhone user report — Fiona Walczynski: tapping "Show Me
+// How" / "Install Kynovant" on iOS Safari appeared to do nothing):
+// proven via a direct visual reproduction of the exact class names
+// used at the time — z-[80] here sat BELOW PortalInstallOnboarding's
+// own bottom sheet (z-[90]), which never unmounted itself while this
+// modal opened. Both are `fixed` and bottom-anchored on mobile
+// (`items-end` here, `bottom-0` there), so the still-visible, higher-
+// stacked sheet fully occluded this modal in the exact same screen
+// region — internally `instructionsOpen` correctly became `true` and
+// this component correctly mounted, but nothing new was visible or
+// reachable, indistinguishable from the tap doing nothing at all.
+// z-[95] — above every other install-surface z-index in this app
+// (PortalInstallOnboarding's sheet is the highest of the rest, at
+// z-[90]) — so this modal always wins the stacking order regardless of
+// which caller opened it, present or future. PortalInstallOnboarding
+// additionally stops rendering its own sheet while this is open (see
+// that file) — belt-and-suspenders, not either-or: two overlapping
+// "install Kynovant" surfaces at once is confusing even if correctly
+// stacked.
 // ─────────────────────────────────────────────────────────────
 
 import { PlusSquare, Share, X } from "lucide-react";
 
 export default function InstallInstructions({ onClose }: { onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center">
+    <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center">
       <div className="w-full max-w-sm rounded-xl border border-white/[0.08] bg-[#080909] p-5 text-white shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
