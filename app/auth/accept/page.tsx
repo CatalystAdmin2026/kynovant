@@ -36,6 +36,38 @@
 // activation cookie /setup-password now requires. See
 // lib/auth/onboarding-token.ts for why a client-side call couldn't do
 // this (HttpOnly cookies can only be set from a server response).
+//
+// P0 FIX (production incident — Fiona Walczynski's real invitation:
+// page loaded, "Accept Invitation" rendered, tap did nothing): proven
+// live, not assumed — the URL-scrub effect below (added for a real,
+// separate, legitimate reason: keeping token_hash out of the Referer
+// header on any subsequent same-origin navigation) calls
+// window.history.replaceState() to strip token_hash from the visible
+// URL/history entry. Next.js's App Router patches
+// history.pushState/replaceState to keep its own router state in
+// sync, and that patched call turns out to trigger a re-render of
+// this component via useSearchParams() using the NEW, now-
+// token_hash-less URL — reproduced directly in Chrome via DOM
+// inspection: seconds after mount, the rendered button carried
+// disabled="" because the `!tokenHash` clause in its disabled
+// condition had gone true. A disabled button doesn't fire onClick at
+// all — exactly "it says accept invitation and it won't let me click
+// it." Not Safari-specific: it's universal, just first reported by a
+// real user completing the actual unauthenticated flow (the
+// pre-deploy smoke test only exercised the already-authenticated
+// "already-active" branch, which never reaches this button).
+//
+// Fix: read type/token_hash/overwatch/next from the URL exactly ONCE,
+// via a useState lazy initializer seeded from useSearchParams() on
+// this component's first render only (still SSR/hydration-safe,
+// unlike reading window.location.search directly, since
+// useSearchParams() is what makes the first server- and client-
+// rendered pass agree). React never re-runs a useState initializer on
+// later re-renders, so this captured value is permanently immune to
+// whatever the router does afterward in reaction to the replaceState
+// call below. The scrub itself is unchanged — still runs, still keeps
+// the token out of the visible URL/history — it just no longer feeds
+// back into anything this component reads.
 // ─────────────────────────────────────────────────────────────
 
 import { Suspense, useEffect, useState } from "react";
@@ -47,6 +79,13 @@ import type { EmailOtpType } from "@supabase/supabase-js";
 type State = "ready" | "verifying" | "error" | "already-active";
 
 const KNOWN_TYPES: EmailOtpType[] = ["invite", "recovery", "magiclink", "signup", "email_change", "email"];
+
+interface AcceptParams {
+  type: EmailOtpType | null;
+  tokenHash: string | null;
+  overwatch: string | null;
+  next: string | null;
+}
 
 function safeOverwatchNext(next: string | null): string {
   if (!next) return "/overwatch";
@@ -83,11 +122,18 @@ function AcceptContent() {
   const [state, setState] = useState<State>("ready");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const rawType = searchParams.get("type");
-  const type: EmailOtpType | null = rawType && (KNOWN_TYPES as string[]).includes(rawType) ? (rawType as EmailOtpType) : null;
-  const tokenHash = searchParams.get("token_hash");
-  const overwatch = searchParams.get("overwatch");
-  const next = searchParams.get("next");
+  // Captured exactly once, on this component's first render — see the
+  // file header for why. searchParams itself is only ever read inside
+  // this initializer, never again afterward.
+  const [{ type, tokenHash, overwatch, next }] = useState<AcceptParams>(() => {
+    const rawType = searchParams.get("type");
+    return {
+      type: rawType && (KNOWN_TYPES as string[]).includes(rawType) ? (rawType as EmailOtpType) : null,
+      tokenHash: searchParams.get("token_hash"),
+      overwatch: searchParams.get("overwatch"),
+      next: searchParams.get("next"),
+    };
+  });
 
   // A returning, already-authenticated user who taps a stale invite/
   // recovery link from an old email (Phase 3 case E) shouldn't see an
