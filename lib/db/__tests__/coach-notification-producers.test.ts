@@ -144,7 +144,7 @@ afterAll(async () => {
 describe("notifyCheckInSubmitted", () => {
   it("notifies the client's active coach, unread by default, with check_in resource linkage", async () => {
     const checkInId = randomUUID();
-    await notifyCheckInSubmitted({ clientId: clientA.id, checkInId, weekStartDate: "2026-08-03" });
+    await notifyCheckInSubmitted({ clientId: clientA.id, checkInId, scheduledDate: "2026-08-03" });
 
     const { notifications } = await listCoachNotifications(coachA.id, 50);
     const found = notifications.find((n) => n.resourceId === checkInId);
@@ -158,7 +158,7 @@ describe("notifyCheckInSubmitted", () => {
 
   it("never delivers to an uninvolved coach", async () => {
     const checkInId = randomUUID();
-    await notifyCheckInSubmitted({ clientId: clientA.id, checkInId, weekStartDate: "2026-08-03" });
+    await notifyCheckInSubmitted({ clientId: clientA.id, checkInId, scheduledDate: "2026-08-03" });
 
     const { notifications } = await listCoachNotifications(coachB.id, 50);
     expect(notifications.some((n) => n.resourceId === checkInId)).toBe(false);
@@ -166,7 +166,7 @@ describe("notifyCheckInSubmitted", () => {
 
   it("is a no-op (does not throw) for a client with no active enrollment", async () => {
     await expect(
-      notifyCheckInSubmitted({ clientId: randomUUID(), checkInId: randomUUID(), weekStartDate: "2026-08-03" }),
+      notifyCheckInSubmitted({ clientId: randomUUID(), checkInId: randomUUID(), scheduledDate: "2026-08-03" }),
     ).resolves.toBeUndefined();
   });
 });

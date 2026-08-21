@@ -15,7 +15,7 @@
 // Submit is an explicit action after all desired fields are filled.
 // ─────────────────────────────────────────────────────────────
 
-import { useState, useCallback, useRef, useTransition } from "react";
+import { useState, useCallback, useRef, useEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -28,6 +28,11 @@ import {
   hasFieldErrors,
   type CheckInFieldErrors,
 } from "@/lib/db/check-in-validation";
+import CheckInPhotoUploader, {
+  type PhotoRequirementMode,
+  type PhotoViewName,
+} from "./CheckInPhotoUploader";
+import type { CheckInPhotoView } from "@/lib/db/check-in-photo-service";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -71,8 +76,20 @@ interface FormState {
 interface Props {
   initialData?: Partial<FormState>;
   existingCheckInId?: string;
+  // The exact occurrence date this form is for (e.g. this Wednesday's
+  // required check-in). Threaded through to every saveDraftCheckInAction
+  // call so a save always lands on the correct occurrence — a Wednesday
+  // draft can never collide with or overwrite a Sunday one.
+  scheduledDate: string;
   weekStartDate: string;
   previousCheckIn?: PreviousCheckInContext | null;
+  // Resolved server-side (getPhotoPolicyAtDate) at THIS occurrence's
+  // own scheduledDate — historically truthful, never recomputed from
+  // today's schedule on the client. requiredViews is only meaningful
+  // when photoRequirement === "required".
+  photoRequirement: PhotoRequirementMode;
+  requiredPhotoViews: PhotoViewName[];
+  initialPhotos: CheckInPhotoView[];
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -396,7 +413,16 @@ function formToServiceData(f: FormState): CheckInDraftData {
   };
 }
 
-export default function CheckInForm({ initialData, existingCheckInId, weekStartDate, previousCheckIn }: Props) {
+export default function CheckInForm({
+  initialData,
+  existingCheckInId,
+  scheduledDate,
+  weekStartDate,
+  previousCheckIn,
+  photoRequirement,
+  requiredPhotoViews,
+  initialPhotos,
+}: Props) {
   const router = useRouter();
   const [form, setFormState] = useState<FormState>({
     ...EMPTY_STATE,
@@ -410,7 +436,35 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
   const [isPendingSave, startSaveTx] = useTransition();
   const [isPendingSubmit, startSubmitTx] = useTransition();
   const [submitted, setSubmitted] = useState(false);
+  // Mirrors check-in-photo-service.ts's isPhotoRequirementSatisfied —
+  // a client-side UX gate only. The real enforcement happens
+  // server-side inside submitCheckIn regardless of this value.
+  const [photosSatisfied, setPhotosSatisfied] = useState(
+    photoRequirement !== "required" ||
+      requiredPhotoViews.every((v) => initialPhotos.some((p) => p.category === v)),
+  );
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const checkInIdRef = useRef(checkInId);
+  useEffect(() => {
+    checkInIdRef.current = checkInId;
+  }, [checkInId]);
+
+  // First thing the client interacts with may be a photo, before any
+  // text field has triggered the normal debounced autosave — this
+  // creates the draft on demand (same saveDraftCheckInAction call
+  // handleSubmit's own !checkInId branch already makes) so a photo
+  // always has a real occurrence to attach to (never lose a photo
+  // merely because no draft existed yet).
+  const ensureCheckInId = useCallback(async (): Promise<string | null> => {
+    if (checkInIdRef.current) return checkInIdRef.current;
+    const result = await saveDraftCheckInAction(scheduledDate, formToServiceData(form));
+    if (result.ok && result.checkInId) {
+      setCheckInId(result.checkInId);
+      setSavedAt(new Date());
+      return result.checkInId;
+    }
+    return null;
+  }, [scheduledDate, form]);
 
   const scheduleDraftSave = useCallback(
     (nextForm: FormState) => {
@@ -430,7 +484,7 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
 
         setFieldErrors({});
         startSaveTx(async () => {
-          const result = await saveDraftCheckInAction(serviceData);
+          const result = await saveDraftCheckInAction(scheduledDate, serviceData);
           if (result.ok) {
             setCheckInId(result.checkInId);
             setSavedAt(new Date());
@@ -445,7 +499,7 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
         });
       }, 800);
     },
-    [],
+    [scheduledDate],
   );
 
   const setField = useCallback(
@@ -469,9 +523,19 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
       return;
     }
 
+    // UX-only gate — the real enforcement is server-side in
+    // submitCheckIn (check-in-service.ts), which re-derives the
+    // requirement historically and would reject this exact same
+    // submission even if a client bypassed this check entirely.
+    if (photoRequirement === "required" && !photosSatisfied) {
+      const label = requiredPhotoViews.join(", ");
+      setSaveError(`Please add a ${label} photo before submitting.`);
+      return;
+    }
+
     if (!checkInId) {
       startSubmitTx(async () => {
-        const saveResult = await saveDraftCheckInAction(serviceData);
+        const saveResult = await saveDraftCheckInAction(scheduledDate, serviceData);
         if (!saveResult.ok) {
           if (saveResult.fieldErrors) {
             setFieldErrors(saveResult.fieldErrors);
@@ -496,7 +560,7 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
         if (saveTimerRef.current) {
           clearTimeout(saveTimerRef.current);
           saveTimerRef.current = null;
-          const flushResult = await saveDraftCheckInAction(serviceData);
+          const flushResult = await saveDraftCheckInAction(scheduledDate, serviceData);
           if (!flushResult.ok) {
             if (flushResult.fieldErrors) {
               setFieldErrors(flushResult.fieldErrors);
@@ -599,7 +663,7 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
             />
             <FieldError message={fieldErrors.waistInches} />
             {previousCheckIn?.waistInches && (
-              <PrevHint>{previousCheckIn.waistInches}"</PrevHint>
+              <PrevHint>{previousCheckIn.waistInches}&quot;</PrevHint>
             )}
           </div>
         </div>
@@ -762,6 +826,30 @@ export default function CheckInForm({ initialData, existingCheckInId, weekStartD
           </div>
         </div>
       </section>
+
+      {/* Section 5: Progress Photos (hidden entirely when Off) */}
+      {photoRequirement !== "off" && (
+        <section>
+          <SectionHeader
+            number={5}
+            title="Progress Photos"
+            subtitle={
+              photoRequirement === "required"
+                ? `${requiredPhotoViews.join(", ")} ${requiredPhotoViews.length > 1 ? "photos are" : "photo is"} required for this check-in.`
+                : "Photos are optional for this check-in."
+            }
+          />
+          <CheckInPhotoUploader
+            checkInId={checkInId}
+            ensureCheckInId={ensureCheckInId}
+            initialPhotos={initialPhotos}
+            requirement={photoRequirement}
+            requiredViews={requiredPhotoViews}
+            disabled={isPendingSubmit}
+            onRequirementStatusChange={setPhotosSatisfied}
+          />
+        </section>
+      )}
 
       {/* Save status */}
       <div className="text-[10px] text-gray-600 min-h-[16px]">
