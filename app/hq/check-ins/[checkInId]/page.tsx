@@ -19,6 +19,8 @@ import {
   getClientGoalContext,
 } from "@/lib/db/coach-check-in-service";
 import CheckInReviewPanel from "@/components/hq/check-ins/CheckInReviewPanel";
+import CheckInPhotoGallery from "@/components/hq/check-ins/CheckInPhotoGallery";
+import { listCheckInPhotosForCoach } from "@/lib/db/check-in-photo-service";
 import type { CheckInDetail } from "@/lib/db/check-in-service";
 import { Card, Badge } from "@/components/ui";
 import type { BadgeVariant } from "@/components/ui";
@@ -374,9 +376,22 @@ export default async function CheckInReviewPage({
     notFound();
   }
 
-  const goalContext = await getClientGoalContext(checkIn.clientId);
+  // Fetched only AFTER the tenant-ownership check above passes — a
+  // coach's ability to view this occurrence's photos is gated by the
+  // exact same coachOwnsClient guard as everything else on this page.
+  // listCheckInPhotosForCoach itself only re-confirms the checkInId is
+  // real; it relies on this call site for tenant auth, matching
+  // getCoachCheckInDetail's own established precedent.
+  const [goalContext, photos] = await Promise.all([
+    getClientGoalContext(checkIn.clientId),
+    listCheckInPhotosForCoach(checkIn.id),
+  ]);
 
-  const weekLabel = fmtDate(checkIn.weekStartDate);
+  // The exact scheduled occurrence date, not just the week — a
+  // Wednesday and a Sunday check-in from the same week must never
+  // render this header identically (Phase 7: coach must be able to
+  // tell which occurrence this is at a glance).
+  const occurrenceLabel = fmtDate(checkIn.scheduledDate);
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -397,7 +412,7 @@ export default async function CheckInReviewPage({
           <h1 className="text-white text-xl font-bold tracking-wide">
             {checkIn.clientName}
           </h1>
-          <p className="text-white/50 text-sm mt-0.5">Week of {weekLabel}</p>
+          <p className="text-white/50 text-sm mt-0.5">{occurrenceLabel}</p>
           <div className="flex items-center gap-3 mt-1.5 flex-wrap">
             {checkIn.submittedAt && (
               <span className="text-[10px] text-white/30">
@@ -509,6 +524,17 @@ export default async function CheckInReviewPage({
                   )}
                 </div>
               )}
+            </Card>
+          )}
+
+          {/* Progress Photos — signed URLs only, generated server-side
+              above; nothing here exposes a permanent storage path. */}
+          {photos && photos.length > 0 && (
+            <Card tone="dark" padding="sm">
+              <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mb-2">
+                Progress Photos
+              </p>
+              <CheckInPhotoGallery photos={photos} />
             </Card>
           )}
 

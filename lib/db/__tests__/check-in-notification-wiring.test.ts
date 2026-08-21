@@ -85,7 +85,7 @@ afterAll(async () => {
 
 describe("submitCheckIn — real call site notifies the correct coach", () => {
   it("notifies clientA's coach (coachA), never coachB, when a check-in is submitted", async () => {
-    const draft = await createOrUpdateDraftCheckIn(clientA.id, {});
+    const draft = await createOrUpdateDraftCheckIn(clientA.id, "2026-08-16", {});
     expect(draft.ok).toBe(true);
     if (!draft.ok) return;
 
@@ -105,7 +105,7 @@ describe("submitCheckIn — real call site notifies the correct coach", () => {
   });
 
   it("a concurrent double-submit of the same check-in creates only one notification (mirrors the existing timeline-event dedup guard)", async () => {
-    const draft = await createOrUpdateDraftCheckIn(clientA2.id, {});
+    const draft = await createOrUpdateDraftCheckIn(clientA2.id, "2026-08-16", {});
     expect(draft.ok).toBe(true);
     if (!draft.ok) return;
 

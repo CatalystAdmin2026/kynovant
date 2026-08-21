@@ -162,13 +162,13 @@ beforeAll(async () => {
   // One check-in per client.
   const [ciA] = await db
     .insert(weeklyCheckIns)
-    .values({ clientId: clientA.id, weekStartDate: "2026-01-04", status: "submitted" })
+    .values({ clientId: clientA.id, scheduledDate: "2026-01-04", weekStartDate: "2026-01-04", status: "submitted" })
     .returning({ id: weeklyCheckIns.id });
   checkInA = ciA.id;
 
   const [ciB] = await db
     .insert(weeklyCheckIns)
-    .values({ clientId: clientB.id, weekStartDate: "2026-01-04", status: "submitted" })
+    .values({ clientId: clientB.id, scheduledDate: "2026-01-04", weekStartDate: "2026-01-04", status: "submitted" })
     .returning({ id: weeklyCheckIns.id });
   checkInB = ciB.id;
 });

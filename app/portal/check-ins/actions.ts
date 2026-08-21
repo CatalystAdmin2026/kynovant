@@ -13,6 +13,12 @@ import {
   hasFieldErrors,
   type CheckInFieldErrors,
 } from "@/lib/db/check-in-validation";
+import {
+  uploadCheckInPhoto,
+  deleteCheckInPhoto,
+  listCheckInPhotosForClient,
+  type CheckInPhotoView,
+} from "@/lib/db/check-in-photo-service";
 
 // ─────────────────────────────────────────────────────────────
 // SAVE DRAFT
@@ -23,11 +29,16 @@ import {
 // ─────────────────────────────────────────────────────────────
 
 export async function saveDraftCheckInAction(
+  scheduledDate: string,
   data: CheckInDraftData,
 ): Promise<{ ok: boolean; checkInId?: string; error?: string; fieldErrors?: CheckInFieldErrors }> {
   const { dbUser } = await requireClientUser();
   if (dbUser.role !== "client") {
     return { ok: false, error: "Forbidden" };
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate)) {
+    return { ok: false, error: "Invalid check-in date." };
   }
 
   const fieldErrors = validateCheckInDraft(data);
@@ -36,7 +47,7 @@ export async function saveDraftCheckInAction(
   }
 
   try {
-    const result = await createOrUpdateDraftCheckIn(dbUser.id, data);
+    const result = await createOrUpdateDraftCheckIn(dbUser.id, scheduledDate, data);
     if (result.ok) {
       revalidatePath("/portal/check-ins");
     }
@@ -108,5 +119,80 @@ export async function submitCheckInAction(
     return result;
   } catch {
     return { ok: false, error: "Failed to submit check-in. Please try again." };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROGRESS PHOTOS
+//
+// Uploads/deletes/lists attach exclusively to a specific occurrence
+// (checkInId) — never a bare client/week. requireClientUser() derives
+// dbUser.id from the session on every call; check-in-photo-service.ts
+// then re-verifies that id actually owns the target checkInId/photoId
+// before touching Storage or the DB, so a forged checkInId or photoId
+// from another client's occurrence is rejected server-side regardless
+// of what the Portal UI would otherwise allow (Phase 14).
+// ─────────────────────────────────────────────────────────────
+
+export async function uploadCheckInPhotoAction(
+  checkInId: string,
+  formData: FormData,
+): Promise<{ ok: boolean; error?: string; photo?: { id: string; category: string; originalFilename: string } }> {
+  const { dbUser } = await requireClientUser();
+  if (dbUser.role !== "client") {
+    return { ok: false, error: "Forbidden" };
+  }
+
+  const file = formData.get("file");
+  const category = formData.get("category");
+  if (!(file instanceof File) || typeof category !== "string") {
+    return { ok: false, error: "Missing photo or category." };
+  }
+
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const result = await uploadCheckInPhoto(dbUser.id, checkInId, category, {
+      bytes,
+      filename: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+    });
+    if (!result.ok) return result;
+    revalidatePath(`/portal/check-ins/${checkInId}`);
+    return { ok: true, photo: result.photo };
+  } catch {
+    return { ok: false, error: "Failed to upload photo. Please try again." };
+  }
+}
+
+export async function deleteCheckInPhotoAction(
+  photoId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const { dbUser } = await requireClientUser();
+  if (dbUser.role !== "client") {
+    return { ok: false, error: "Forbidden" };
+  }
+
+  try {
+    return await deleteCheckInPhoto(dbUser.id, photoId);
+  } catch {
+    return { ok: false, error: "Failed to delete photo. Please try again." };
+  }
+}
+
+export async function listCheckInPhotosAction(
+  checkInId: string,
+): Promise<{ ok: boolean; error?: string; photos?: CheckInPhotoView[] }> {
+  const { dbUser } = await requireClientUser();
+  if (dbUser.role !== "client") {
+    return { ok: false, error: "Forbidden" };
+  }
+
+  try {
+    const photos = await listCheckInPhotosForClient(dbUser.id, checkInId);
+    if (photos === null) return { ok: false, error: "Check-in not found." };
+    return { ok: true, photos };
+  } catch {
+    return { ok: false, error: "Failed to load photos. Please try again." };
   }
 }

@@ -291,8 +291,8 @@ function BodyMetricCard({
 
       {entries.length > 0 && (
         <div className="divide-y divide-white/[0.04]">
-          {entries.slice(0, 4).map((e) => (
-            <div key={e.weekLabel} className="py-2 flex items-center justify-between">
+          {entries.slice(0, 4).map((e, index) => (
+            <div key={`${e.weekLabel}-${index}`} className="py-2 flex items-center justify-between">
               <p className="text-[10px] text-white/28">{e.weekLabel}</p>
               <p className="text-[10px] text-white/55 font-medium tabular-nums">
                 {e.value.toFixed(1)} {unit}

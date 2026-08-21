@@ -27,7 +27,14 @@ import { clientGoals } from "./schema-profile";
 import { weeklyCheckIns } from "./schema-check-in";
 import type { WeeklyCheckInStatus } from "./schema-check-in";
 import type { CheckInDetail } from "./check-in-service";
-import { getPreviousCheckIn } from "./check-in-service";
+import { getPreviousCheckIn, getWeekStartDateForCalendarDate } from "./check-in-service";
+import { getClientScheduleHistory, getClientScheduleState } from "./check-in-schedule-service";
+import {
+  getDateInTimezone,
+  getRequiredDayStates,
+  isWeekFullyCompliant,
+  type RequiredDayState,
+} from "@/lib/checkin/schedule";
 
 // ─────────────────────────────────────────────────────────────
 // PUBLIC TYPES
@@ -38,6 +45,7 @@ export interface CoachCheckInQueueItem {
   clientId: string;
   clientName: string;
   clientEmail: string;
+  scheduledDate: string;
   weekStartDate: string;
   status: string;
   submittedAt: Date | null;
@@ -57,9 +65,26 @@ export interface ClientCheckInSummary {
   pendingCount: number;
   lastCheckIn: {
     id: string;
+    scheduledDate: string;
     weekStartDate: string;
     status: string;
     submittedAt: Date | null;
+  } | null;
+  // Current week's required-day compliance (Phase 8 wiring of
+  // lib/checkin/schedule.ts's getRequiredDayStates/isWeekFullyCompliant
+  // into a real aggregate). Null when the client has no active
+  // check-in schedule configured — no artificial 0% is manufactured
+  // for an unconfigured client (Phase 10). Evaluated against the
+  // client's CURRENT schedule, since this reflects "how is this client
+  // doing right now" for the coach workspace panel — a coach viewing a
+  // PAST week's compliance (not what this summary computes) must use
+  // getClientScheduleAtDate instead so a later schedule change never
+  // rewrites what was required then.
+  currentWeekCompliance: {
+    requiredCount: number;
+    satisfiedCount: number;
+    days: RequiredDayState[];
+    fullyCompliant: boolean;
   } | null;
 }
 
@@ -90,6 +115,7 @@ export async function listCoachCheckIns(opts?: {
       clientId: weeklyCheckIns.clientId,
       clientName: clientProfiles.fullName,
       clientEmail: users.email,
+      scheduledDate: weeklyCheckIns.scheduledDate,
       weekStartDate: weeklyCheckIns.weekStartDate,
       status: weeklyCheckIns.status,
       submittedAt: weeklyCheckIns.submittedAt,
@@ -132,6 +158,7 @@ export async function listCoachCheckIns(opts?: {
     clientId: r.clientId,
     clientName: r.clientName ?? r.clientEmail,
     clientEmail: r.clientEmail,
+    scheduledDate: r.scheduledDate,
     weekStartDate: r.weekStartDate,
     status: r.status,
     submittedAt: r.submittedAt,
@@ -160,6 +187,7 @@ export async function getCoachCheckInDetail(
       id: weeklyCheckIns.id,
       clientId: weeklyCheckIns.clientId,
       enrollmentId: weeklyCheckIns.enrollmentId,
+      scheduledDate: weeklyCheckIns.scheduledDate,
       weekStartDate: weeklyCheckIns.weekStartDate,
       status: weeklyCheckIns.status,
       submittedAt: weeklyCheckIns.submittedAt,
@@ -213,6 +241,7 @@ export async function getCoachCheckInDetail(
     id: row.id,
     clientId: row.clientId,
     enrollmentId: row.enrollmentId,
+    scheduledDate: row.scheduledDate,
     weekStartDate: row.weekStartDate,
     status: row.status,
     submittedAt: row.submittedAt,
@@ -540,29 +569,90 @@ export async function getClientCheckInSummary(
   const rows = await db
     .select({
       id: weeklyCheckIns.id,
+      scheduledDate: weeklyCheckIns.scheduledDate,
       weekStartDate: weeklyCheckIns.weekStartDate,
       status: weeklyCheckIns.status,
       submittedAt: weeklyCheckIns.submittedAt,
     })
     .from(weeklyCheckIns)
     .where(eq(weeklyCheckIns.clientId, clientId))
-    .orderBy(desc(weeklyCheckIns.weekStartDate))
+    .orderBy(desc(weeklyCheckIns.scheduledDate))
     .limit(50);
 
   const pendingCount = rows.filter((r) => r.status === "submitted").length;
   const lastCheckIn = rows[0]
     ? {
         id: rows[0].id,
+        scheduledDate: rows[0].scheduledDate,
         weekStartDate: rows[0].weekStartDate,
         status: rows[0].status,
         submittedAt: rows[0].submittedAt,
       }
     : null;
 
+  // Compliance is evaluated in the client's calendar, against the
+  // effective schedule for each date. A later schedule edit must not
+  // rewrite the current week's historical obligation set.
+  const [profile] = await db
+    .select({ timezone: clientProfiles.timezone })
+    .from(clientProfiles)
+    .where(eq(clientProfiles.userId, clientId))
+    .limit(1);
+  const today = getDateInTimezone(new Date(), profile?.timezone ?? "America/Chicago");
+  const currentWeekStart = getWeekStartDateForCalendarDate(today);
+  const scheduleState = await getClientScheduleState(clientId);
+  const scheduleHistory = scheduleState.configured ? await getClientScheduleHistory(clientId) : [];
+  let legacyDay: number | null = null;
+  if (!scheduleState.configured) {
+    const [enrollment] = await db
+      .select({ checkInDayOfWeek: coachingEnrollments.checkInDayOfWeek })
+      .from(coachingEnrollments)
+      .where(and(eq(coachingEnrollments.clientId, clientId), eq(coachingEnrollments.status, "active")))
+      .limit(1);
+    // An active enrollment (even with checkInDayOfWeek left NULL)
+    // defaults to Sunday — matching getCurrentCheckInWindows' own
+    // legacyWeekday convention. Only the absence of any active
+    // enrollment at all leaves legacyDay genuinely null (no fallback
+    // possible — "no schedule" is real here, not just unconfigured).
+    if (enrollment) legacyDay = enrollment.checkInDayOfWeek ?? 0;
+  }
+  const requiredWeekdays: number[] = [];
+  for (let offset = 0; offset < 7; offset += 1) {
+    const date = new Date(`${currentWeekStart}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + offset);
+    const weekday = date.getUTCDay();
+    // "Currently active" (effectiveTo IS NULL), not a point-in-time
+    // effectiveFrom<=date check — a schedule change made today governs
+    // the WHOLE current week, including days that already happened
+    // earlier this same week. See the matching fix + full reasoning in
+    // getCurrentCheckInWindows (check-in-service.ts), which this
+    // duplicates the current-week half of. legacyDay stays null (never
+    // matches) when this client has no active enrollment at all, so an
+    // enrollment-less client correctly gets zero requiredWeekdays here.
+    const required = scheduleState.configured
+      ? scheduleHistory.some((row) => row.weekday === weekday && row.effectiveTo === null)
+      : legacyDay !== null && legacyDay === weekday;
+    if (required) requiredWeekdays.push(weekday);
+  }
+  let currentWeekCompliance: ClientCheckInSummary["currentWeekCompliance"] = null;
+  if (requiredWeekdays.length > 0) {
+    const submittedWeekdaysThisWeek = rows
+      .filter((r) => r.weekStartDate === currentWeekStart && r.status !== "draft")
+      .map((r) => new Date(r.scheduledDate + "T12:00:00Z").getUTCDay());
+    const days = getRequiredDayStates(requiredWeekdays, submittedWeekdaysThisWeek);
+    currentWeekCompliance = {
+      requiredCount: days.length,
+      satisfiedCount: days.filter((d) => d.satisfied).length,
+      days,
+      fullyCompliant: isWeekFullyCompliant(requiredWeekdays, submittedWeekdaysThisWeek),
+    };
+  }
+
   return {
     totalCheckIns: rows.length,
     pendingCount,
     lastCheckIn,
+    currentWeekCompliance,
   };
 }
 
