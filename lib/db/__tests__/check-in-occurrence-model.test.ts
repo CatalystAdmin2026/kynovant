@@ -136,7 +136,25 @@ beforeEach(async () => {
 // against the real current week, tested separately below.
 const WED = "2026-08-12";
 const SUN = "2026-08-09"; // the Sunday that starts that same week
-const FUTURE_WED = "2026-08-19";
+
+// Deliberately NOT a literal date (unlike WED/SUN above, which are
+// anchored to a fixed historical week and stay valid indefinitely):
+// this one specifically needs to be AFTER "today" whenever the suite
+// runs, so it's computed relative to the real current date instead of
+// a hardcoded string that would silently stop being "future" the
+// moment real time caught up to it (found during independent review —
+// the previous literal, "2026-08-19", was chosen when this test was
+// written but had already become a past date by the time it was
+// re-run weeks later, making the "rejects a future date" assertion
+// fail for a reason that had nothing to do with the code under test).
+function nextWeekdayStrictlyAfter(weekday: number, fromDateExclusive: string): string {
+  const d = new Date(`${fromDateExclusive}T00:00:00Z`);
+  let delta = (weekday - d.getUTCDay() + 7) % 7;
+  if (delta === 0) delta = 7; // must be strictly after, never today itself
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().split("T")[0];
+}
+const FUTURE_WED = nextWeekdayStrictlyAfter(3, new Date().toISOString().split("T")[0]);
 
 // Seeds BOTH clients with an active Sunday+Wednesday schedule,
 // effective well before WED/SUN above, so createOrUpdateDraftCheckIn's

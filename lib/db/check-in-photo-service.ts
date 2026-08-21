@@ -180,6 +180,21 @@ function sanitizeFilename(filename: string): string {
   return sanitized.length > 0 ? sanitized : "photo";
 }
 
+// originalFilename (unlike storagePath) is stored for DISPLAY only —
+// deliberately NOT run through sanitizeFilename's aggressive
+// dash-collapsing, so a coach/client still sees a recognizable name.
+// It still needs ONE narrow defense: a NUL byte (0x00) in the raw
+// filename is rejected by Postgres's UTF8 encoding at INSERT time
+// (found via independent review attack-testing — a crafted upload
+// bypassing the browser's own file picker could supply one), which
+// would otherwise throw an uncaught error out of this function after
+// the Storage object has already been written, orphaning it. Strips
+// NUL and other C0 control characters only — never touches slashes,
+// dots, or anything a real filename legitimately contains.
+function stripControlChars(filename: string): string {
+  return filename.replace(/[\x00-\x1f]/g, "");
+}
+
 // ─────────────────────────────────────────────────────────────
 // OCCURRENCE LOOKUP — the single place every mutating/reading
 // function below re-derives the true owner and edit-window state of
@@ -263,7 +278,7 @@ export async function uploadCheckInPhoto(
       clientId,
       category: category as CheckInPhotoCategory,
       storagePath,
-      originalFilename: file.filename,
+      originalFilename: stripControlChars(file.filename),
       mimeType: file.mimeType,
       sizeBytes: file.sizeBytes,
     })
