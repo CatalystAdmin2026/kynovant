@@ -83,6 +83,74 @@ describe("app/app/route.ts — role-based PWA launch delegator", () => {
   });
 });
 
+describe("P0 FIX — /app must never expose a raw server exception (digest 877070528)", () => {
+  // Real production incident: three real clients (Monica Wiazdowski,
+  // Jenny Ryan, Maddie Ryan) each hit a raw Next.js
+  // "Application error: a server-side exception has occurred" page,
+  // digest 877070528, tapping their installed Home Screen icon. Proven
+  // via Vercel production runtime logs (not assumed): getPublicUser()'s
+  // query threw Postgres error XX000 (EMAXCONNSESSION — Supabase
+  // Session Mode's 15-connection pool transiently exhausted by
+  // concurrent app-wide load), uncaught, inside this Route Handler.
+  // Reproduced directly against staging by genuinely saturating its
+  // connection pool and hitting the live route: pre-fix, HTTP 500;
+  // post-fix, a clean redirect — see this task's report for the full
+  // before/after proof. This suite pins the structural fix (an
+  // unhandled throw here can never happen again by construction).
+  it("wraps the entire route body in a top-level try/catch that falls back to /login on any unanticipated failure", () => {
+    const tryIndex = LAUNCH_ROUTE.indexOf("try {");
+    const exportIndex = LAUNCH_ROUTE.indexOf("export async function GET(");
+    expect(tryIndex).toBeGreaterThan(exportIndex);
+    // The final catch block (after the last getPublicUser-specific
+    // one) must itself redirect to a plain /login — never rethrow,
+    // never let the framework's default 500 handler render.
+    const lastCatchIndex = LAUNCH_ROUTE.lastIndexOf("} catch {");
+    const tail = LAUNCH_ROUTE.slice(lastCatchIndex);
+    expect(tail).toContain("return NextResponse.redirect(`${origin}/login`);");
+  });
+
+  it("wraps getPublicUser() in its own try/catch — a DB failure on an otherwise-valid session degrades to the existing null-row fallback, not a crash", () => {
+    const callIndex = LAUNCH_ROUTE.indexOf("dbUser = await getPublicUser(authUser.id);");
+    expect(callIndex).toBeGreaterThan(-1);
+    // That call site must itself be inside a try, with a catch that
+    // sets dbUser back to null rather than propagating the error.
+    const precedingTry = LAUNCH_ROUTE.lastIndexOf("try {", callIndex);
+    const followingCatch = LAUNCH_ROUTE.indexOf("} catch {", callIndex);
+    expect(precedingTry).toBeGreaterThan(-1);
+    expect(followingCatch).toBeGreaterThan(callIndex);
+    const catchBody = LAUNCH_ROUTE.slice(followingCatch, followingCatch + 60);
+    expect(catchBody).toContain("dbUser = null;");
+  });
+
+  it("a getPublicUser() failure can only ever degrade to the SAME lowest-privilege fallback already used for a legitimately-missing row — never a different, more-privileged path", () => {
+    // Exactly one role-resolution line in the whole file — the catch
+    // branch doesn't special-case anything, it just leaves dbUser
+    // null and falls through to the one existing line below.
+    const roleLines = LAUNCH_ROUTE_CODE.match(/const role = dbUser\?\.role \?\? "client";/g) ?? [];
+    expect(roleLines.length).toBe(1);
+  });
+
+  it("signOut() is also guarded — a failed cleanup call cannot prevent the access_denied redirect from completing", () => {
+    const signOutIndex = LAUNCH_ROUTE.indexOf("await supabase.auth.signOut();");
+    expect(signOutIndex).toBeGreaterThan(-1);
+    const precedingTry = LAUNCH_ROUTE.lastIndexOf("try {", signOutIndex);
+    const followingCatch = LAUNCH_ROUTE.indexOf("} catch {", signOutIndex);
+    expect(precedingTry).toBeGreaterThan(-1);
+    expect(followingCatch).toBeGreaterThan(signOutIndex);
+    // The access_denied redirect must come after that inner try/catch,
+    // not inside the try itself — i.e. it always executes regardless
+    // of whether signOut() succeeded.
+    const accessDeniedIndex = LAUNCH_ROUTE.indexOf("/login?error=access_denied");
+    expect(accessDeniedIndex).toBeGreaterThan(followingCatch);
+  });
+
+  it("still resolves the correct destination for a valid session once the DB is healthy — the fix didn't weaken the happy path", () => {
+    expect(LAUNCH_ROUTE_CODE).toContain('dbUser?.status === "suspended" || dbUser?.status === "archived"');
+    expect(LAUNCH_ROUTE_CODE).toContain('const role = dbUser?.role ?? "client";');
+    expect(LAUNCH_ROUTE_CODE).toContain("resolvePostLoginRedirect(null, role)");
+  });
+});
+
 describe("app/manifest.ts — start_url no longer the marketing homepage", () => {
   it("start_url points at the role-aware launch delegator, not \"/\"", () => {
     expect(MANIFEST).toContain('start_url: "/app"');
