@@ -128,4 +128,35 @@ describe("admin coach-invite route — source-level security gates", () => {
     expect(route).not.toMatch(/body\.role/);
     expect(route).toContain("let body: { email?: string; displayName?: string };");
   });
+
+  it("rejects existing client/admin email collisions before provisioning — no client-to-coach elevation or admin demotion", () => {
+    const route = source("app/api/admin/coaches/route.ts");
+    expect(route).toContain('import { findExistingAccountByEmail } from "@/lib/db/coach-signup-service"');
+    expect(route).toContain("const existing = await findExistingAccountByEmail(email);");
+
+    const clientBlock = route.slice(
+      route.indexOf('if (existing?.role === "client")'),
+      route.indexOf('if (existing?.role === "admin")'),
+    );
+    expect(clientBlock).toContain("status: 409");
+    expect(clientBlock).not.toContain("provisionInvitedCoach");
+
+    const adminBlock = route.slice(
+      route.indexOf('if (existing?.role === "admin")'),
+      route.indexOf('if (existing?.role === "coach" && existing.status !== "invited")'),
+    );
+    expect(adminBlock).toContain("status: 409");
+    expect(adminBlock).not.toContain("provisionInvitedCoach");
+  });
+
+  it("resends only still-pending coach accounts and leaves active coach accounts untouched", () => {
+    const route = source("app/api/admin/coaches/route.ts");
+    const activeCoachBlock = route.slice(
+      route.indexOf('if (existing?.role === "coach" && existing.status !== "invited")'),
+      route.indexOf("// generateLink (not inviteUserByEmail)"),
+    );
+    expect(activeCoachBlock).toContain('status: "already_active"');
+    expect(activeCoachBlock).not.toContain("generateLink");
+    expect(activeCoachBlock).not.toContain("provisionInvitedCoach");
+  });
 });

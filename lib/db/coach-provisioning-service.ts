@@ -20,7 +20,7 @@
 // call site already creates the Supabase Auth user via
 // admin.auth.admin.generateLink({ type: "invite" }) (see each route's
 // own header comment for why this is generateLink, not
-// inviteUserByEmail, as of the Coach Invitation Auto-Consume fix)
+// Supabase's auto-sending invite API, as of the Coach Invitation Auto-Consume fix)
 // before calling this function, so `userId` here is always a fresh ID
 // Supabase itself just minted, never a client-supplied UUID.
 //
@@ -46,8 +46,8 @@ export interface ProvisionCoachInput {
 
 // Grants 'coach' role + status 'invited' and ensures a coach_profiles
 // row exists. Callers are responsible for having already created the
-// Supabase Auth user (via inviteUserByEmail) — this function only
-// touches public.users / public.coach_profiles.
+// Supabase Auth user (via generateLink({ type: "invite" })) — this
+// function only touches public.users / public.coach_profiles.
 export async function provisionInvitedCoach(input: ProvisionCoachInput): Promise<void> {
   const db = getDb();
   const normalizedEmail = input.email.trim().toLowerCase();

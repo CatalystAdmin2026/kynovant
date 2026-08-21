@@ -37,6 +37,7 @@ import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin"
 import { getDb } from "@/lib/db/client";
 import { users, coachProfiles } from "@/lib/db/schema";
 import { provisionInvitedCoach } from "@/lib/db/coach-provisioning-service";
+import { findExistingAccountByEmail } from "@/lib/db/coach-signup-service";
 import { getKynovantResendConfig } from "@/lib/email/resend-brand-config";
 
 export const dynamic = "force-dynamic";
@@ -192,6 +193,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const existing = await findExistingAccountByEmail(email);
+
+    if (existing?.role === "client") {
+      return NextResponse.json(
+        { ok: false, error: "This email is already registered as a client account and can't be invited as a coach." },
+        { status: 409 },
+      );
+    }
+
+    if (existing?.role === "admin") {
+      return NextResponse.json(
+        { ok: false, error: "This email is already registered as an admin account and can't be invited as a coach." },
+        { status: 409 },
+      );
+    }
+
+    if (existing?.role === "coach" && existing.status !== "invited") {
+      return NextResponse.json({ ok: true, status: "already_active", coachId: existing.id });
+    }
+
     const admin = createAdminClient();
     const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.kynovant.com";
 

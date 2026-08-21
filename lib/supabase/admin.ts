@@ -6,7 +6,7 @@
 // browser under any circumstance.
 //
 // Uses the Supabase service-role key, which bypasses RLS and can
-// perform privileged Auth Admin operations (inviteUserByEmail,
+// perform privileged Auth Admin operations (generateLink,
 // deleting users, etc). Only call this from trusted, guarded
 // server code — every call site must sit behind an explicit role
 // guard (requireAdmin / requireCoachOrAdmin) before this module is
@@ -14,8 +14,8 @@
 // coach signup (app/api/coach-signup/route.ts) is intentionally
 // public/unauthenticated — that's the whole point of self-service.
 // Its safety comes from what it does with this client, not from a
-// role guard in front of it: it only ever calls inviteUserByEmail()
-// with a server-hardcoded role ("coach", never client input) via
+// role guard in front of it: it only ever creates invite links for a
+// server-hardcoded coach provisioning path (never client input) via
 // lib/db/coach-provisioning-service.ts, and it's rate-limited by IP
 // and by email (lib/db/coach-signup-service.ts). See that route's
 // header comment for the full reasoning.

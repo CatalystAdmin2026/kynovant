@@ -13,13 +13,12 @@ import { verifyInviteHandoffToken } from "@/lib/auth/onboarding-token";
 // POST /api/auth/confirm-invite-session
 //
 // Companion to app/api/auth/verify-invite/route.ts for the ONE
-// remaining path that can't call verifyOtp() itself: implicit-flow
-// invite links whose tokens arrive in the URL FRAGMENT (never sent to
-// the server) rather than a token_hash query param — currently the
-// coach-invitation pipeline (app/api/coach-signup/route.ts,
-// app/api/internal/overwatch/invite-coach/route.ts), which still uses
-// Supabase's own auto-consuming action_link and is intentionally NOT
-// being re-architected in this pass (see this fix's commit message).
+// remaining legacy path that can't call verifyOtp() itself:
+// implicit-flow invite links whose tokens arrive in the URL FRAGMENT
+// (never sent to the server) rather than a token_hash query param.
+// Current Kynovant invite paths use /auth/accept + token_hash; this
+// endpoint remains as a defense-in-depth guard for any older
+// fragment-callback handoff that may still exist in a user's inbox.
 // By the time app/auth/fragment-callback/page.tsx calls this route,
 // supabase.auth.setSession() has already redeemed those fragment
 // tokens and established the session; there is no token_hash left to

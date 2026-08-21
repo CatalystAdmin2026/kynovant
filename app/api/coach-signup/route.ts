@@ -55,11 +55,11 @@
 //     already registered as a CLIENT is rejected outright — this
 //     route never promotes an existing client account to coach; that
 //     would be a privilege-escalation path disguised as a signup form.
-//   - Replay/idempotency: inviteUserByEmail() itself errors for an
-//     email Supabase already knows about, so a retried/duplicated
+//   - Replay/idempotency: Supabase rejects duplicate invite creation
+//     for emails it cannot safely refresh, so a retried/duplicated
 //     request can't mint a second Auth user for the same address —
-//     the pre-check above just turns that into a friendly response
-//     instead of a raw Supabase error.
+//     the pre-check above turns known existing accounts into a
+//     friendly response instead of a raw Supabase error.
 //   - Abuse/rate limiting: DB-backed, by IP and by email independently
 //     (lib/db/coach-signup-service.ts) — same "no new infrastructure"
 //     approach already used by app/api/applications/route.ts, sized
@@ -321,7 +321,7 @@ export async function POST(req: NextRequest) {
       // Already a coach/admin who finished setup — no second invite,
       // nothing to resend. status === "invited" (never confirmed) is
       // handled below: it deliberately falls through to the same
-      // inviteUserByEmail() call as a brand-new signup, which Supabase
+      // generateLink() call as a brand-new signup, which Supabase
       // treats as a safe resend for an unconfirmed user.
       if (existing.status !== "invited") {
         await markAcquisitionInviteStatus({
