@@ -14,13 +14,21 @@ describe("production security release gates", () => {
     expect(layout).not.toContain("requireCoachOrAdminPage");
   });
 
-  it("keeps Catalyst root from rendering the Kynovant SaaS homepage", () => {
+  it("keeps Kept root from rendering the Kynovant SaaS homepage", () => {
     const proxy = source("proxy.ts");
     const domainRouting = source("lib/domain-routing.ts");
+    const publicHome = source("app/(site)/page.tsx");
+    const catalystBranch = proxy.slice(
+      proxy.indexOf('} else if (brand === "catalyst")'),
+      proxy.indexOf("// ── 2. Auth"),
+    );
 
     expect(proxy).toContain('request.headers.get("host")');
-    expect(proxy).toMatch(/brand === "catalyst"[\s\S]*pathname === "\/"[\s\S]*new URL\("\/about"/);
-    expect(proxy.indexOf('pathname === "/"')).toBeLessThan(proxy.indexOf("matchesPrefix(pathname, KYNOVANT_ONLY_PREFIXES)"));
+    expect(catalystBranch).not.toContain('pathname === "/"');
+    expect(catalystBranch).toContain("matchesPrefix(pathname, KYNOVANT_ONLY_PREFIXES)");
+    expect(publicHome).not.toMatch(/import\s+.*KynovantHomeContent/);
+    expect(publicHome).not.toMatch(/<KynovantHomeContent\b/);
+    expect(publicHome).toContain("Kept Performance");
     expect(domainRouting).toContain('split(":")[0]');
   });
 

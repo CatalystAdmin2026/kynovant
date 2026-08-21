@@ -37,7 +37,7 @@ export default function OnboardingCompletePage() {
           <div className="oc-ring absolute inset-0 rounded-full border border-[#C9A44C]/20" style={{ margin: "-12px" }} />
           <div className="w-16 h-16 rounded-full border border-[#C9A44C]/30 flex items-center justify-center">
             <Image
-              src="/logos/kynovant-mark.png"
+              src="/logos/mark-gold.png"
               alt="Kept Performance"
               width={32}
               height={32}
