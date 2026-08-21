@@ -17,6 +17,7 @@ import { requireCoachOrAdminPage, resolveTenantScope } from "@/lib/auth/guards";
 import { getCoachClientWorkspace } from "@/lib/db/coach-client-workspace-service";
 import { listAssignableBlueprints, getClientProgramHistory } from "@/lib/db/coach-program-assignment-service";
 import { getClientCheckInSummary } from "@/lib/db/coach-check-in-service";
+import { getClientScheduleState } from "@/lib/db/check-in-schedule-service";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import AssignProgramButton from "@/components/hq/workspace/AssignProgramButton";
 import AssignProgramModal from "@/components/hq/workspace/AssignProgramModal";
@@ -37,6 +38,7 @@ import type { ProfileReadiness } from "@/lib/db/profile-readiness";
 import type { HistorySession } from "@/lib/db/workout-session-service";
 import SensitiveHealthPanel from "@/components/hq/workspace/SensitiveHealthPanel";
 import GoalManager from "@/components/hq/workspace/GoalManager";
+import CheckInScheduleEditor from "@/components/hq/workspace/CheckInScheduleEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -1101,11 +1103,12 @@ export default async function ClientWorkspacePage({
   const { dbUser } = await requireCoachOrAdminPage();
   const { coachId } = resolveTenantScope(dbUser);
 
-  const [workspace, blueprints, programHistory, checkInSummary] = await Promise.all([
+  const [workspace, blueprints, programHistory, checkInSummary, checkInSchedule] = await Promise.all([
     getCoachClientWorkspace(clientId, coachId),
     listAssignableBlueprints(coachId),
     getClientProgramHistory(clientId),
     getClientCheckInSummary(clientId),
+    getClientScheduleState(clientId),
   ]);
 
   // getCoachClientWorkspace returns null both when clientId doesn't exist
@@ -1200,6 +1203,28 @@ export default async function ClientWorkspacePage({
             </Link>
           }
         />
+        {/* Current-week required-day compliance (Phase 8) — additive,
+            only rendered when a schedule is actually configured. No
+            fake 0% for a client with no schedule. */}
+        {checkInSummary.currentWeekCompliance && (
+          <p className="text-[10px] text-gray-500 mb-3">
+            This week: {checkInSummary.currentWeekCompliance.satisfiedCount}/
+            {checkInSummary.currentWeekCompliance.requiredCount} required check-ins
+            {checkInSummary.currentWeekCompliance.fullyCompliant ? (
+              <span className="text-emerald-400/70 ml-1.5">· Fully compliant</span>
+            ) : (
+              <span className={cx("ml-1.5", SEVERITY_TEXT.caution)}>
+                ·{" "}
+                {checkInSummary.currentWeekCompliance.days
+                  .filter((d) => !d.satisfied)
+                  .map((d) => d.label)
+                  .join(", ")}{" "}
+                still due
+              </span>
+            )}
+          </p>
+        )}
+
         {checkInSummary.totalCheckIns === 0 ? (
           <EmptyState tone="dark" title="No check-ins submitted yet." />
         ) : (
@@ -1227,7 +1252,7 @@ export default async function ClientWorkspacePage({
               {checkInSummary.lastCheckIn ? (
                 <>
                   <p className="text-sm font-semibold text-white">
-                    Week of {fmtDate(checkInSummary.lastCheckIn.weekStartDate, true)}
+                    {fmtDate(checkInSummary.lastCheckIn.scheduledDate, true)}
                   </p>
                   <p className="text-[9px] font-semibold text-gray-600 uppercase tracking-[0.25em] mt-1">
                     Last Check-In · {humanize(checkInSummary.lastCheckIn.status)}
@@ -1245,6 +1270,18 @@ export default async function ClientWorkspacePage({
             </Card>
           </div>
         )}
+      </section>
+
+      {/* Check-In Schedule — the canonical, coach-only write surface
+          for client_check_in_schedule. Current active rows populate
+          the selector directly; nothing derives from the legacy
+          coachingEnrollments.checkInDayOfWeek here once this table is
+          the thing being edited. */}
+      <section>
+        <SectionHeader title="Check-In Schedule" />
+        <Card tone="dark" padding="sm">
+          <CheckInScheduleEditor clientId={clientId} initialWeekdays={checkInSchedule.weekdays} />
+        </Card>
       </section>
 
       {/* Nutrition quick-link */}

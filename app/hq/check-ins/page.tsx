@@ -25,8 +25,14 @@ export const dynamic = "force-dynamic";
 
 type QueueItem = Awaited<ReturnType<typeof listCoachCheckIns>>[number];
 
-function fmtWeek(dateStr: string): string {
+// Renders the exact scheduled occurrence date, weekday included — NOT
+// just "Week of <Sunday>". Two occurrences in the same week (e.g. a
+// Wednesday + Sunday check-in) share a weekStartDate but must never
+// render identically here; a coach needs to tell them apart at a
+// glance in the queue, not just after opening each one.
+function fmtOccurrence(dateStr: string): string {
   return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", {
+    weekday: "short",
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -126,7 +132,7 @@ function QueueRow({ item, variant }: { item: QueueItem; variant: "actionable" | 
           >
             {item.clientName}
           </p>
-          <p className="text-[11px] text-white/35">Week of {fmtWeek(item.weekStartDate)}</p>
+          <p className="text-[11px] text-white/35">{fmtOccurrence(item.scheduledDate)}</p>
         </div>
 
         <Badge tone="dark" variant={STATUS_BADGE_VARIANT[item.status]} size="sm" className="hidden shrink-0 sm:inline-flex">

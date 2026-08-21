@@ -7,11 +7,11 @@
 // Auth: portal layout + role guard below.
 // ─────────────────────────────────────────────────────────────
 
-import { redirect } from "next/navigation";
+import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { requireClientUser, getClientProfile } from "@/lib/supabase/session";
 import {
-  getCurrentCheckInWindow,
+  getCurrentCheckInWindows,
   getClientCheckInDetail,
   getPreviousCheckIn,
 } from "@/lib/db/check-in-service";
@@ -21,15 +21,37 @@ import CheckInForm from "@/components/portal/CheckInForm";
 
 export const dynamic = "force-dynamic";
 
-export default async function NewCheckInPage() {
+export default async function NewCheckInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ date?: string }>;
+}) {
   const { dbUser } = await requireClientUser();
   if (dbUser.role !== "client") redirect("/admin");
 
   const profile = await getClientProfile(dbUser.id);
   const clientName =
     profile?.preferredName ?? profile?.fullName ?? "Client";
+  const timezone = profile?.timezone ?? "America/Chicago";
 
-  const window_ = await getCurrentCheckInWindow(dbUser.id);
+  const windows = await getCurrentCheckInWindows(dbUser.id, timezone);
+  const { date: requestedDate } = await searchParams;
+
+  // Which occurrence is this page for? An explicit ?date= (from a
+  // Portal occurrence card's "Start/Continue Check-In" link) selects
+  // it; omitted (direct navigation, or a single-occurrence schedule —
+  // the common case) falls back to the single window when there's
+  // exactly one, or today's due window when there are several.
+  const window_ =
+    (requestedDate ? windows.find((w) => w.scheduledDate === requestedDate) : undefined) ??
+    (windows.length === 1 ? windows[0] : windows.find((w) => w.isToday)) ??
+    windows[0];
+
+  // No required occurrence at all right now (no schedule configured,
+  // or the requested date isn't one of this client's occurrences) —
+  // nothing to start.
+  if (!window_) notFound();
+
   const { existingCheckIn } = window_;
 
   // If already submitted/reviewed, redirect to the detail view
@@ -108,6 +130,7 @@ export default async function NewCheckInPage() {
         <CheckInForm
           initialData={initialData}
           existingCheckInId={existingCheckIn?.id}
+          scheduledDate={window_.scheduledDate}
           weekStartDate={window_.weekStartDate}
           previousCheckIn={previousCheckIn}
         />

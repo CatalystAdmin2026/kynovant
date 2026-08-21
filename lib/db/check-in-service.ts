@@ -1,28 +1,44 @@
 // ─────────────────────────────────────────────────────────────
-// Catalyst OS — Client Check-In Service (Sprint 6.3B)
+// Catalyst OS — Client Check-In Service (Sprint 6.3B; rewritten for
+// the multi-occurrence model in the Client Biometrics + Flexible
+// Check-In Schedule pass)
 //
 // SERVER-ONLY — never import from a Client Component.
 //
 // Handles client-perspective operations:
-//   - computing the current week window
-//   - creating / updating drafts
+//   - computing this week's required occurrences
+//   - creating / updating drafts (per occurrence)
 //   - submitting a check-in
 //   - listing and fetching check-ins
 //
 // All status transitions are validated here; coach-side
 // transitions live in coach-check-in-service.ts.
 //
-// Week convention:
-//   week_start_date is always the Sunday (UTC) of the calendar
-//   week being reported. If a client has a configured check-in
-//   day, that determines when the check-in is *due*, not the
-//   week_start_date value.
+// OCCURRENCE MODEL (see schema-check-in.ts's table comment for the
+// full architecture decision): weekly_check_ins is now keyed by
+// scheduled_date (the exact calendar date an occurrence is required
+// for), not week_start_date alone — a client can have more than one
+// occurrence in the same week (e.g. Wednesday + Sunday), each its own
+// row, each independently draftable/submittable. week_start_date is
+// retained on every row, always derived consistently from
+// scheduled_date, for grouping/display/backward compatibility.
+//
+// TIMEZONE: "what day is it" / "which calendar date is this
+// occurrence" is computed in the CLIENT's own timezone
+// (clientProfiles.timezone) via lib/checkin/schedule.ts's
+// getDateInTimezone/getWeekdayInTimezone — the same convention chosen
+// in the prior pass, now applied consistently to occurrence matching
+// too, not just the schedule-awareness Portal line. getWeekStartDate/
+// getWeekEndDate below remain pure-UTC and unchanged — legacy callers
+// (getPreviousCheckIn's own week ordering, etc.) keep behaving exactly
+// as before; only the NEW occurrence-window computation
+// (getCurrentCheckInWindows) uses the client's timezone.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, inArray, lt } from "drizzle-orm";
 import { getDb } from "./client";
-import { users, coachingEnrollments, timelineEvents } from "./schema";
+import { users, clientProfiles, coachingEnrollments, timelineEvents } from "./schema";
 import { weeklyCheckIns, type WeeklyCheckInStatus } from "./schema-check-in";
 import {
   validateCheckInDraft,
@@ -30,13 +46,23 @@ import {
   type CheckInFieldErrors,
 } from "./check-in-validation";
 import { notifyCheckInSubmitted } from "./coach-notification-service";
+import {
+  getClientScheduleAtDate,
+  getClientScheduleHistory,
+  getClientScheduleState,
+} from "./check-in-schedule-service";
+import { getDateInTimezone } from "@/lib/checkin/schedule";
+import type { Weekday } from "@/lib/checkin/schedule";
 
 // ─────────────────────────────────────────────────────────────
-// WEEK DATE HELPERS
+// WEEK / OCCURRENCE DATE HELPERS
 // ─────────────────────────────────────────────────────────────
 
 // Returns the ISO date string (YYYY-MM-DD) of the Sunday that
-// starts the calendar week containing `date`.
+// starts the calendar week containing `date`. Pure UTC — unchanged
+// from before this pass; still used by getWeekEndDate,
+// getPreviousCheckIn's ordering, and as the fallback when no
+// timezone-aware calendar date is available.
 export function getWeekStartDate(date: Date = new Date()): string {
   const d = new Date(date);
   const dayOfWeek = d.getUTCDay(); // 0=Sun
@@ -52,27 +78,48 @@ export function getWeekEndDate(date: Date = new Date()): string {
   return d.toISOString().split("T")[0];
 }
 
-// Returns the check-in due date for a given week start date.
-// Uses the enrollment's checkInDayOfWeek if available; defaults to Sunday (0).
-// The due date is always within the same calendar week as weekStartDate.
+// Same Sunday-anchor arithmetic as getWeekStartDate, but starting
+// from an already-resolved calendar-date STRING (e.g. the client's
+// local "today" from getDateInTimezone) instead of a Date instant —
+// so the anchor is computed in whatever calendar the caller already
+// resolved, not re-derived from a raw UTC instant that could land on
+// the wrong local day for a non-UTC client.
+export function getWeekStartDateForCalendarDate(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00Z");
+  const dayOfWeek = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - dayOfWeek);
+  return d.toISOString().split("T")[0];
+}
+
+// Returns the calendar date for a given weekday within the week that
+// starts on weekStartDate — i.e. the exact scheduled_date for that
+// occurrence. Also doubles as the legacy "check-in due date" formula
+// (weekStartDate + checkInDayOfWeek, defaulting to Sunday) — the
+// SAME arithmetic this codebase already used for single-day due
+// dates before this pass, now reused as the occurrence-date formula
+// so a single-day client's dates are byte-identical to before.
 export function getCheckInDueDate(
   weekStartDate: string,
-  checkInDayOfWeek: number | null | undefined,
+  weekday: number | null | undefined,
 ): string {
-  const day = checkInDayOfWeek ?? 0; // default Sunday
-  const sunday = new Date(weekStartDate + "T00:00:00Z");
-  sunday.setUTCDate(sunday.getUTCDate() + day);
-  return sunday.toISOString().split("T")[0];
+  const day = weekday ?? 0; // default Sunday
+  const d = new Date(weekStartDate + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + day);
+  return d.toISOString().split("T")[0];
 }
 
 // ─────────────────────────────────────────────────────────────
 // PUBLIC TYPES
 // ─────────────────────────────────────────────────────────────
 
-export interface CheckInWindow {
+// One required occurrence within the current week — the
+// multi-occurrence replacement for the old single CheckInWindow.
+export interface CheckInOccurrenceWindow {
+  scheduledDate: string;
+  weekday: Weekday;
   weekStartDate: string;
   weekEndDate: string;
-  dueDate: string;
+  isToday: boolean;
   isOverdue: boolean;
   existingCheckIn: CheckInListItem | null;
 }
@@ -97,6 +144,7 @@ export interface CheckInDraftData {
 
 export interface CheckInListItem {
   id: string;
+  scheduledDate: string;
   weekStartDate: string;
   status: WeeklyCheckInStatus;
   submittedAt: Date | null;
@@ -107,6 +155,7 @@ export interface CheckInListItem {
 export interface CheckInDetail {
   id: string;
   clientId: string;
+  scheduledDate: string;
   weekStartDate: string;
   status: WeeklyCheckInStatus;
   submittedAt: Date | null;
@@ -139,45 +188,158 @@ export interface CheckInDetail {
   updatedAt: Date;
 }
 
+function isValidCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(`${value}T`);
+}
+
+async function validateOccurrenceDate(
+  clientId: string,
+  scheduledDate: string,
+  timezone: string,
+  activeEnrollmentDay: number | null | undefined,
+): Promise<string | null> {
+  if (!isValidCalendarDate(scheduledDate)) return "Invalid check-in date.";
+
+  const today = getDateInTimezone(new Date(), timezone);
+  if (scheduledDate > today) return "A check-in cannot be scheduled in the future.";
+
+  const scheduleState = await getClientScheduleState(clientId);
+  if (scheduleState.configured) {
+    const weekday = new Date(`${scheduledDate}T12:00:00Z`).getUTCDay() as Weekday;
+    // Within the current calendar week, a schedule change made TODAY
+    // governs the whole week — including days that already happened
+    // earlier this same week (e.g. a client configured for Wed+Sun on
+    // a Tuesday must still be able to submit this week's Sunday, even
+    // though Sunday's date is chronologically before the schedule
+    // row's effectiveFrom). getCurrentCheckInWindows already offers
+    // that Sunday as a real, writable window using this exact
+    // "currently active" truth; this guard must accept the write it
+    // invites, not silently reject it. Backdating into an EARLIER
+    // week still requires the strict point-in-time truth below, so a
+    // schedule set up today can't be used to retroactively create
+    // occurrences for a week that already ended before the change.
+    const weekStartDate = getWeekStartDateForCalendarDate(today);
+    const requiredDays =
+      scheduledDate >= weekStartDate
+        ? scheduleState.weekdays
+        : await getClientScheduleAtDate(clientId, scheduledDate);
+    if (!requiredDays.includes(weekday)) {
+      return "That date is not a required check-in occurrence.";
+    }
+    return null;
+  }
+
+  // Legacy clients with no schedule rows retain the old single-day
+  // enrollment fallback. An explicit empty schedule never reaches this path.
+  const requiredDay = activeEnrollmentDay ?? 0;
+  const actualDay = new Date(`${scheduledDate}T12:00:00Z`).getUTCDay();
+  return actualDay === requiredDay ? null : "That date is not a required check-in occurrence.";
+}
+
 // ─────────────────────────────────────────────────────────────
-// CURRENT WINDOW
+// CURRENT WINDOWS (plural — one per required occurrence this week)
 //
-// Returns the current week's check-in window, including whether
-// a check-in already exists (in any status) for this week.
+// Replaces the old single-window getCurrentCheckInWindow. Returns one
+// entry per weekday currently required by the client's schedule
+// (client_check_in_schedule) for the CURRENT week, evaluated in the
+// client's own timezone. A client with Wednesday + Sunday required
+// gets two entries; a client with only Sunday (or no schedule rows at
+// all — legacy/never-configured) gets exactly one, with the same date
+// arithmetic as before this pass, so a single-day client's behavior
+// is unchanged. A client with an explicit empty schedule ([]) gets
+// zero entries — no artificial due-state.
 // ─────────────────────────────────────────────────────────────
 
-export async function getCurrentCheckInWindow(
+export async function getCurrentCheckInWindows(
   clientId: string,
-): Promise<CheckInWindow> {
+  timezone: string,
+): Promise<CheckInOccurrenceWindow[]> {
   const db = getDb();
 
-  const weekStartDate = getWeekStartDate();
-  const weekEndDate = getWeekEndDate();
+  const todayStr = getDateInTimezone(new Date(), timezone);
+  const weekStartDate = getWeekStartDateForCalendarDate(todayStr);
+  const scheduleState = await getClientScheduleState(clientId);
+  const scheduleHistory = scheduleState.configured ? await getClientScheduleHistory(clientId) : [];
+  let legacyWeekday: Weekday | null = null;
 
-  // Look up the enrollment to get checkInDayOfWeek
-  const [enrollment] = await db
-    .select({ checkInDayOfWeek: coachingEnrollments.checkInDayOfWeek })
-    .from(coachingEnrollments)
-    .where(
-      and(
-        eq(coachingEnrollments.clientId, clientId),
-        eq(coachingEnrollments.status, "active"),
-      ),
-    )
-    .limit(1);
+  if (!scheduleState.configured) {
+    // Legacy fallback: this client has no client_check_in_schedule
+    // rows at all (not "explicitly configured to zero days" — that
+    // case is indistinguishable at this layer, which is exactly why
+    // the migration backfills every existing active-enrollment client
+    // with a real row; a client reaching this branch has literally
+    // never been configured). Preserve prior single-day behavior via
+    // the enrollment's checkInDayOfWeek, defaulting to Sunday.
+    const [enrollment] = await db
+      .select({ checkInDayOfWeek: coachingEnrollments.checkInDayOfWeek })
+      .from(coachingEnrollments)
+      .where(
+        and(
+          eq(coachingEnrollments.clientId, clientId),
+          eq(coachingEnrollments.status, "active"),
+        ),
+      )
+      .limit(1);
+    if (enrollment) {
+      legacyWeekday = (enrollment.checkInDayOfWeek ?? 0) as Weekday;
+    }
+  }
 
-  const dueDate = getCheckInDueDate(
-    weekStartDate,
-    enrollment?.checkInDayOfWeek,
+  if (!scheduleState.configured && legacyWeekday === null) return [];
+
+  const previousWeekStart = getWeekStartDateForCalendarDate(
+    getCheckInDueDate(weekStartDate, -1),
   );
+  const candidateDates: string[] = [];
+  const candidateStart = new Date(`${previousWeekStart}T00:00:00Z`);
+  for (let offset = 0; offset < 14; offset += 1) {
+    const date = new Date(candidateStart);
+    date.setUTCDate(date.getUTCDate() + offset);
+    const dateString = date.toISOString().split("T")[0];
+    const weekday = date.getUTCDay();
+    const isCurrentWeek = dateString >= weekStartDate;
+    const isPriorOverdueWindow = dateString < weekStartDate && dateString <= todayStr;
+    // Current week vs. prior-week lookback intentionally use DIFFERENT
+    // truth: a schedule change made TODAY governs the WHOLE current
+    // week, including days that already happened earlier this same
+    // week (e.g. a client configured for Wed+Sun on a Tuesday must
+    // still see this week's Sunday window, even though Sunday's date
+    // is chronologically before the schedule row's effectiveFrom) — so
+    // "currently active" (effectiveTo IS NULL) is the right test for
+    // the current week, not a point-in-time effectiveFrom<=date check.
+    // The prior-week overdue lookback is different: it must NOT let
+    // today's schedule change retroactively invent an overdue day for
+    // a week that already ended before the change — that window uses
+    // the strict, point-in-time effectiveFrom/effectiveTo truth.
+    // The prior-week overdue lookback is a new-schedule-feature
+    // enhancement — it must NOT apply to the legacy single-day
+    // fallback (no client_check_in_schedule rows at all), which is
+    // documented and tested to match pre-multi-day behavior
+    // byte-for-byte: exactly one window, for the current week only.
+    // Without this gate, a legacy client who missed last week's single
+    // check-in would suddenly see a second, previously-nonexistent
+    // "overdue" card — a real behavior change for every single-day
+    // client, not just ones actually using the new schedule feature.
+    if (!scheduleState.configured) {
+      if (isCurrentWeek && legacyWeekday === weekday) candidateDates.push(dateString);
+      continue;
+    }
+    const required = scheduleHistory.some((row) => {
+      if (row.weekday !== weekday) return false;
+      if (isCurrentWeek) return row.effectiveTo === null;
+      return row.effectiveFrom <= dateString && (row.effectiveTo === null || row.effectiveTo > dateString);
+    });
+    if (required && (isCurrentWeek || isPriorOverdueWindow)) candidateDates.push(dateString);
+  }
 
-  const today = new Date().toISOString().split("T")[0];
-  const isOverdue = today > dueDate;
+  if (candidateDates.length === 0) return [];
 
-  // Check if a check-in already exists for this week
-  const [existing] = await db
+  const existingRows = await db
     .select({
       id: weeklyCheckIns.id,
+      scheduledDate: weeklyCheckIns.scheduledDate,
       weekStartDate: weeklyCheckIns.weekStartDate,
       status: weeklyCheckIns.status,
       submittedAt: weeklyCheckIns.submittedAt,
@@ -188,62 +350,101 @@ export async function getCurrentCheckInWindow(
     .where(
       and(
         eq(weeklyCheckIns.clientId, clientId),
-        eq(weeklyCheckIns.weekStartDate, weekStartDate),
+        inArray(weeklyCheckIns.scheduledDate, candidateDates),
       ),
-    )
-    .limit(1);
+    );
+  const byScheduledDate = new Map(existingRows.map((r) => [r.scheduledDate, r]));
 
-  return {
-    weekStartDate,
-    weekEndDate,
-    dueDate,
-    isOverdue,
-    existingCheckIn: existing
-      ? {
-          id: existing.id,
-          weekStartDate: existing.weekStartDate,
-          status: existing.status,
-          submittedAt: existing.submittedAt,
-          coachReviewedAt: existing.coachReviewedAt,
-          hasCoachResponse: !!existing.coachResponse,
-        }
-      : null,
-  };
+  return candidateDates.map((scheduledDate) => {
+    const weekday = new Date(`${scheduledDate}T12:00:00Z`).getUTCDay() as Weekday;
+    const existing = byScheduledDate.get(scheduledDate) ?? null;
+    const windowWeekStart = getWeekStartDateForCalendarDate(scheduledDate);
+    return {
+      scheduledDate,
+      weekday,
+      weekStartDate: windowWeekStart,
+      weekEndDate: getWeekEndDate(new Date(`${windowWeekStart}T00:00:00Z`)),
+      isToday: scheduledDate === todayStr,
+      isOverdue: !existing && scheduledDate < todayStr,
+      existingCheckIn: existing
+        ? {
+            id: existing.id,
+            scheduledDate: existing.scheduledDate,
+            weekStartDate: existing.weekStartDate,
+            status: existing.status,
+            submittedAt: existing.submittedAt,
+            coachReviewedAt: existing.coachReviewedAt,
+            hasCoachResponse: !!existing.coachResponse,
+          }
+        : null,
+    };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
 // CREATE OR UPDATE DRAFT
 //
-// Upserts a draft check-in for the current week.
-// If a check-in already exists in 'submitted', 'in_review', or
-// 'reviewed' status, returns an error — cannot re-open via this path.
+// Upserts a draft check-in for a SPECIFIC occurrence (scheduledDate)
+// — the caller (a Portal action) determines which required occurrence
+// the client is starting/continuing, so a Wednesday draft can never
+// collide with or overwrite a Sunday draft/submission even in the
+// same week.
+//
+// Atomic upsert keyed on the (clientId, scheduledDate) unique index —
+// a concurrent double-click / two-tab "Start Check-In" on the SAME
+// occurrence races safely at the DB level (ON CONFLICT), not via a
+// select-then-insert TOCTOU window. The WHERE guard on the conflict
+// clause means a row that's already submitted/reviewed is never
+// silently resurrected to draft by this call, even under a race.
 // ─────────────────────────────────────────────────────────────
 
 export async function createOrUpdateDraftCheckIn(
   clientId: string,
+  scheduledDate: string,
   data: CheckInDraftData,
 ): Promise<{ ok: true; checkInId: string } | { ok: false; error: string }> {
   const db = getDb();
 
   // Verify client exists
   const [client] = await db
-    .select({ id: users.id })
+    .select({ id: users.id, timezone: clientProfiles.timezone })
     .from(users)
+    .leftJoin(clientProfiles, eq(clientProfiles.userId, users.id))
     .where(and(eq(users.id, clientId), eq(users.role, "client")))
     .limit(1);
 
   if (!client) return { ok: false, error: "Client not found." };
 
-  const weekStartDate = getWeekStartDate();
+  const [enrollment] = await db
+    .select({ id: coachingEnrollments.id, checkInDayOfWeek: coachingEnrollments.checkInDayOfWeek })
+    .from(coachingEnrollments)
+    .where(
+      and(
+        eq(coachingEnrollments.clientId, clientId),
+        eq(coachingEnrollments.status, "active"),
+      ),
+    )
+    .limit(1);
 
-  // Check for existing check-in
+  const occurrenceError = await validateOccurrenceDate(
+    clientId,
+    scheduledDate,
+    client.timezone ?? "America/Chicago",
+    enrollment?.checkInDayOfWeek,
+  );
+  if (occurrenceError) return { ok: false, error: occurrenceError };
+
+  // Fast-path check — the common case where no race is happening.
+  // The ON CONFLICT WHERE guard below is the actual authoritative
+  // protection; this just gives non-racing callers a precise message
+  // without an extra round-trip in the common path.
   const [existing] = await db
     .select({ id: weeklyCheckIns.id, status: weeklyCheckIns.status })
     .from(weeklyCheckIns)
     .where(
       and(
         eq(weeklyCheckIns.clientId, clientId),
-        eq(weeklyCheckIns.weekStartDate, weekStartDate),
+        eq(weeklyCheckIns.scheduledDate, scheduledDate),
       ),
     )
     .limit(1);
@@ -255,19 +456,9 @@ export async function createOrUpdateDraftCheckIn(
     };
   }
 
-  // Look up active enrollment for enrollmentId
-  const [enrollment] = await db
-    .select({ id: coachingEnrollments.id })
-    .from(coachingEnrollments)
-    .where(
-      and(
-        eq(coachingEnrollments.clientId, clientId),
-        eq(coachingEnrollments.status, "active"),
-      ),
-    )
-    .limit(1);
+  const weekStartDate = getWeekStartDateForCalendarDate(scheduledDate);
 
-  const updateData = {
+  const fields = {
     bodyWeightLbs: data.bodyWeightLbs ?? null,
     waistInches: data.waistInches ?? null,
     averageSleepHours: data.averageSleepHours ?? null,
@@ -286,26 +477,47 @@ export async function createOrUpdateDraftCheckIn(
     updatedAt: new Date(),
   };
 
-  if (existing) {
-    await db
-      .update(weeklyCheckIns)
-      .set(updateData)
-      .where(eq(weeklyCheckIns.id, existing.id));
-    return { ok: true, checkInId: existing.id };
-  }
-
-  const [newCheckIn] = await db
+  const [row] = await db
     .insert(weeklyCheckIns)
     .values({
       clientId,
       enrollmentId: enrollment?.id ?? null,
+      scheduledDate,
       weekStartDate,
       status: "draft",
-      ...updateData,
+      ...fields,
+    })
+    .onConflictDoUpdate({
+      target: [weeklyCheckIns.clientId, weeklyCheckIns.scheduledDate],
+      set: fields,
+      // Postgres ON CONFLICT ... WHERE: the UPDATE only fires when the
+      // existing row's status is still 'draft'. Otherwise this
+      // effectively no-ops for that row and RETURNING yields nothing.
+      setWhere: eq(weeklyCheckIns.status, "draft"),
     })
     .returning({ id: weeklyCheckIns.id });
 
-  return { ok: true, checkInId: newCheckIn.id };
+  if (row) return { ok: true, checkInId: row.id };
+
+  // The fast-path check above passed, but a concurrent request
+  // changed the row's status before this upsert committed. Re-check
+  // to report the accurate current state rather than a generic error.
+  const [current] = await db
+    .select({ id: weeklyCheckIns.id, status: weeklyCheckIns.status })
+    .from(weeklyCheckIns)
+    .where(
+      and(
+        eq(weeklyCheckIns.clientId, clientId),
+        eq(weeklyCheckIns.scheduledDate, scheduledDate),
+      ),
+    )
+    .limit(1);
+  return {
+    ok: false,
+    error: current
+      ? `This check-in has already been ${current.status === "submitted" ? "submitted" : "reviewed"}. It cannot be edited.`
+      : "Failed to save check-in. Please try again.",
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -322,7 +534,12 @@ export async function submitCheckIn(
   const db = getDb();
 
   const [checkIn] = await db
-    .select({ id: weeklyCheckIns.id, status: weeklyCheckIns.status, weekStartDate: weeklyCheckIns.weekStartDate })
+    .select({
+      id: weeklyCheckIns.id,
+      status: weeklyCheckIns.status,
+      scheduledDate: weeklyCheckIns.scheduledDate,
+      weekStartDate: weeklyCheckIns.weekStartDate,
+    })
     .from(weeklyCheckIns)
     .where(
       and(
@@ -364,24 +581,29 @@ export async function submitCheckIn(
     return { ok: true };
   }
 
-  // Timeline event — no draft content is included.
+  // Timeline event — no draft content is included. Uses the specific
+  // scheduledDate, not just the week, so two occurrences submitted in
+  // the same week (e.g. Wednesday + Sunday) produce distinguishable
+  // events rather than two identical "Week of X" entries.
   await db.insert(timelineEvents).values({
     clientId,
     eventType: "check_in_submitted",
     actorRole: "client",
     title: "Weekly check-in submitted",
-    description: `Week of ${checkIn.weekStartDate}`,
+    description: `${checkIn.scheduledDate} (week of ${checkIn.weekStartDate})`,
     occurredAt: now,
   });
 
   // Non-fatal — see notifyCheckInSubmitted's own comment. Guarded by
   // the same "status actually just transitioned" branch as the
   // timeline event above, so a concurrent double-submit can't reach
-  // this twice.
+  // this twice. Every occurrence submission fires its own notification
+  // independently — a Wed+Sun client's coach is notified twice, once
+  // per occurrence, never collapsed into one.
   await notifyCheckInSubmitted({
     clientId,
     checkInId,
-    weekStartDate: checkIn.weekStartDate,
+    scheduledDate: checkIn.scheduledDate,
   });
 
   return { ok: true };
@@ -402,6 +624,7 @@ export async function listClientCheckIns(
   const rows = await db
     .select({
       id: weeklyCheckIns.id,
+      scheduledDate: weeklyCheckIns.scheduledDate,
       weekStartDate: weeklyCheckIns.weekStartDate,
       status: weeklyCheckIns.status,
       submittedAt: weeklyCheckIns.submittedAt,
@@ -410,10 +633,11 @@ export async function listClientCheckIns(
     })
     .from(weeklyCheckIns)
     .where(eq(weeklyCheckIns.clientId, clientId))
-    .orderBy(desc(weeklyCheckIns.weekStartDate));
+    .orderBy(desc(weeklyCheckIns.scheduledDate));
 
   return rows.map((r) => ({
     id: r.id,
+    scheduledDate: r.scheduledDate,
     weekStartDate: r.weekStartDate,
     status: r.status,
     submittedAt: r.submittedAt,
@@ -440,6 +664,7 @@ export async function getClientCheckInDetail(
     .select({
       id: weeklyCheckIns.id,
       clientId: weeklyCheckIns.clientId,
+      scheduledDate: weeklyCheckIns.scheduledDate,
       weekStartDate: weeklyCheckIns.weekStartDate,
       status: weeklyCheckIns.status,
       submittedAt: weeklyCheckIns.submittedAt,
@@ -478,6 +703,7 @@ export async function getClientCheckInDetail(
   return {
     id: row.id,
     clientId: row.clientId,
+    scheduledDate: row.scheduledDate,
     weekStartDate: row.weekStartDate,
     status: row.status,
     submittedAt: row.submittedAt,
@@ -522,6 +748,7 @@ export async function getPreviousCheckIn(
     .select({
       id: weeklyCheckIns.id,
       clientId: weeklyCheckIns.clientId,
+      scheduledDate: weeklyCheckIns.scheduledDate,
       weekStartDate: weeklyCheckIns.weekStartDate,
       status: weeklyCheckIns.status,
       submittedAt: weeklyCheckIns.submittedAt,
@@ -551,17 +778,18 @@ export async function getPreviousCheckIn(
       and(
         eq(weeklyCheckIns.clientId, clientId),
         eq(weeklyCheckIns.status, "reviewed"),
+        lt(weeklyCheckIns.weekStartDate, beforeWeekStartDate),
       ),
     )
-    .orderBy(desc(weeklyCheckIns.weekStartDate))
+    .orderBy(desc(weeklyCheckIns.scheduledDate))
     .limit(1);
 
-  // Manual filter for "before" since we need to avoid complex sql<>
-  if (!row || row.weekStartDate >= beforeWeekStartDate) return null;
+  if (!row) return null;
 
   return {
     id: row.id,
     clientId: row.clientId,
+    scheduledDate: row.scheduledDate,
     weekStartDate: row.weekStartDate,
     status: row.status,
     submittedAt: row.submittedAt,

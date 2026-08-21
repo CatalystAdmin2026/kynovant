@@ -14,6 +14,8 @@ import { requireCoachOrAdmin, assertCoachOwnsClient } from "@/lib/auth/guards";
 import { getDb } from "@/lib/db/client";
 import { clientGoals, type GoalType } from "@/lib/db/schema-profile";
 import { archiveAndAssignProgram } from "@/lib/db/coach-program-assignment-service";
+import { setClientSchedule } from "@/lib/db/check-in-schedule-service";
+import { validateScheduleWeekdays } from "@/lib/checkin/schedule";
 
 // ─────────────────────────────────────────────────────────────
 // AUTH HELPER
@@ -135,4 +137,44 @@ export async function archiveGoalAction(
 
   revalidatePath(`/hq/clients/${clientId}`);
   return { ok: true };
+}
+
+// ─────────────────────────────────────────────────────────────
+// CHECK-IN SCHEDULE ACTION
+//
+// The canonical (only) write path to client_check_in_schedule from
+// an authenticated request. Coach identity is derived entirely from
+// the session via assertCoachOwnsClientAction — the client never
+// supplies a coachId, and a coach who isn't enrolled with this
+// client (or a client-role caller entirely) is rejected before
+// setClientSchedule is ever reached.
+//
+// Validation happens here, at the action boundary, rather than
+// relying solely on setClientSchedule's own normalizeWeekdays — that
+// normalization is a defensive second layer for direct service
+// callers (seed scripts, tests), not a substitute for a clear,
+// client-facing error when a coach's request is malformed. [] is a
+// valid, intentional payload — "no required schedule" is a real,
+// explicitly-settable state, not an error.
+// ─────────────────────────────────────────────────────────────
+
+export async function setCheckInScheduleAction(
+  clientId: string,
+  weekdays: number[],
+): Promise<{ ok: boolean; error?: string }> {
+  if (!clientId) {
+    return { ok: false, error: "Missing client id." };
+  }
+
+  const validated = validateScheduleWeekdays(weekdays);
+  if (!validated.ok) return { ok: false, error: validated.error };
+
+  const auth = await assertCoachOwnsClientAction(clientId);
+  if (!auth.ok) return { ok: false, error: auth.error };
+
+  const result = await setClientSchedule(clientId, validated.weekdays);
+  if (result.ok) {
+    revalidatePath(`/hq/clients/${clientId}`);
+  }
+  return result;
 }

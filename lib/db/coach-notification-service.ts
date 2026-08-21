@@ -181,7 +181,11 @@ async function resolveActiveCoachForClient(
 export async function notifyCheckInSubmitted(params: {
   clientId: string;
   checkInId: string;
-  weekStartDate: string;
+  // The specific occurrence date (weekly_check_ins.scheduledDate),
+  // not just the week — a Wed+Sun client's coach gets two distinct
+  // notifications, each naming its own date, never collapsed into one
+  // ambiguous "week of X" for both.
+  scheduledDate: string;
 }): Promise<void> {
   const resolved = await resolveActiveCoachForClient(params.clientId);
   if (!resolved) return; // no active coach to notify (shouldn't happen for a real check-in, but never guess)
@@ -194,7 +198,7 @@ export async function notifyCheckInSubmitted(params: {
     resourceType: "check_in",
     resourceId: params.checkInId,
     title: "New check-in submitted",
-    body: `${who} submitted their check-in for the week of ${params.weekStartDate}.`,
+    body: `${who} submitted their check-in for ${params.scheduledDate}.`,
   });
 }
 
