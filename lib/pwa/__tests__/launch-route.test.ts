@@ -109,25 +109,28 @@ describe("P0 FIX — /app must never expose a raw server exception (digest 87707
     expect(tail).toContain("return NextResponse.redirect(`${origin}/login`);");
   });
 
-  it("wraps getPublicUser() in its own try/catch — a DB failure on an otherwise-valid session degrades to the existing null-row fallback, not a crash", () => {
+  it("wraps getPublicUser() in its own try/catch — a DB failure on an otherwise-valid session returns a controlled 503, not a guessed role", () => {
     const callIndex = LAUNCH_ROUTE.indexOf("dbUser = await getPublicUser(authUser.id);");
     expect(callIndex).toBeGreaterThan(-1);
     // That call site must itself be inside a try, with a catch that
-    // sets dbUser back to null rather than propagating the error.
+    // returns the controlled unavailable response rather than
+    // propagating the error or assigning a role.
     const precedingTry = LAUNCH_ROUTE.lastIndexOf("try {", callIndex);
     const followingCatch = LAUNCH_ROUTE.indexOf("} catch {", callIndex);
     expect(precedingTry).toBeGreaterThan(-1);
     expect(followingCatch).toBeGreaterThan(callIndex);
-    const catchBody = LAUNCH_ROUTE.slice(followingCatch, followingCatch + 60);
-    expect(catchBody).toContain("dbUser = null;");
+    const catchBody = LAUNCH_ROUTE.slice(followingCatch, followingCatch + 120);
+    expect(catchBody).toContain("workspaceUnavailableResponse()");
+    expect(LAUNCH_ROUTE).toContain("status: 503");
   });
 
-  it("a getPublicUser() failure can only ever degrade to the SAME lowest-privilege fallback already used for a legitimately-missing row — never a different, more-privileged path", () => {
-    // Exactly one role-resolution line in the whole file — the catch
-    // branch doesn't special-case anything, it just leaves dbUser
-    // null and falls through to the one existing line below.
+  it("keeps a definitive missing-row result distinct from a thrown DB failure", () => {
+    // The role fallback remains only after a successful query that
+    // returned no row; the error branch returns before this line.
     const roleLines = LAUNCH_ROUTE_CODE.match(/const role = dbUser\?\.role \?\? "client";/g) ?? [];
     expect(roleLines.length).toBe(1);
+    expect(LAUNCH_ROUTE_CODE.indexOf("workspaceUnavailableResponse()"))
+      .toBeLessThan(LAUNCH_ROUTE_CODE.indexOf('const role = dbUser?.role ?? "client";'));
   });
 
   it("signOut() is also guarded — a failed cleanup call cannot prevent the access_denied redirect from completing", () => {

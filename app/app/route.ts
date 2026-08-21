@@ -83,6 +83,44 @@ import { cookies } from "next/headers";
 import { getPublicUser } from "@/lib/auth/sync";
 import { resolvePostLoginRedirect } from "@/lib/auth/redirect";
 
+function workspaceUnavailableResponse(): NextResponse {
+  return new NextResponse(
+    `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Kynovant is reconnecting</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #080909; color: #f0efeb; font-family: system-ui, -apple-system, sans-serif; text-align: center; }
+      main { width: min(100%, 360px); }
+      .mark { color: #c9a24d; font-size: 11px; font-weight: 700; letter-spacing: .28em; text-transform: uppercase; }
+      h1 { margin: 22px 0 10px; font-size: 20px; font-weight: 650; }
+      p { margin: 0; color: rgba(240,239,235,.55); font-size: 13px; line-height: 1.7; }
+      a { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; margin-top: 28px; padding: 0 22px; background: #c9a24d; color: #080909; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-decoration: none; text-transform: uppercase; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark">Kynovant</div>
+      <h1>Kynovant is reconnecting.</h1>
+      <p>We couldn't load your workspace just yet.</p>
+      <a href="/app">Try Again</a>
+    </main>
+  </body>
+</html>`,
+    {
+      status: 503,
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    },
+  );
+}
+
 export async function GET(request: NextRequest) {
   const origin = new URL(request.url).origin;
 
@@ -123,17 +161,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(`${origin}/login`);
     }
 
-    // A real, valid Supabase session exists past this point.
-    // getPublicUser() can still fail for reasons that have nothing to
-    // do with THIS user's account — see the file header for the
-    // proven root cause. Never let that crash the response: fall back
-    // to the exact same safe default already used below for a
-    // legitimately-missing row.
-    let dbUser: Awaited<ReturnType<typeof getPublicUser>> | null = null;
+    // A real, valid Supabase session exists past this point. A thrown
+    // public.users query means the database could not answer; it is not
+    // evidence that this user has no row. Never guess a role on that path.
+    let dbUser: Awaited<ReturnType<typeof getPublicUser>> | null;
     try {
       dbUser = await getPublicUser(authUser.id);
     } catch {
-      dbUser = null;
+      return workspaceUnavailableResponse();
     }
 
     if (dbUser?.status === "suspended" || dbUser?.status === "archived") {
@@ -151,10 +186,11 @@ export async function GET(request: NextRequest) {
     const redirectPath = resolvePostLoginRedirect(null, role);
     return NextResponse.redirect(`${origin}${redirectPath}`);
   } catch {
-    // Anything else unanticipated — cookie parsing, session
-    // resolution, or a failure mode not enumerated above. A cold
-    // launch must never expose a raw server exception; fail to a
-    // plain sign-in screen instead.
+  // Anything else unanticipated — cookie parsing, session
+  // resolution, or a failure mode not enumerated above. A cold
+  // launch must never expose a raw server exception; fail to a
+  // plain sign-in screen instead because no valid session was
+  // established at this boundary.
     return NextResponse.redirect(`${origin}/login`);
   }
 }
