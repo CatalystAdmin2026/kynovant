@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import HQSignOutButton from "./HQSignOutButton";
+import { useHQUnreadCount } from "./HQUnreadCountProvider";
 
 interface SearchResult {
   id: string;
@@ -86,7 +87,7 @@ export default function HQTopBar() {
   const [notifications, setNotifications] = useState<CoachNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
-  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const { unreadMessageCount } = useHQUnreadCount();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const hasSearchQuery = query.trim().length >= 2;
@@ -102,23 +103,6 @@ export default function HQTopBar() {
 
   useEffect(() => {
     void loadNotifications();
-  }, []);
-
-  // Simple polling MVP (see lib/db/messaging-service.ts's top-of-file
-  // comment) — no realtime infra for the unread-message badge either.
-  useEffect(() => {
-    async function loadUnreadMessageCount() {
-      try {
-        const res = await fetch("/api/internal/hq/messages/unread-count");
-        const json = await res.json();
-        if (res.ok && json.ok) setUnreadMessageCount(Number(json.unreadCount ?? 0));
-      } catch {
-        // Badge just stays at its last known value — not worth surfacing.
-      }
-    }
-    void loadUnreadMessageCount();
-    const interval = window.setInterval(loadUnreadMessageCount, 20000);
-    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {

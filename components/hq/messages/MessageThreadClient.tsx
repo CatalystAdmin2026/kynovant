@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Loader2, Send } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui";
+import { useHQUnreadCount } from "@/components/hq/HQUnreadCountProvider";
 
 interface ThreadMessage {
   id: string;
@@ -50,6 +51,7 @@ export default function MessageThreadClient({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { refreshUnreadMessageCount } = useHQUnreadCount();
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastMessageCountRef = useRef(0);
 
@@ -62,7 +64,9 @@ export default function MessageThreadClient({
         setMessages(json.messages);
         const hasUnreadIncoming = json.messages.some((m: ThreadMessage) => !m.isMine && !m.readAt);
         if (hasUnreadIncoming && !isAdmin) {
-          void fetch(`/api/internal/hq/messages/${conversationId}`, { method: "PATCH" });
+          void fetch(`/api/internal/hq/messages/${conversationId}`, { method: "PATCH" }).then(() => {
+            refreshUnreadMessageCount();
+          });
         }
       } else if (res.status === 404) {
         setError("not_found");
@@ -70,13 +74,14 @@ export default function MessageThreadClient({
     } finally {
       setLoading(false);
     }
-  }, [conversationId, isAdmin]);
+  }, [conversationId, isAdmin, refreshUnreadMessageCount]);
 
   useEffect(() => {
     void loadThread();
+    refreshUnreadMessageCount();
     const interval = setInterval(() => void loadThread(), 4000);
     return () => clearInterval(interval);
-  }, [loadThread]);
+  }, [loadThread, refreshUnreadMessageCount]);
 
   useEffect(() => {
     if (messages.length !== lastMessageCountRef.current) {

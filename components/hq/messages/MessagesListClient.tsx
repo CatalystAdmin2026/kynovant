@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { Loader2, MessageSquare, Plus, Search } from "lucide-react";
 import HQPageHeader from "@/components/hq/HQPageHeader";
 import { Button, Card, EmptyState, Modal } from "@/components/ui";
+import { useHQUnreadCount } from "@/components/hq/HQUnreadCountProvider";
 
 interface ConversationSummary {
   id: string;
@@ -54,6 +55,7 @@ function initials(name: string): string {
 
 export default function MessagesListClient({ isAdmin }: { isAdmin: boolean }) {
   const router = useRouter();
+  const { refreshUnreadMessageCount } = useHQUnreadCount();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -74,9 +76,10 @@ export default function MessagesListClient({ isAdmin }: { isAdmin: boolean }) {
 
   useEffect(() => {
     void loadConversations();
+    refreshUnreadMessageCount();
     const interval = setInterval(() => void loadConversations(), 15000);
     return () => clearInterval(interval);
-  }, [loadConversations]);
+  }, [loadConversations, refreshUnreadMessageCount]);
 
   async function openCompose() {
     setComposeOpen(true);
