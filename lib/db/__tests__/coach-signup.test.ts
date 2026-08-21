@@ -106,11 +106,33 @@ describe("POST /api/coach-signup — provisioning", () => {
     // worktrees exercise this same endpoint against the same project.
     // That's Supabase's own defense-in-depth working correctly, not a
     // defect in this route (which already turns it into a clean 422 —
-    // see the route's inviteUserByEmail error branch); skip rather than
+    // see the route's generateLink error branch); skip rather than
     // false-fail this specific assertion when the shared quota is hit.
     // The DB-level provisioning logic itself is proven independently by
     // the "provisionInvitedCoach" suite above, which never sends email.
     if (res.status === 422 && typeof body.error === "string") {
+      ctx.skip();
+      return;
+    }
+
+    // P0 FIX (Coach Invitation Auto-Consume) follow-up: this route now
+    // sends its OWN Kynovant-branded email via Resend (see
+    // sendCoachSignupEmail in the route) instead of letting Supabase
+    // silently send its own — the same dependency
+    // sendClientInviteEmail/sendFounderInviteEmail already carry
+    // elsewhere in this codebase. KYNOVANT_RESEND_* is a real Vercel
+    // production credential this repo's local/.env.staging.local
+    // snapshots do not carry (confirmed: absent from every worktree's
+    // env files checked, including the ones that already exercise the
+    // proven-in-production client-invite email path) — not a defect in
+    // this route. Skip here for the same reason as the 422 branch
+    // above; the DB-level provisioning logic is proven independently by
+    // the "provisionInvitedCoach" suite, and the route's OWN safe-link
+    // construction (never Supabase's action_link) is proven by
+    // lib/auth/__tests__/coach-signup-security.test.ts's source-level
+    // assertions plus lib/db/__tests__/coach-invite-link-security.test.ts's
+    // real-Supabase mechanics proof — neither requires Resend.
+    if (res.status === 502 && typeof body.error === "string" && body.error.includes("confirmation email")) {
       ctx.skip();
       return;
     }

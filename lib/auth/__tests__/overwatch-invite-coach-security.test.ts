@@ -132,9 +132,49 @@ describe("app/api/internal/overwatch/invite-coach/route.ts — no parallel onboa
     );
   });
 
-  it("uses /auth/callback with a signed invitation handoff marker, preserving the existing callback route", () => {
-    expect(route).toContain("/auth/callback?type=invite&handoff=");
-    expect(route).toContain("signInviteHandoffToken(email)");
+  it("P0 FIX (Coach Invitation Auto-Consume): never emails Supabase's own single-use action_link — every emailed link goes through this route's own buildAcceptLink to /auth/accept, using only the raw hashed_token", () => {
+    // Scoped to actual code (strip line comments first) — this file's
+    // own header/inline comments legitimately discuss the OLD
+    // vulnerable field name in prose while explaining the fix; only a
+    // literal CODE reference to it would be a regression.
+    const code = route
+      .split("\n")
+      .map((line) => line.replace(/\/\/.*/, ""))
+      .join("\n");
+    expect(code).not.toContain("data.properties.action_link");
+    expect(code).not.toContain("data.properties?.action_link");
+    expect(code).not.toMatch(/inviteUserByEmail/);
+    expect(route).toContain("function buildAcceptLink(siteOrigin: string, hashedToken: string): string {");
+    expect(route).toMatch(/new URL\("\/auth\/accept", siteOrigin\)/);
+    expect(route).toContain('url.searchParams.set("type", "invite")');
+    expect(route).toContain('url.searchParams.set("token_hash", hashedToken)');
+    // Every generateLink call site (fresh invite + resend) checks for
+    // hashed_token, never action_link, before treating the call as
+    // successful.
+    expect(route).toContain("data.properties?.hashed_token");
+  });
+
+  it("no longer relies on the signed invitation handoff / /auth/callback redirect chain — the safe /auth/accept + verifyOtp path needs no handoff token", () => {
+    expect(route).not.toContain("signInviteHandoffToken");
+    expect(route).not.toMatch(/import \{[^}]*\bsignInviteHandoffToken\b/);
+  });
+
+  it("resendPendingInvite uses generateLink (not inviteUserByEmail) and returns an actionLink built from this route's own buildAcceptLink, so a resend is exactly as safe as a fresh invite", () => {
+    const fnStart = route.indexOf("async function resendPendingInvite(");
+    const fnEnd = route.indexOf("\n}\n", fnStart);
+    const fnBody = route.slice(fnStart, fnEnd);
+    expect(fnStart).toBeGreaterThan(-1);
+    expect(fnBody).toContain("admin.auth.admin.generateLink(");
+    expect(fnBody).not.toContain("inviteUserByEmail");
+    expect(fnBody).toContain("data.properties?.hashed_token");
+    expect(fnBody).toContain("buildAcceptLink(siteOrigin, data.properties.hashed_token)");
+  });
+
+  it("both resend call sites actually send the branded email using resendPendingInvite's actionLink — a resend is not silently reliant on Supabase's own template anymore", () => {
+    const occurrences = route.split("sendFounderInviteEmail({").length - 1;
+    // 3 call sites: orphan-invite recovery, pending-invite resend, fresh invite.
+    expect(occurrences).toBe(3);
+    expect(route).toMatch(/actionLink:\s*resend\.actionLink/);
   });
 
   it("never creates a Stripe Checkout Session, Customer, or subscription — trial/billing stays exclusively in the existing post-login flow", () => {

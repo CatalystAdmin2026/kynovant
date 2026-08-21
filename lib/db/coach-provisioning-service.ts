@@ -16,11 +16,13 @@
 //
 // SECURITY INVARIANT (unchanged from before this extraction): role is
 // ALWAYS the hardcoded literal "coach" below — never taken from
-// request input, user_metadata, or any caller-supplied value. Both
-// call sites already create the Supabase Auth user via
-// admin.auth.admin.inviteUserByEmail() before calling this function,
-// so `userId` here is always a fresh ID Supabase itself just minted,
-// never a client-supplied UUID.
+// request input, user_metadata, or any caller-supplied value. Every
+// call site already creates the Supabase Auth user via
+// admin.auth.admin.generateLink({ type: "invite" }) (see each route's
+// own header comment for why this is generateLink, not
+// inviteUserByEmail, as of the Coach Invitation Auto-Consume fix)
+// before calling this function, so `userId` here is always a fresh ID
+// Supabase itself just minted, never a client-supplied UUID.
 //
 // Idempotent by construction (same as the pre-extraction code):
 //   - users: ON CONFLICT (id) — the on_auth_user_created trigger may

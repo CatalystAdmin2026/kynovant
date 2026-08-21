@@ -29,21 +29,29 @@
 // domain app/api/applications/route.ts already uses) instead of
 // Supabase Auth's own generic invite template, so the founder's
 // invitation reads as a personal outreach ("Jermaine invited you...")
-// rather than a generic system email. To do that without duplicating
-// account creation, it uses admin.auth.admin.generateLink({ type:
-// "invite" }) instead of inviteUserByEmail() — generateLink performs
-// the IDENTICAL Auth-user-creation side effect but returns the action
-// link instead of auto-sending Supabase's own template, which is
-// exactly the same technique already used elsewhere in this project's
-// own operational history for magic-link/recovery links (never sends
-// an email itself). The returned link still resolves through
-// /auth/callback exactly like every other invite in this codebase.
+// rather than a generic system email.
 //
-// A still-pending invite is safely resendable through the existing
-// inviteUserByEmail path. This is the same behavior already used by
-// app/api/coach-signup/route.ts for unconfirmed users. It intentionally
-// uses Supabase's established invite email on retry rather than relying
-// on unverified generateLink behavior for an existing Auth user.
+// P0 FIX (Coach Invitation Auto-Consume): every call to
+// admin.auth.admin.generateLink({ type: "invite" }) below uses ONLY
+// data.properties.hashed_token, never data.properties.action_link —
+// the SAME root-cause fix already shipped for client invitations (see
+// app/api/internal/clients/route.ts's buildAcceptLink header comment).
+// Supabase's action_link is single-use and is consumed by the first
+// bare HTTP GET to it — including an email-security scanner's
+// automated prefetch, not just the invited coach's own click — which
+// silently burned the token before a real human ever saw it. This
+// route (and its resend path, which used to rely on Supabase's own
+// inviteUserByEmail() — the SAME vulnerable class, via Supabase's
+// default template instead of even this route's own branded one) now
+// builds its own link to this app's inert /auth/accept page instead,
+// carrying only the raw token_hash as a static query string. Nothing
+// is verified until the coach's own explicit "Accept Invitation"
+// click — see app/auth/accept/page.tsx and
+// app/api/auth/verify-invite/route.ts, the exact same shared,
+// role-agnostic activation layer client invitations already use.
+// generateLink still creates the Supabase Auth user identically to
+// inviteUserByEmail (same side effect, different response shape); the
+// eventual /setup-password → /auth/role-redirect path is unchanged.
 // ─────────────────────────────────────────────────────────────
 
 import { type NextRequest, NextResponse } from "next/server";
@@ -58,7 +66,6 @@ import {
   recordAcquisitionSignup,
 } from "@/lib/db/coach-acquisition-service";
 import { getKynovantResendConfig } from "@/lib/email/resend-brand-config";
-import { signInviteHandoffToken } from "@/lib/auth/onboarding-token";
 import { getOverwatchFounderProfile } from "@/lib/db/overwatch-service";
 import { grantComplimentaryAccess } from "@/lib/db/coach-complimentary-access-service";
 
@@ -90,14 +97,40 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_NAME_LENGTH = 200;
 const MAX_EMAIL_LENGTH = 200;
 
-async function resendPendingInvite(email: string): Promise<{ ok: true; userId: string } | { ok: false }> {
+// The one and only place this route constructs an invite/accept link —
+// see this file's header comment for why this must never be
+// Supabase's own action_link. Identical shape to
+// app/api/internal/clients/route.ts's own buildAcceptLink — kept as
+// this route's own local copy rather than a shared import, per this
+// codebase's established per-domain-copy convention for these small,
+// security-sensitive link builders (see e.g. the storage-service
+// files' independent validation/signing code, each kept local to its
+// own domain rather than shared).
+function buildAcceptLink(siteOrigin: string, hashedToken: string): string {
+  const url = new URL("/auth/accept", siteOrigin);
+  url.searchParams.set("type", "invite");
+  url.searchParams.set("token_hash", hashedToken);
+  return url.toString();
+}
+
+// generateLink (not inviteUserByEmail) — creates/refreshes the
+// Supabase Auth user's pending invite identically, but returns a raw
+// token_hash instead of Supabase auto-sending its own generic
+// template embedding the unsafe action_link. The caller sends its own
+// branded email using the returned actionLink (this app's own
+// /auth/accept link) — see this file's header comment.
+async function resendPendingInvite(
+  email: string,
+): Promise<{ ok: true; userId: string; actionLink: string } | { ok: false }> {
   const admin = createAdminClient();
   const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.kynovant.com";
-  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-    redirectTo: `${siteOrigin}/auth/callback?type=invite&handoff=${encodeURIComponent(signInviteHandoffToken(email))}`,
+  const { data, error } = await admin.auth.admin.generateLink({
+    type: "invite",
+    email,
+    options: { redirectTo: `${siteOrigin}/auth/callback` },
   });
-  if (error || !data.user) return { ok: false };
-  return { ok: true, userId: data.user.id };
+  if (error || !data.user || !data.properties?.hashed_token) return { ok: false };
+  return { ok: true, userId: data.user.id, actionLink: buildAcceptLink(siteOrigin, data.properties.hashed_token) };
 }
 
 function validate(body: InviteCoachPayload): string | null {
@@ -243,6 +276,11 @@ export async function POST(req: NextRequest) {
   const email = body.email!.trim();
   const normalizedEmail = email.toLowerCase();
 
+  // Fetched once up front — every branch below (orphan-recovery
+  // resend, pending-invite resend, fresh invite) now sends its own
+  // branded email and needs the founder's display name.
+  const founderProfile = await getOverwatchFounderProfile(guard.dbUser.id);
+
   // Durable acquisition-lead record FIRST — required for
   // markAcquisitionInviteStatus() below to have a row to update (it's
   // a plain UPDATE keyed by normalizedEmail; it silently no-ops
@@ -288,6 +326,13 @@ export async function POST(req: NextRequest) {
         await provisionInvitedCoach({ userId: lead.accountUserId, email, displayName: firstName });
         const resend = await resendPendingInvite(email);
         if (!resend.ok) throw new Error("pending invite resend failed");
+        const sendResult = await sendFounderInviteEmail({
+          toEmail: email,
+          firstName,
+          founderFirstName: founderProfile.firstName,
+          actionLink: resend.actionLink,
+        });
+        if (!sendResult.ok) throw new Error("pending invite email send failed");
         if (isComplimentaryAccessType(body)) {
           await grantComplimentaryAccess({
             coachId: lead.accountUserId,
@@ -348,7 +393,15 @@ export async function POST(req: NextRequest) {
           // profile exists before the recipient can enter setup.
           await provisionInvitedCoach({ userId: existing.id, email, displayName: firstName });
           const resend = await resendPendingInvite(email);
-          if (resend.ok) {
+          const sendResult = resend.ok
+            ? await sendFounderInviteEmail({
+                toEmail: email,
+                firstName,
+                founderFirstName: founderProfile.firstName,
+                actionLink: resend.actionLink,
+              })
+            : null;
+          if (resend.ok && sendResult?.ok) {
             // Heals a prior attempt that provisioned the account and
             // sent (or re-sends) the invite but never persisted the
             // entitlement grant — e.g. the founder retrying after an
@@ -422,19 +475,21 @@ export async function POST(req: NextRequest) {
     const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.kynovant.com";
 
     // generateLink (not inviteUserByEmail) — creates the Supabase Auth
-    // user identically, but returns the action link instead of
-    // Supabase auto-sending its own generic template. Same redirectTo
-    // as every other invite path in this codebase; Supabase itself
-    // appends type=invite to the eventual /auth/callback redirect.
+    // user identically, but returns a raw token_hash instead of
+    // Supabase auto-sending its own generic template embedding the
+    // unsafe, auto-consuming action_link — see this file's header
+    // comment. redirectTo matches every other invite path in this
+    // codebase; it's functionally unused by the /auth/accept flow
+    // (nothing here ever lets Supabase redirect a browser through its
+    // own verify endpoint) but kept for consistency and as a required
+    // field.
     const { data, error } = await admin.auth.admin.generateLink({
       type: "invite",
       email,
-      options: {
-        redirectTo: `${siteOrigin}/auth/callback?type=invite&handoff=${encodeURIComponent(signInviteHandoffToken(email))}`,
-      },
+      options: { redirectTo: `${siteOrigin}/auth/callback` },
     });
 
-    if (error || !data.user || !data.properties?.action_link) {
+    if (error || !data.user || !data.properties?.hashed_token) {
       const message = error?.message?.toLowerCase() ?? "";
       if (message.includes("already") || message.includes("registered")) {
         await markAcquisitionInviteStatus({
@@ -453,7 +508,7 @@ export async function POST(req: NextRequest) {
     }
 
     const newUserId = data.user.id;
-    const actionLink = data.properties.action_link;
+    const actionLink = buildAcceptLink(siteOrigin, data.properties.hashed_token);
 
     // Persist the Auth identity on the already-created lead before the
     // remaining side effects. If provisioning fails, the durable lead
@@ -502,7 +557,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const founderProfile = await getOverwatchFounderProfile(guard.dbUser.id);
     const sendResult = await sendFounderInviteEmail({
       toEmail: email,
       firstName,

@@ -8,11 +8,15 @@
 // Deliberately reuses the exact same Supabase Auth Admin invite flow
 // as the founder-driven path (app/api/admin/coaches/route.ts) instead
 // of accepting a password over this public endpoint:
-//   1. admin.auth.admin.inviteUserByEmail() creates the Supabase Auth
-//      user and emails a magic link (type=invite).
-//   2. That link lands on /auth/callback?type=invite, which redirects
-//      to /setup-password — the coach proves control of the inbox
-//      AND sets their password there, in one already-hardened flow.
+//   1. admin.auth.admin.generateLink({ type: "invite" }) creates the
+//      Supabase Auth user; this route emails its own Kynovant-branded
+//      link (see buildAcceptLink/sendCoachSignupEmail below) rather
+//      than letting Supabase auto-send its own template.
+//   2. That link lands on this app's own /auth/accept page, whose
+//      explicit "Accept Invitation" click redeems the token via
+//      /api/auth/verify-invite, then redirects to /setup-password —
+//      the coach proves control of the inbox AND sets their password
+//      there, in one already-hardened flow.
 //   3. From there: /auth/role-redirect → role=coach, entitlement=none
 //      → /account-status → "Start 14-Day Free Trial" → Stripe
 //      Checkout (lib/billing/actions.ts) → HQ.
@@ -22,6 +26,17 @@
 // it (see the "IMPORTANT BILLING RULE" — a self-service form must
 // never itself trigger a charge or a trial before the visitor is
 // signed in and has read what starting a subscription means).
+//
+// P0 FIX (Coach Invitation Auto-Consume): this route used to call
+// admin.auth.admin.inviteUserByEmail(), which lets Supabase send its
+// own default "You have been invited" email embedding its own
+// single-use action_link — a link that's CONSUMED by the first bare
+// HTTP GET to it, including an automated email-security scanner's
+// prefetch, not only the real visitor's own click. That's the exact
+// root cause already proven and fixed for client invitations (see
+// app/api/internal/clients/route.ts's buildAcceptLink header comment).
+// This route now uses generateLink() + its own /auth/accept link
+// instead, the same shared, role-agnostic activation layer.
 //
 // SECURITY — this is the one deliberate, reviewed exception to the
 // "createAdminClient() call sites must sit behind requireAdmin/
@@ -53,9 +68,10 @@
 // ─────────────────────────────────────────────────────────────
 
 import { type NextRequest, NextResponse } from "next/server";
+import { Resend } from "resend";
 import { createAdminClient, AdminClientConfigError } from "@/lib/supabase/admin";
 import { provisionInvitedCoach } from "@/lib/db/coach-provisioning-service";
-import { signInviteHandoffToken } from "@/lib/auth/onboarding-token";
+import { getKynovantResendConfig } from "@/lib/email/resend-brand-config";
 import {
   findExistingAccountByEmail,
   recordSignupAttempt,
@@ -105,6 +121,114 @@ function validate(body: SignupPayload): string | null {
   }
   if (body.email.trim().length > MAX_EMAIL_LENGTH) return "Email is too long.";
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// ACCEPT LINK + BRANDED EMAIL — own local copy, same shape as
+// app/api/internal/clients/route.ts's / app/api/internal/overwatch/
+// invite-coach/route.ts's buildAcceptLink, per this codebase's
+// established per-domain-copy convention for these small,
+// security-sensitive link builders.
+// ─────────────────────────────────────────────────────────────
+
+function buildAcceptLink(siteOrigin: string, hashedToken: string): string {
+  const url = new URL("/auth/accept", siteOrigin);
+  url.searchParams.set("type", "invite");
+  url.searchParams.set("token_hash", hashedToken);
+  return url.toString();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Non-fatal to account creation if it fails — the Auth user + coach
+// role are already provisioned by the time this runs, so a Resend
+// outage never blocks the account from existing, only this email's
+// delivery (same posture as sendClientInviteEmail/
+// sendFounderInviteEmail elsewhere in this codebase). Self-service
+// copy — no "X invited you" personalization, since there's no
+// inviter here.
+async function sendCoachSignupEmail(input: {
+  toEmail: string;
+  firstName: string;
+  actionLink: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const config = getKynovantResendConfig();
+  if (!config) {
+    return { ok: false, error: "Kynovant email is not configured (KYNOVANT_RESEND_* env vars missing)." };
+  }
+  const { apiKey, fromEmail } = config;
+  const safeFirstName = escapeHtml(input.firstName);
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Confirm your Kynovant account</title>
+</head>
+<body style="margin:0;padding:0;background:#080909;font-family:Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#080909;padding:40px 24px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;">
+          <tr><td style="height:2px;background:#C9A24D;"></td></tr>
+          <tr>
+            <td style="background:#0d0e0f;padding:32px 32px 8px;">
+              <p style="margin:0 0 18px;font-size:10px;letter-spacing:0.4em;text-transform:uppercase;color:#C9A24D;font-weight:600;">Kynovant</p>
+              <p style="margin:0 0 4px;font-size:15px;color:#e5e7eb;">${safeFirstName},</p>
+              <p style="margin:0 0 22px;font-size:15px;line-height:1.6;color:#d1d5db;">
+                Confirm your email to finish setting up your Kynovant coach account and start your 14-day free trial.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#0d0e0f;padding:0 32px 32px;">
+              <a href="${input.actionLink}"
+                 style="display:inline-block;background:#C9A24D;color:#000000;padding:13px 28px;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;text-decoration:none;">
+                Confirm &amp; Continue
+              </a>
+              <p style="margin:18px 0 0;font-size:11px;line-height:1.6;color:#4b5563;word-break:break-all;">
+                Or paste this link into your browser: ${input.actionLink}
+              </p>
+            </td>
+          </tr>
+          <tr><td style="height:1px;background:rgba(201,162,77,0.20);"></td></tr>
+          <tr>
+            <td style="background:#080909;padding:18px 40px;text-align:center;">
+              <p style="margin:0;font-size:11px;color:#374151;">Kynovant</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  try {
+    const resend = new Resend(apiKey);
+    const { error } = await resend.emails.send({
+      from: `Kynovant <${fromEmail}>`,
+      to: input.toEmail,
+      subject: "Confirm your Kynovant account",
+      html,
+    });
+    if (error) {
+      console.error("[CoachSignup] Resend error:", error.message ?? error);
+      return { ok: false, error: error.message ?? "Email provider error" };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error("[CoachSignup] sendCoachSignupEmail threw:", err instanceof Error ? err.message : err);
+    return { ok: false, error: err instanceof Error ? err.message : "Email send failed" };
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -222,17 +346,20 @@ export async function POST(req: NextRequest) {
     const admin = createAdminClient();
     const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.kynovant.com";
 
-    const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-      // Identical redirectTo to the admin-invite path (app/api/admin/
-      // coaches/route.ts) — type=invite always lands on /setup-password
-      // regardless of any next param (see app/auth/callback/route.ts),
-      // then /auth/role-redirect sends a freshly-provisioned coach to
-      // /hq, whose entitlement guard immediately bounces them to
-      // /account-status to start their trial. No next param needed.
-      redirectTo: `${siteOrigin}/auth/callback?type=invite&handoff=${encodeURIComponent(signInviteHandoffToken(email))}`,
+    // generateLink (not inviteUserByEmail) — creates the Supabase Auth
+    // user identically, but returns a raw token_hash instead of
+    // Supabase auto-sending its own generic template embedding the
+    // unsafe, auto-consuming action_link — see this file's header
+    // comment. redirectTo matches every other invite path in this
+    // codebase; it's functionally unused by the /auth/accept flow but
+    // kept for consistency and as a required field.
+    const { data, error } = await admin.auth.admin.generateLink({
+      type: "invite",
+      email,
+      options: { redirectTo: `${siteOrigin}/auth/callback` },
     });
 
-    if (error || !data.user) {
+    if (error || !data.user || !data.properties?.hashed_token) {
       // Supabase itself rejects an email it already knows about (e.g. a
       // race with another request that passed the pre-check first) —
       // treat that the same as the pre-check's "already exists" path
@@ -242,7 +369,7 @@ export async function POST(req: NextRequest) {
         await markAcquisitionInviteStatus({
           normalizedEmail,
           status: "already_invited",
-          accountUserId: data.user?.id ?? null,
+          accountUserId: data?.user?.id ?? null,
         }).catch((err) => {
           console.error("[CoachSignup] mark already_invited failed:", err instanceof Error ? err.message : err);
         });
@@ -254,18 +381,45 @@ export async function POST(req: NextRequest) {
       }).catch((err) => {
         console.error("[CoachSignup] mark failed invite failed:", err instanceof Error ? err.message : err);
       });
-      console.error("[CoachSignup] inviteUserByEmail failed:", error?.message);
+      console.error("[CoachSignup] generateLink failed:", error?.message);
       return NextResponse.json(
         { ok: false, error: "We couldn't start your trial signup. Please try again shortly." },
         { status: 422 },
       );
     }
 
-    await provisionInvitedCoach({ userId: data.user.id, email, displayName: name });
+    const newUserId = data.user.id;
+    const actionLink = buildAcceptLink(siteOrigin, data.properties.hashed_token);
+
+    await provisionInvitedCoach({ userId: newUserId, email, displayName: name });
+
+    const sendResult = await sendCoachSignupEmail({ toEmail: email, firstName: name.split(/\s+/)[0] || name, actionLink });
+    if (!sendResult.ok) {
+      // The account already exists (status stays whatever
+      // provisionInvitedCoach left it as) — retain it so a retry lands
+      // in the pending-invite ("status !== invited" pre-check above
+      // falls through to this same generateLink call) resend path
+      // instead of erroring on "already registered."
+      await markAcquisitionInviteStatus({
+        normalizedEmail,
+        status: "failed",
+        accountUserId: newUserId,
+      }).catch((err) => {
+        console.error("[CoachSignup] mark failed invite failed:", err instanceof Error ? err.message : err);
+      });
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Your account was created, but the confirmation email couldn't be sent. Please try again.",
+        },
+        { status: 502 },
+      );
+    }
+
     await markAcquisitionInviteStatus({
       normalizedEmail,
       status: "sent",
-      accountUserId: data.user.id,
+      accountUserId: newUserId,
       inviteSentAt: new Date(),
     }).catch((err) => {
       console.error("[CoachSignup] mark sent invite failed:", err instanceof Error ? err.message : err);
