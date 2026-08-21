@@ -19,6 +19,8 @@ import {
   getClientGoalContext,
 } from "@/lib/db/coach-check-in-service";
 import CheckInReviewPanel from "@/components/hq/check-ins/CheckInReviewPanel";
+import CheckInPhotoGallery from "@/components/hq/check-ins/CheckInPhotoGallery";
+import { listCheckInPhotosForCoach } from "@/lib/db/check-in-photo-service";
 import type { CheckInDetail } from "@/lib/db/check-in-service";
 import { Card, Badge } from "@/components/ui";
 import type { BadgeVariant } from "@/components/ui";
@@ -374,7 +376,16 @@ export default async function CheckInReviewPage({
     notFound();
   }
 
-  const goalContext = await getClientGoalContext(checkIn.clientId);
+  // Fetched only AFTER the tenant-ownership check above passes — a
+  // coach's ability to view this occurrence's photos is gated by the
+  // exact same coachOwnsClient guard as everything else on this page.
+  // listCheckInPhotosForCoach itself only re-confirms the checkInId is
+  // real; it relies on this call site for tenant auth, matching
+  // getCoachCheckInDetail's own established precedent.
+  const [goalContext, photos] = await Promise.all([
+    getClientGoalContext(checkIn.clientId),
+    listCheckInPhotosForCoach(checkIn.id),
+  ]);
 
   // The exact scheduled occurrence date, not just the week — a
   // Wednesday and a Sunday check-in from the same week must never
@@ -513,6 +524,17 @@ export default async function CheckInReviewPage({
                   )}
                 </div>
               )}
+            </Card>
+          )}
+
+          {/* Progress Photos — signed URLs only, generated server-side
+              above; nothing here exposes a permanent storage path. */}
+          {photos && photos.length > 0 && (
+            <Card tone="dark" padding="sm">
+              <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mb-2">
+                Progress Photos
+              </p>
+              <CheckInPhotoGallery photos={photos} />
             </Card>
           )}
 

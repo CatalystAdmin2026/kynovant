@@ -25,6 +25,7 @@ import {
   uuid,
   text,
   integer,
+  boolean,
   timestamp,
   date,
   numeric,
@@ -44,6 +45,15 @@ export const weeklyCheckInStatusEnum = pgEnum("weekly_check_in_status", [
   "submitted",
   "in_review",
   "reviewed",
+]);
+
+// Per-scheduled-day progress-photo policy — see clientCheckInSchedule's
+// photoRequirement column below for why this lives on the SAME
+// effective-dated row rather than a separate table.
+export const checkInPhotoRequirementEnum = pgEnum("check_in_photo_requirement", [
+  "required",
+  "optional",
+  "off",
 ]);
 
 // ─────────────────────────────────────────────────────────────
@@ -283,6 +293,42 @@ export const clientCheckInSchedule = pgTable(
     effectiveFrom: date("effective_from").notNull(),
     // NULL = still active/required today.
     effectiveTo: date("effective_to"),
+
+    // ADDED (Check-In Progress Photos pass) — whether progress photos
+    // are Required / Optional / Off for occurrences of THIS weekday
+    // era. Deliberately placed on this same effective-dated row, NOT
+    // a separate table: a photo policy change must participate in the
+    // exact same historical semantics as the weekday itself
+    // (setClientSchedule's soft-close-and-reopen pattern), so "was
+    // Sunday's photo requirement Required on Aug 3" stays answerable
+    // via getClientScheduleAtDate/getPhotoPolicyAtDate forever, even
+    // after a coach later changes it to Optional. Default "off" is
+    // intentional: a bare ALTER ... ADD COLUMN backfills every
+    // existing row (including 0031's enrollment-seeded rows) to "off"
+    // rather than inventing a requirement no coach ever configured.
+    photoRequirement: checkInPhotoRequirementEnum("photo_requirement")
+      .notNull()
+      .default("off"),
+
+    // Which views count toward satisfying "Required" for THIS
+    // effective-dated era — only meaningful when photoRequirement is
+    // "required" (ignored/inert when "optional" or "off", but always
+    // present and typed so a later switch back to "required" has a
+    // deterministic starting point rather than a nullable gap).
+    // Three plain booleans, not a JSON/array column: each is
+    // independently indexable/queryable, matches this schema's
+    // existing convention of normalized typed columns over JSON blobs
+    // (see e.g. weeklyCheckIns' individual metric columns below), and
+    // the set is small/fixed (front/side/back — "other" never counts
+    // toward Required, see check-in-photo-service.ts). Default true
+    // for all three: the product default when a coach switches a day
+    // to "Required" is front+side+back, per the coach schedule UI's
+    // own behavior — a coach who wants a narrower set (e.g. front
+    // only) unchecks the others explicitly.
+    photoRequireFront: boolean("photo_require_front").notNull().default(true),
+    photoRequireSide: boolean("photo_require_side").notNull().default(true),
+    photoRequireBack: boolean("photo_require_back").notNull().default(true),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -312,3 +358,25 @@ export const clientCheckInSchedule = pgTable(
 
 export type ClientCheckInScheduleRow = typeof clientCheckInSchedule.$inferSelect;
 export type NewClientCheckInScheduleRow = typeof clientCheckInSchedule.$inferInsert;
+export type CheckInPhotoRequirement =
+  (typeof checkInPhotoRequirementEnum.enumValues)[number];
+
+// The three views that can be individually required — "other" is
+// always optional/uploadable and never counts toward "Required" (see
+// check-in-photo-service.ts's isPhotoRequirementSatisfied). Named
+// PhotoViewName (not "CheckInPhotoView") to avoid colliding with
+// check-in-photo-service.ts's CheckInPhotoView interface, which
+// describes an actual uploaded-photo record (id/category/signedUrl/
+// etc.) — a different, unrelated concept that happens to share the
+// obvious short name.
+export type PhotoViewName = "front" | "side" | "back";
+
+// A resolved, historically-accurate photo policy for one occurrence —
+// what getPhotoPolicyAtDate (check-in-schedule-service.ts) returns and
+// what both submitCheckIn's server-side gate and the Portal UI's own
+// mirror gate consume. requiredViews is only meaningful when
+// requirement === "required"; empty for "optional"/"off".
+export interface CheckInPhotoPolicy {
+  requirement: CheckInPhotoRequirement;
+  requiredViews: PhotoViewName[];
+}

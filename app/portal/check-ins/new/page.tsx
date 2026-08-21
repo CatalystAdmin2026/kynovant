@@ -15,6 +15,8 @@ import {
   getClientCheckInDetail,
   getPreviousCheckIn,
 } from "@/lib/db/check-in-service";
+import { getPhotoPolicyAtDate } from "@/lib/db/check-in-schedule-service";
+import { listCheckInPhotosForClient } from "@/lib/db/check-in-photo-service";
 import type { PreviousCheckInContext } from "@/components/portal/CheckInForm";
 import PortalShell from "@/components/portal/PortalShell";
 import CheckInForm from "@/components/portal/CheckInForm";
@@ -62,16 +64,24 @@ export default async function NewCheckInPage({
     redirect(`/portal/check-ins/${existingCheckIn.id}`);
   }
 
-  // Load draft data and previous reviewed check-in in parallel.
-  // Previous check-in data is shown as lightweight context alongside
-  // form fields so clients can reflect on last week's values while
-  // filling in this week's check-in.
-  const [draft, prevCheckIn] = await Promise.all([
+  // Load draft data, previous reviewed check-in, and this occurrence's
+  // photo policy in parallel. Previous check-in data is shown as
+  // lightweight context alongside form fields so clients can reflect
+  // on last week's values while filling in this week's check-in.
+  // photoPolicy is resolved AT window_.scheduledDate (this
+  // occurrence's own date), never "today," so it stays historically
+  // accurate if the coach changes the policy later.
+  const [draft, prevCheckIn, photoPolicy] = await Promise.all([
     existingCheckIn?.id
       ? getClientCheckInDetail(dbUser.id, existingCheckIn.id)
       : Promise.resolve(null),
     getPreviousCheckIn(dbUser.id, window_.weekStartDate),
+    getPhotoPolicyAtDate(dbUser.id, window_.scheduledDate),
   ]);
+
+  const initialPhotos = existingCheckIn?.id
+    ? (await listCheckInPhotosForClient(dbUser.id, existingCheckIn.id)) ?? []
+    : [];
 
   const initialData = draft
     ? {
@@ -133,6 +143,9 @@ export default async function NewCheckInPage({
           scheduledDate={window_.scheduledDate}
           weekStartDate={window_.weekStartDate}
           previousCheckIn={previousCheckIn}
+          photoRequirement={photoPolicy.requirement}
+          requiredPhotoViews={photoPolicy.requiredViews}
+          initialPhotos={initialPhotos}
         />
       </div>
     </PortalShell>

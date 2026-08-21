@@ -50,9 +50,13 @@ import {
   getClientScheduleAtDate,
   getClientScheduleHistory,
   getClientScheduleState,
+  getPhotoPolicyAtDate,
 } from "./check-in-schedule-service";
+import { isPhotoRequirementSatisfied } from "./check-in-photo-service";
 import { getDateInTimezone } from "@/lib/checkin/schedule";
 import type { Weekday } from "@/lib/checkin/schedule";
+
+const PHOTO_VIEW_LABELS: Record<string, string> = { front: "front", side: "side", back: "back" };
 
 // ─────────────────────────────────────────────────────────────
 // WEEK / OCCURRENCE DATE HELPERS
@@ -557,6 +561,26 @@ export async function submitCheckIn(
         checkIn.status === "submitted"
           ? "This check-in has already been submitted."
           : "This check-in is no longer editable.",
+    };
+  }
+
+  // Progress-photo requirement gate (Check-In Progress Photos pass).
+  // Resolved historically — AT this occurrence's own scheduledDate,
+  // never "today" — so a later schedule change (including narrowing
+  // which views are required) can never rewrite whether THIS
+  // occurrence required photos, or which ones. Server-side only: this
+  // is the actual enforcement point, not merely a UI hint — a client
+  // cannot submit without the required view set by calling this
+  // function directly, regardless of what the Portal form showed.
+  const photoPolicy = await getPhotoPolicyAtDate(clientId, checkIn.scheduledDate);
+  if (
+    photoPolicy.requirement === "required" &&
+    !(await isPhotoRequirementSatisfied(checkInId, photoPolicy.requiredViews))
+  ) {
+    const missingLabel = photoPolicy.requiredViews.map((v) => PHOTO_VIEW_LABELS[v] ?? v).join(", ");
+    return {
+      ok: false,
+      error: `Progress photos are required for this check-in — please add a ${missingLabel} photo.`,
     };
   }
 
