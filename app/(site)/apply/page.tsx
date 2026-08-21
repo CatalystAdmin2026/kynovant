@@ -195,19 +195,6 @@ export default function ApplyPage() {
               </div>
 
               <div>
-                <label className={label}>Monthly Investment Range</label>
-                <select
-                  name="budget"
-                  defaultValue="$250–$500"
-                  className={input}
-                >
-                  <option>$250–$500</option>
-                  <option>$500–$1,000</option>
-                  <option>$1,000+</option>
-                </select>
-              </div>
-
-              <div>
                 <label className={label}>
                   Tell us about your goals and what's held you back
                 </label>
