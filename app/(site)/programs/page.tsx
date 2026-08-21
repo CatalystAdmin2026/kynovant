@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Programs | Catalyst Coaching Elite",
+  title: "Coaching",
   description:
-    "Two Catalyst Coaching Elite experiences built around you — Elite Coaching and Executive Performance. Every journey begins with a complimentary Strategy Call.",
+    "Two Kept Performance coaching experiences built around you — Elite Coaching and Executive Performance. Every journey begins with a complimentary Strategy Call.",
   openGraph: {
-    title: "Programs | Catalyst Coaching Elite",
+    title: "Coaching | Kept Performance",
     description:
       "Two coaching experiences built around you. Discover which path is right for you.",
-    siteName: "Catalyst Coaching Elite",
+    siteName: "Kept Performance",
   },
 };
 
@@ -108,7 +108,7 @@ export default function ProgramsPage() {
 
             {/* Eyebrow */}
             <p className="pg-f0 text-[#C9A24D] text-[10px] font-semibold tracking-[0.65em] uppercase mb-8">
-              Catalyst Coaching Elite
+              Kept Performance
             </p>
 
             {/* Headline */}

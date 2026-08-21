@@ -1,4 +1,3 @@
-import Image from "next/image";
 import Button from "@/components/Button";
 import CalendlyEmbed from "@/components/CalendlyEmbed";
 
@@ -11,7 +10,7 @@ const nextSteps = [
   {
     num: "02",
     title: "Strategy call: we align on your goals",
-    body: "We use the call to understand where you are, where you want to go, and whether Catalyst Coaching Elite is the right fit.",
+    body: "We use the call to understand where you are, where you want to go, and whether Kept Performance is the right fit.",
   },
   {
     num: "03",
@@ -27,13 +26,9 @@ export default function ThankYouPage() {
       {/* ── CONFIRMATION ─────────────────────────────────── */}
       <div className="max-w-xl mx-auto text-center mb-16">
         <div className="flex justify-center mb-8">
-          <Image
-            src="/logos/kynovant-mark.png"
-            alt="Catalyst Coaching Elite"
-            width={44}
-            height={44}
-            className="opacity-80"
-          />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.4em] text-white/70">
+            Kept Performance
+          </span>
         </div>
 
         <div className="w-8 h-px bg-[#C9A24D]/40 mx-auto mb-10" />
@@ -70,7 +65,7 @@ export default function ThankYouPage() {
             <span className="text-[#C9A24D]">Strategy Call.</span>
           </h2>
           <p className="text-gray-400 text-sm leading-relaxed max-w-lg mx-auto">
-            Book your Catalyst Coaching Elite Strategy Call below. This is a
+            Book your Kept Performance Strategy Call below. This is a
             personalized session — not a sales call — where we align on your
             goals and determine whether the program is the right fit.
             Scheduling your call now secures your place in the review process.

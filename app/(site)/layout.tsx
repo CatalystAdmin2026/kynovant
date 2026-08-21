@@ -4,13 +4,13 @@ import Footer from "@/components/Footer";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://catalystcoachingelite.com"),
-  applicationName: "Catalyst Coaching Elite",
+  applicationName: "Kept Performance",
   title: {
-    default: "Catalyst Coaching Elite",
-    template: "%s | Catalyst Coaching Elite",
+    default: "Kept Performance",
+    template: "%s | Kept Performance",
   },
   description:
-    "One-on-one physique coaching, accountability, and performance-focused programming.",
+    "Precision coaching built around training, nutrition, accountability, and consistent execution. You made the promise. Keep it.",
   manifest: null,
   icons: {
     icon: [{ url: "/logos/mark-gold.png", type: "image/png" }],
@@ -19,14 +19,14 @@ export const metadata: Metadata = {
   },
   appleWebApp: {
     capable: false,
-    title: "Catalyst Coaching Elite",
+    title: "Kept Performance",
   },
   openGraph: {
-    title: "Catalyst Coaching Elite",
+    title: "Kept Performance",
     description:
-      "One-on-one physique coaching, accountability, and performance-focused programming.",
+      "Precision coaching built around training, nutrition, accountability, and consistent execution.",
     url: "https://catalystcoachingelite.com",
-    siteName: "Catalyst Coaching Elite",
+    siteName: "Kept Performance",
     type: "website",
   },
 };

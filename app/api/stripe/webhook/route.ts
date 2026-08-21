@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Stripe Webhook Handler — server-only
 //
-// Catalyst Coaching Elite and Kynovant are two separate businesses
+// Kept Performance and Kynovant are two separate businesses
 // with two separate Stripe accounts (separate secret keys, separate
 // webhook signing secrets, separate registered endpoints). This ONE
 // route file serves BOTH of their webhook URLs — Next.js's own
@@ -215,7 +215,7 @@ async function persistToGas(gasUrl: string, payload: GasStripePayload): Promise<
 // one failure does not prevent the other.
 // ─────────────────────────────────────────────────────────────
 
-// Catalyst Coaching Elite domain — this webhook only ever builds links
+// Kept Performance domain — this webhook only ever builds links
 // to Catalyst pages (/onboarding, /executive-onboarding), never
 // Kynovant SaaS pages. See docs/domain-architecture.md.
 const SITE_ORIGIN = process.env.NEXT_PUBLIC_CATALYST_URL ?? "https://www.catalystcoachingelite.com";
@@ -257,7 +257,7 @@ async function sendClientWelcomeEmail(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Welcome to Catalyst Coaching Elite</title>
+  <title>Welcome to Kept Performance</title>
 </head>
 <body style="margin:0;padding:0;background:#080909;font-family:Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#080909;padding:48px 24px;">
@@ -273,7 +273,7 @@ async function sendClientWelcomeEmail(
           <!-- Header -->
           <tr>
             <td style="background:#0d0e0f;padding:36px 40px 20px;">
-              <p style="margin:0 0 6px;font-size:10px;letter-spacing:0.45em;text-transform:uppercase;color:#C9A24D;font-weight:600;">Catalyst Coaching Elite</p>
+              <p style="margin:0 0 6px;font-size:10px;letter-spacing:0.45em;text-transform:uppercase;color:#C9A24D;font-weight:600;">Kept Performance</p>
               <h1 style="margin:0;font-size:32px;font-weight:700;color:#ffffff;letter-spacing:-0.02em;text-transform:uppercase;line-height:1.1;">Welcome.</h1>
             </td>
           </tr>
@@ -290,7 +290,7 @@ async function sendClientWelcomeEmail(
             <td style="background:#0d0e0f;padding:28px 40px 36px;">
               <p style="margin:0 0 16px;font-size:15px;color:#d1d5db;line-height:1.75;">Hi ${firstName},</p>
               <p style="margin:0 0 16px;font-size:15px;color:#d1d5db;line-height:1.75;">
-                Welcome to Catalyst Coaching Elite — your membership is active.
+                Welcome to Kept Performance — your membership is active.
               </p>
               <p style="margin:0 0 32px;font-size:15px;color:#d1d5db;line-height:1.75;">
                 Your next step is completing your onboarding questionnaire so I can build your training and nutrition plan around your goals, schedule, preferences, and limitations.
@@ -314,7 +314,7 @@ async function sendClientWelcomeEmail(
               <!-- Signoff -->
               <p style="margin:0 0 3px;font-size:14px;color:#ffffff;font-weight:600;">Jermaine Jones</p>
               <p style="margin:0 0 3px;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#C9A24D;">Founder &amp; Head Coach</p>
-              <p style="margin:0;font-size:11px;color:#6b7280;">Catalyst Coaching Elite</p>
+              <p style="margin:0;font-size:11px;color:#6b7280;">Kept Performance</p>
             </td>
           </tr>
 
@@ -326,7 +326,7 @@ async function sendClientWelcomeEmail(
           <!-- Footer -->
           <tr>
             <td style="background:#080909;padding:18px 40px;text-align:center;">
-              <p style="margin:0;font-size:11px;color:#374151;">Catalyst Coaching Elite</p>
+              <p style="margin:0;font-size:11px;color:#374151;">Kept Performance</p>
             </td>
           </tr>
 
@@ -339,9 +339,9 @@ async function sendClientWelcomeEmail(
 
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
-    from:    `Catalyst Coaching Elite <${fromEmail}>`,
+    from:    `Kept Performance <${fromEmail}>`,
     to:      clientEmail,
-    subject: "Welcome to Catalyst Coaching Elite",
+    subject: "Welcome to Kept Performance",
     html,
   });
 
@@ -391,7 +391,7 @@ async function sendAdminNotificationEmail(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>New Client Payment — Catalyst Coaching Elite</title>
+  <title>New Client Payment — Kept Performance</title>
 </head>
 <body style="margin:0;padding:0;background:#080909;font-family:Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#080909;padding:40px 24px;">
@@ -451,7 +451,7 @@ async function sendAdminNotificationEmail(
           <!-- Footer -->
           <tr>
             <td style="background:#080909;padding:16px 32px;text-align:center;">
-              <p style="margin:0;font-size:11px;color:#374151;">Catalyst Coaching Elite — Admin Notification</p>
+              <p style="margin:0;font-size:11px;color:#374151;">Kept Performance — Admin Notification</p>
             </td>
           </tr>
 
@@ -464,9 +464,9 @@ async function sendAdminNotificationEmail(
 
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
-    from:    `Catalyst Coaching Elite <${fromEmail}>`,
+    from:    `Kept Performance <${fromEmail}>`,
     to:      adminEmail,
-    subject: "New Catalyst Coaching Elite Client Payment Received",
+    subject: "New Kept Performance Client Payment Received",
     html,
   });
 

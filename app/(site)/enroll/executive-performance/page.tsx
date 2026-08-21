@@ -3,7 +3,7 @@ import Link from "next/link";
 import { STRIPE_LINKS, EXECUTIVE_INCLUDES } from "@/lib/enrollment";
 
 export const metadata: Metadata = {
-  title: "Executive Performance Enrollment — Catalyst Coaching Elite",
+  title: "Executive Performance Enrollment",
   description: "Enter Executive Performance. Elite, concierge-level coaching for high-performance individuals.",
   robots: { index: false, follow: false },
 };

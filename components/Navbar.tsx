@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 
 const NAV_LINKS = [
   { label: "About", href: "/about" },
-  { label: "Programs", href: "/programs" },
+  { label: "Coaching", href: "/programs" },
   { label: "Apply", href: "/apply" },
 ] as const;
 
@@ -43,12 +43,12 @@ export default function Navbar() {
       }`}
     >
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-        <Link href="/about" className="group flex flex-col leading-none">
+        <Link href="/" className="group flex flex-col leading-none">
           <span className="text-sm font-semibold uppercase tracking-[0.24em] text-white transition-colors group-hover:text-[#C9A24D]">
-            Catalyst
+            Kept
           </span>
           <span className="mt-1 text-[9px] uppercase tracking-[0.34em] text-[#C9A24D]">
-            Coaching Elite
+            Performance
           </span>
         </Link>
 

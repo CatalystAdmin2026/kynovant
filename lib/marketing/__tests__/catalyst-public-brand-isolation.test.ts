@@ -25,7 +25,36 @@ const catalystPublicFiles = [
   "app/(site)/enroll/executive-performance/page.tsx",
 ] as const;
 
-describe("Catalyst public brand isolation", () => {
+// app/(site)/page.tsx (the Kept Performance homepage) is deliberately
+// NOT in catalystPublicFiles above — Phase 9 of the rebrand requires
+// it to explain the Kynovant-powered coaching platform by name (see
+// its own "Powered By Kynovant" section), so the blanket \bKynovant\b
+// ban below would produce a false failure on required, correct copy.
+// It still gets every OTHER isolation check (no Kynovant SaaS CTAs,
+// no Kynovant nav links, no Kynovant taglines) via its own describe
+// block below, just not the "never says the word Kynovant" one.
+const KYNOVANT_SAAS_LEAKS = [
+  /Start (Free|14-Day Free) Trial/,
+  "Your clients made the promise. Help them keep it.",
+  "The Reason Behind The Software",
+  "Install Kynovant",
+  'href="/start-trial"',
+  'href="/pricing"',
+  'href="/features"',
+  'href="/login"',
+] as const;
+
+function expectNoKynovantSaasLeak(text: string, file: string) {
+  for (const leak of KYNOVANT_SAAS_LEAKS) {
+    if (typeof leak === "string") {
+      expect(text, `${file} — ${leak}`).not.toContain(leak);
+    } else {
+      expect(text, `${file} — ${leak}`).not.toMatch(leak);
+    }
+  }
+}
+
+describe("Kept Performance public brand isolation", () => {
   it("does not reuse Kynovant public chrome for the Catalyst route group", () => {
     expect(source("components/Navbar.tsx")).not.toContain("KynovantNavbar");
     expect(source("components/Footer.tsx")).not.toContain("KynovantFooter");
@@ -36,21 +65,30 @@ describe("Catalyst public brand isolation", () => {
     for (const file of catalystPublicFiles) {
       const text = source(file);
       expect(text, file).not.toMatch(/\bKynovant\b/);
-      expect(text, file).not.toMatch(/Start (Free|14-Day Free) Trial/);
-      expect(text, file).not.toContain("Your clients made the promise. Help them keep it.");
-      expect(text, file).not.toContain("The Reason Behind The Software");
-      expect(text, file).not.toContain("Install Kynovant");
-      expect(text, file).not.toContain('href="/start-trial"');
-      expect(text, file).not.toContain('href="/pricing"');
-      expect(text, file).not.toContain('href="/features"');
-      expect(text, file).not.toContain('href="/login"');
+      expectNoKynovantSaasLeak(text, file);
     }
   });
 
-  it("brands the Catalyst root landing target as Catalyst", () => {
+  it("the Kept Performance homepage explains Kynovant by name, but stays out of the Kynovant SaaS funnel", () => {
+    const home = source("app/(site)/page.tsx");
+    // Required, correct content — Phase 9 of the rebrand.
+    expect(home).toMatch(/\bKynovant\b/);
+    expect(home).toContain("Powered By Kynovant");
+    // Still never claims ownership of Kynovant, and still never leaks
+    // a Kynovant SaaS CTA/nav link.
+    expect(home).not.toContain("Kept Performance owns Kynovant");
+    expectNoKynovantSaasLeak(home, "app/(site)/page.tsx");
+  });
+
+  it("brands the Catalyst root landing target as Kept Performance", () => {
     const about = source("app/(site)/about/page.tsx");
-    expect(about).toContain("About Catalyst Coaching Elite");
-    expect(about).toContain("siteName: \"Catalyst Coaching Elite\"");
+    expect(about).toContain("About Kept Performance");
+    expect(about).toContain('siteName: "Kept Performance"');
     expect(about).not.toContain("About Kynovant");
+    expect(about).not.toMatch(/\bKynovant\b/);
+
+    const home = source("app/(site)/page.tsx");
+    expect(home).toContain('title: "Kept Performance"');
+    expect(home).toContain('siteName: "Kept Performance"');
   });
 });

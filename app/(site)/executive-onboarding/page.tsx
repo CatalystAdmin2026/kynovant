@@ -4,7 +4,7 @@ import type { Phase } from "@/components/OnboardingWizard";
 import AccessGuard from "@/components/AccessGuard";
 
 export const metadata: Metadata = {
-  title: "Executive Performance Onboarding | Catalyst Coaching Elite",
+  title: "Executive Performance Onboarding",
   robots: { index: false, follow: false },
 };
 
@@ -601,7 +601,7 @@ const PHASES: Phase[] = [
       {
         id: "agree_terms",
         label:
-          "I agree to the Catalyst Coaching Elite terms and conditions and understand that my Executive Performance subscription is active.",
+          "I agree to the Kept Performance terms and conditions and understand that my Executive Performance subscription is active.",
         type: "checkbox",
         required: true,
       },

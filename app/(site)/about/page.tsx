@@ -4,14 +4,14 @@ import type { Metadata } from "next";
 import Button from "@/components/Button";
 
 export const metadata: Metadata = {
-  title: "About | Catalyst Coaching Elite",
+  title: "About",
   description:
-    "Catalyst Coaching Elite is one-on-one physique coaching built around custom programming, accountability, and sustainable results.",
+    "Kept Performance is one-on-one coaching built around custom programming, accountability, and sustainable results. You made the promise. Keep it.",
   openGraph: {
-    title: "About | Catalyst Coaching Elite",
+    title: "About | Kept Performance",
     description:
-      "One-on-one physique coaching built around custom programming, accountability, and sustainable results.",
-    siteName: "Catalyst Coaching Elite",
+      "One-on-one coaching built around custom programming, accountability, and sustainable results.",
+    siteName: "Kept Performance",
   },
 };
 
@@ -65,7 +65,7 @@ export default function AboutPage() {
 
         <div className="relative z-10 max-w-6xl mx-auto">
           <p className="text-[#C9A24D] text-[11px] font-semibold tracking-[0.45em] mb-4 uppercase">
-            About Catalyst Coaching Elite
+            About Kept Performance
           </p>
           <h1 className="font-headline text-5xl md:text-7xl font-bold uppercase text-white leading-none mb-6">
             Coaching Built
@@ -88,7 +88,7 @@ export default function AboutPage() {
             <div className="relative w-72 md:w-80 lg:w-[340px] overflow-hidden aspect-[3/4]">
               <Image
                 src="/images/jermaine-headshot.jpg"
-                alt="Jermaine Jones — Founder & Head Coach, Catalyst Coaching Elite"
+                alt="Jermaine Jones — Founder & Head Coach, Kept Performance"
                 fill
                 priority
                 className="object-cover object-top"
@@ -127,7 +127,7 @@ export default function AboutPage() {
                 online. I've made most of those mistakes myself. The gap between
                 where I started and where I am now isn't talent — it's finding
                 the right information and building habits I could actually
-                sustain. Catalyst Coaching Elite exists to give you a direct path to
+                sustain. Kept Performance exists to give you a direct path to
                 that same outcome, without the years of trial and error it took
                 me.
               </p>
@@ -308,7 +308,7 @@ export default function AboutPage() {
             Who We Work With.
           </h2>
           <p className="text-gray-400 text-base leading-relaxed mb-12 max-w-2xl mx-auto">
-            Catalyst Coaching Elite is application-based. We work with a limited
+            Kept Performance is application-based. We work with a limited
             number of clients at a time — and we only take on clients we're
             confident we can get results with.
           </p>

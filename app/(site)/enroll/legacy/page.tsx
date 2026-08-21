@@ -3,8 +3,8 @@ import EnrollmentPage from "@/components/EnrollmentPage";
 import { STRIPE_LINKS, STANDARD_INCLUDES } from "@/lib/enrollment";
 
 export const metadata: Metadata = {
-  title: "Legacy Rate Enrollment — Catalyst Coaching Elite",
-  description: "Activate your Legacy rate. Private pricing for long-standing Catalyst Coaching Elite members.",
+  title: "Legacy Rate Enrollment",
+  description: "Activate your Legacy rate. Private pricing for long-standing Kept Performance members.",
   robots: { index: false, follow: false },
 };
 

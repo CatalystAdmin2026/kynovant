@@ -9,6 +9,11 @@ describe("hostBrand", () => {
     expect(hostBrand("www.catalystcoachingelite.com:3000")).toBe("catalyst");
   });
 
+  it("classifies the Kept Performance domain (prepared ahead of the actual Vercel/DNS cutover)", () => {
+    expect(hostBrand("keptperformance.com")).toBe("catalyst");
+    expect(hostBrand("www.keptperformance.com:3000")).toBe("catalyst");
+  });
+
   it("leaves local and preview hosts unclassified", () => {
     expect(hostBrand("localhost:3000")).toBeNull();
     expect(hostBrand("example.vercel.app")).toBeNull();

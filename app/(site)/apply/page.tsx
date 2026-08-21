@@ -2,7 +2,6 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 
 type Status = "idle" | "submitting" | "success" | "error";
 
@@ -106,14 +105,8 @@ export default function ApplyPage() {
             {/* Trust card */}
             <div className="border border-white/5 bg-[#141618] p-6">
               <div className="flex items-center gap-3 mb-4">
-                <Image
-                  src="/logos/kynovant-mark.png"
-                  alt=""
-                  width={20}
-                  height={20}
-                />
                 <span className="text-[10px] tracking-[0.3em] font-semibold text-white/50 uppercase">
-                  Catalyst Coaching Elite
+                  Kept Performance
                 </span>
               </div>
               <p className="text-gray-500 text-sm leading-relaxed">
@@ -208,7 +201,7 @@ export default function ApplyPage() {
 
               <div>
                 <label className={label}>
-                  How did you hear about Catalyst Coaching Elite?
+                  How did you hear about Kept Performance?
                 </label>
                 <select
                   name="referral_source"

@@ -60,9 +60,12 @@ import { SITE_URL } from "@/lib/site-url";
 const KYNOVANT_URL = SITE_URL;
 const CATALYST_URL = process.env.NEXT_PUBLIC_CATALYST_URL ?? "https://catalystcoachingelite.com";
 
-// Catalyst Coaching Elite — dormant personal-coaching business.
-// "/" is intentionally NOT listed here — it's shared (different
-// homepage content per domain, same path), handled as a rewrite below.
+// Kept Performance (catalystcoachingelite.com domain, unchanged until
+// the keptperformance.com cutover — see docs/domain-architecture.md) —
+// the personal-coaching business. "/" is intentionally NOT listed
+// here — app/(site)/page.tsx already IS the correct homepage for this
+// domain with no redirect needed (unlike Kynovant's "/", which still
+// needs an explicit rewrite to /home for route-group reasons).
 const CATALYST_ONLY_PREFIXES = [
   "/about",
   "/programs",
@@ -148,10 +151,11 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(target, 308);
     }
   } else if (brand === "catalyst") {
-    if (pathname === "/") {
-      const target = new URL("/about" + request.nextUrl.search, CATALYST_URL);
-      return NextResponse.redirect(target, 308);
-    }
+    // "/" is intentionally NOT redirected — app/(site)/page.tsx is now
+    // a real Kept Performance homepage (see that file's header
+    // comment), not a stand-in. Previously this redirected to /about
+    // because "/" only ever rendered Kynovant's own homepage content
+    // as a shared fallback; that's no longer true.
     if (matchesPrefix(pathname, KYNOVANT_ONLY_PREFIXES)) {
       const target = new URL(pathname + request.nextUrl.search, KYNOVANT_URL);
       return NextResponse.redirect(target, 308);

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 const FOOTER_LINKS = [
   { label: "About", href: "/about" },
-  { label: "Programs", href: "/programs" },
+  { label: "Coaching", href: "/programs" },
   { label: "Apply", href: "/apply" },
 ] as const;
 
@@ -23,12 +23,12 @@ export default function Footer() {
     <footer className="border-t border-white/10 bg-[#080909]">
       <div className="mx-auto max-w-6xl px-6 py-14">
         <div className="mb-10 flex flex-col items-start justify-between gap-8 md:flex-row md:items-center">
-          <Link href="/about" className="flex flex-col leading-none">
+          <Link href="/" className="flex flex-col leading-none">
             <span className="text-sm font-semibold uppercase tracking-[0.24em] text-white">
-              Catalyst
+              Kept
             </span>
             <span className="mt-1 text-[9px] uppercase tracking-[0.34em] text-[#C9A24D]">
-              Coaching Elite
+              Performance
             </span>
           </Link>
 
@@ -49,12 +49,12 @@ export default function Footer() {
 
         <div className="flex flex-col justify-between gap-5 text-xs leading-relaxed text-white/35 md:flex-row">
           <p className="max-w-xl">
-            Catalyst Coaching Elite provides one-on-one physique coaching, accountability,
-            and performance-focused programming. Coaching does not replace medical advice,
-            diagnosis, or treatment.
+            Kept Performance provides one-on-one coaching built around training, nutrition,
+            and accountability. Coaching does not replace medical advice, diagnosis, or
+            treatment.
           </p>
           <p className="shrink-0 text-white/25 md:text-right">
-            © {year} Catalyst Coaching Elite.
+            © {year} Kept Performance.
             <br />
             All rights reserved.
           </p>

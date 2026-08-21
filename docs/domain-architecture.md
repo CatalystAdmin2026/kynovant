@@ -10,11 +10,21 @@ domain.
   pricing, self-service coach trial signup, legacy coach application,
   login, HQ (coach workspace), and client portal. This is the active,
   growing product.
-- **catalystcoachingelite.com** — Catalyst Coaching Elite, Jermaine's
-  personal physique-coaching business. Biography, coaching programs,
-  personal coaching application, enrollment/payment pages. **Dormant**,
-  not deleted — its marketing and payment funnel must keep working
-  exactly as it does today.
+- **catalystcoachingelite.com** — **Kept Performance** (public brand,
+  rebranded from "Catalyst Coaching Elite"; the legal LLC remains
+  Catalyst Coaching LLC — see the Kept Performance rebrand commit for
+  the full public-copy change list). Jermaine's personal coaching
+  business — now beginning a partnership with Opimus Health (Opimus:
+  medical/telehealth + GLP-1 client acquisition; Kept: coaching,
+  training, nutrition support, accountability). Biography, coaching
+  programs, personal coaching application, enrollment/payment pages.
+  Its marketing and payment funnel must keep working exactly as it did
+  under the old name — only the visible brand copy changed, not the
+  routing, forms, Stripe/DocuSign logic, or GAS submission contract.
+  Still served from **catalystcoachingelite.com** today —
+  **keptperformance.com** is purchased and the code recognizes it
+  (`lib/domain-routing.ts`), but the actual domain/DNS cutover is a
+  separate, not-yet-done step (see "Domain cutover sequence" below).
 
 Both are served from this one repository/deployment. There is one
 Postgres database, one Supabase Auth instance, one Next.js build — the
@@ -26,7 +36,7 @@ below.
 
 | Path | Domain | Notes |
 |---|---|---|
-| `/` | **Both — different content** | Rewritten/redirected per domain. Catalyst domain: redirected to `/about` so the dormant personal-coaching domain never renders the Kynovant SaaS homepage. Kynovant domain: rewritten (not redirected — URL bar stays `/`) to `/home` (`app/(kynovant)/home/page.tsx`), the redesigned Kynovant SaaS homepage. (Prior to the homepage redesign, this rewrote to `/for-coaches` instead — see git history if that context is ever needed.) |
+| `/` | **Both — different content** | Catalyst domain: served directly by `app/(site)/page.tsx` — a real, complete Kept Performance homepage, no redirect (this used to redirect to `/about`, back when `/` only rendered Kynovant's own homepage as a stand-in; see git history / the Kept Performance rebrand commit). Kynovant domain: rewritten (not redirected — URL bar stays `/`) to `/home` (`app/(kynovant)/home/page.tsx`), the redesigned Kynovant SaaS homepage. |
 | `/about`, `/programs` | Catalyst | Unchanged, untouched. |
 | `/apply` | Catalyst | Jermaine's personal coaching-client application. Reverted to its original GAS-direct submission in a prior change — never touches the `applications` table. |
 | `/enroll/*`, `/onboarding`, `/onboarding-complete`, `/executive-onboarding`, `/executive-performance-confirmed`, `/payment-confirmed`, `/thank-you` | Catalyst | Enrollment/payment funnel. Untouched. |
@@ -134,37 +144,19 @@ the two webhook handlers below for building correct-domain links. See
 | Calendly (`components/CalendlyEmbed.tsx`, `/thank-you`) | `calendly.com/catalyst-coaching-headcoach/...` | **Unchanged** | Already correctly Catalyst-scoped (the slug itself says so) and lives entirely on Calendly's own domain — nothing to fix. |
 | `/auth/callback`, `/auth/role-redirect` | Build origin from `request.url` dynamically | **Unchanged** | Already domain-correct by construction; Kynovant-only via proxy gating; Supabase Auth's Site URL/redirect allowlist is already configured for kynovant.com. |
 
-## Known remaining cross-brand references (not fixed — out of scope)
+## Known remaining cross-brand references (resolved)
 
-Two categories of "Kynovant" branding still appear where the *content*
-belongs to Catalyst. Both were left alone deliberately, because fixing
-them means rewriting Catalyst-facing copy/branding, which the "do not
-redesign or improve Catalyst Coaching" constraint puts out of scope —
-domain **routing** was corrected; domain **branding/copy** was not:
-
-1. **`components/Navbar.tsx` / `components/Footer.tsx`** (Catalyst's
-   own shared chrome) still show the Kynovant logo and "Kynovant
-   provides physique coaching..." copy. These render on every
-   `app/(site)/*` page. Root cause: an earlier, now-being-corrected
-   rebrand applied the Kynovant name to what was originally Catalyst
-   Coaching's own site chrome, and reverting that is a content/design
-   change, not a routing fix.
-2. **`app/api/stripe/webhook/route.ts`'s email templates** (welcome
-   email + admin payment notification) — sender display name, subject
-   lines, and in-email copy all say "Kynovant," even though these
-   emails go to Catalyst coaching clients. The functional URLs inside
-   them were fixed (see table above); the brand copy was not, for the
-   same reason as #1.
-3. **Root `app/layout.tsx`** metadata (`title`, `metadataBase`,
-   `openGraph`) is Kynovant-flavored and inherited by every
-   `app/(site)/*` page that doesn't override it (none currently do).
-   `app/(kynovant)/layout.tsx` has its own correct metadata for the
-   Kynovant route group; Catalyst pages still inherit the root's.
-
-None of these affect **routing correctness** — a visitor always ends
-up on the right domain for the right business. They affect **brand
-consistency** on pages this task was explicitly told not to redesign.
-Flagging here so it's a known, disclosed gap rather than a silent one.
+The three gaps this section used to describe (Navbar/Footer still
+Kynovant-branded, Stripe welcome-email copy still Kynovant-branded,
+root `app/layout.tsx` metadata leaking onto Catalyst pages) were all
+fixed prior to the Kept Performance rebrand pass — `app/(site)/layout.tsx`
+carries its own metadata override, and `components/Navbar.tsx`/
+`Footer.tsx` are (and remain, post-rebrand) genuinely Catalyst/Kept-
+owned chrome, not reused Kynovant components. The Kept Performance
+rebrand then updated all of this same Catalyst-owned copy from
+"Catalyst Coaching Elite" to "Kept Performance" — see that change's
+commit for the full file list. No known cross-brand copy leaks remain
+as of this pass.
 
 ## Why one codebase, one auth system (requirement: don't duplicate auth infrastructure)
 
@@ -184,6 +176,49 @@ every route is reachable exactly as before this change, satisfying
 "preserve local development support" without any special dev
 configuration. To specifically test either domain's behavior locally,
 append `?__brand=kynovant` or `?__brand=catalyst` to any URL.
+
+## Domain cutover sequence (Kept Performance — keptperformance.com)
+
+Not performed by the rebrand pass itself — `catalystcoachingelite.com`
+remains the live, attached domain and is not disconnected. This is the
+recommended sequence for when the actual cutover is approved:
+
+1. **Attach `keptperformance.com` + `www.keptperformance.com`** to the
+   same Vercel project as an *additional* domain (not a replacement) —
+   `lib/domain-routing.ts` already classifies both hostnames as the
+   `"catalyst"` brand, so routing works the instant Vercel attaches
+   them; no further code change needed for routing itself.
+2. **Verify on the new domain first**, side by side with the old one
+   still live — smoke-test `/`, `/about`, `/programs`, `/apply`,
+   `/thank-you`, `/enroll/*`, and the Stripe/DocuSign webhook flows
+   against `keptperformance.com` before touching the old domain at
+   all.
+3. **Flip `NEXT_PUBLIC_CATALYST_URL`** (Vercel env var, Production +
+   Preview) from `https://www.catalystcoachingelite.com` to
+   `https://www.keptperformance.com` — this is what
+   `proxy.ts`/`app/api/stripe/webhook/route.ts`/
+   `app/api/docusign/webhook/route.ts` build cross-domain redirect and
+   onboarding-link targets from.
+4. **Update `app/(site)/layout.tsx`'s `metadataBase`/`openGraph.url`**
+   (currently `https://catalystcoachingelite.com`) to
+   `https://www.keptperformance.com` — deferred out of this pass
+   specifically because the domain isn't live yet; flip it in the same
+   change as step 3.
+5. **Update the Stripe and DocuSign webhook endpoints** (their own
+   dashboards) to point at `keptperformance.com` instead of
+   `catalystcoachingelite.com`, matching the existing note under
+   "Vercel actions required" below.
+6. **Make `catalystcoachingelite.com` a permanent redirect** to
+   `keptperformance.com` (301, at the DNS/Vercel level, or a small
+   proxy.ts rule) — never fully retire it. Preserves every inbound
+   link, bookmark, and search result instead of breaking them; matches
+   this doc's existing "never a dead end" philosophy for the
+   Kynovant↔Catalyst cross-domain redirects above.
+7. **Preserve route paths** (`/apply` → `/apply`, `/about` → `/about`,
+   etc.) — already true, no route renames were made by the Kept
+   Performance rebrand — so the old domain's redirect in step 6 is a
+   simple whole-path passthrough, not a per-page remap, and no SEO
+   equity is lost to a changed path structure.
 
 ## Vercel actions required (manual, not done by this change)
 
