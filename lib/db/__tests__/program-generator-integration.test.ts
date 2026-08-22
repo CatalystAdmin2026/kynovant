@@ -962,6 +962,77 @@ describe("staged generation orchestration", () => {
     expect((draftRow.draftJson as GeneratedProgramDraft).weeks).toHaveLength(4);
   }, 30000);
 
+  // P0 regression — production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a
+  // ("Maddie"): raising the per-call timeout alone cannot make an
+  // unbounded sequential multi-week loop safe against Vercel Hobby's
+  // fixed 300s function-duration ceiling (verified against Vercel's
+  // own docs — default and maximum are the same number on this plan).
+  // PROGRAM_GENERATOR_TIME_BUDGET_MS lets this test force the pause
+  // branch deterministically (no real elapsed time or mocked clock
+  // needed) — see staged-generation.ts's resolveGenerationTimeBudgetMs().
+  it("pauses generation before starting a week that would risk exceeding the time budget, leaving a resumable failed state — not a hang or a silent kill", async () => {
+    const originalBudget = process.env.PROGRAM_GENERATOR_TIME_BUDGET_MS;
+    process.env.PROGRAM_GENERATOR_TIME_BUDGET_MS = "1"; // any real work at all exceeds this
+
+    try {
+      const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 5, daysPerWeek: 2 };
+      const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+      draftIds.push(row.id);
+
+      const result = await runStagedGeneration({
+        draftId: row.id,
+        coachId: coachA.id,
+        brief,
+        clientContext: null,
+        existingShell: null,
+        startFromWeek: 1,
+        existingCompletedWeeks: new Map(),
+      });
+
+      // A deliberate, safe pause — not a crash, not silently stuck
+      // "running" forever, and never a raw exception escaping the call.
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatch(/retry/i);
+
+      const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+      // Resumable: identical shape to a genuine failure, so
+      // resumeGenerationAction's existing atomic-claim + skip-completed-
+      // weeks logic (see the "resuming a failed generation" test above
+      // and claimFailedDraftForResume's own test below) handles this
+      // for free — no new state machine needed.
+      expect(draftRow.status).toBe("failed");
+
+      const latestRun = await getLatestRun(row.id);
+      expect(latestRun?.status).toBe("failed");
+    } finally {
+      if (originalBudget === undefined) delete process.env.PROGRAM_GENERATOR_TIME_BUDGET_MS;
+      else process.env.PROGRAM_GENERATOR_TIME_BUDGET_MS = originalBudget;
+    }
+  });
+
+  it("a generation that completes within the time budget is unaffected by the guard (no false-positive pausing)", async () => {
+    // Default budget (240s) comfortably covers a small fixture-backed
+    // run — proves the guard only fires when it should.
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 2, daysPerWeek: 1 };
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachA.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      startFromWeek: 1,
+      existingCompletedWeeks: new Map(),
+    });
+    expect(result.ok).toBe(true);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.status).toBe("ready_for_review");
+  });
+
   it("claimFailedDraftForResume closes the double-click resume race — only one concurrent caller wins the claim", async () => {
     const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 1, daysPerWeek: 1 };
     const row = await createDraft({ coachId: coachA.id, clientId: null, brief });

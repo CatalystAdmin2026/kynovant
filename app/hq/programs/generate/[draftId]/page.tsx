@@ -12,6 +12,12 @@ import { groupDraftFindings } from "@/lib/program-generator/findings-grouping";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import DraftReviewClient from "./DraftReviewClient";
 
+// See app/hq/programs/generate/page.tsx's identical export for why
+// this is explicit despite Hobby's default already sitting at its
+// hard 300s maximum — resumeGenerationAction (this page's Retry
+// button) runs the same staged generation loop as a fresh generation.
+export const maxDuration = 300;
+
 export default async function DraftReviewPage({
   params,
 }: {

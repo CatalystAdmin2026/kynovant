@@ -51,6 +51,7 @@ import {
   failRun,
   recordEditEvent,
   claimGenerationQuota,
+  releaseGenerationQuotaClaim,
   GENERATION_QUOTA_LIMIT,
 } from "@/lib/db/program-generation-service";
 import {
@@ -531,7 +532,11 @@ export async function regenerateDayAction(params: {
   );
 
   if (!outcome.ok) {
-    await failRun(run.id, outcome.errorMessage);
+    // See ClaimQuotaResult's comment in program-generation-service.ts:
+    // a definitive timeout produced zero usable output — don't charge
+    // the coach's quota for infrastructure aborting its own call.
+    if (outcome.errorCode === "timeout") await releaseGenerationQuotaClaim(claim.claimId);
+    await failRun(run.id, outcome.errorMessage, { provider: outcome.provider, model: outcome.model });
     return { ok: false, error: "Regeneration failed. Please try again." };
   }
 
@@ -547,7 +552,7 @@ export async function regenerateDayAction(params: {
   const resolvedDraft = await resolveProgramDraftExercises(verifiedDraft, loaded.coachId);
   const reparsed = parseGeneratedProgramDraft(resolvedDraft);
   if (!reparsed.ok) {
-    await failRun(run.id, reparsed.error);
+    await failRun(run.id, reparsed.error, { provider: outcome.provider, model: outcome.model });
     return { ok: false, error: `Regeneration produced an invalid draft: ${reparsed.error}` };
   }
 

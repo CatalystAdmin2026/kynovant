@@ -498,11 +498,21 @@ export async function completeRun(
     .where(eq(programGenerationRuns.id, runId));
 }
 
-export async function failRun(runId: string, errorMessage: string): Promise<void> {
+export async function failRun(
+  runId: string,
+  errorMessage: string,
+  outcome?: { provider?: string; model?: string },
+): Promise<void> {
   const db = getDb();
   await db
     .update(programGenerationRuns)
-    .set({ status: "failed", errorMessage, completedAt: new Date() })
+    .set({
+      status: "failed",
+      errorMessage,
+      ...(outcome?.provider ? { provider: outcome.provider } : {}),
+      ...(outcome?.model ? { model: outcome.model } : {}),
+      completedAt: new Date(),
+    })
     .where(eq(programGenerationRuns.id, runId));
 }
 
@@ -593,7 +603,24 @@ export async function failRun(runId: string, errorMessage: string): Promise<void
 export const GENERATION_QUOTA_LIMIT = 10;
 export const GENERATION_QUOTA_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
-export type ClaimQuotaResult = { ok: true } | { ok: false; retryAfterMs: number };
+// claimId lets a caller release this specific claim later (see
+// releaseGenerationQuotaClaim below) — added for the P0 fix to Maddie's
+// incident (production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a):
+// three real attempts each claimed a unit and each failed on a plain
+// infrastructure timeout (the provider call was aborted before
+// producing anything), not on the coach's own request pattern. A
+// "failed attempts are charged the same as successful ones" policy is
+// otherwise correct (see this function's own header comment — this
+// feature's real cost driver is attempts, tokens are genuinely spent
+// even on a failure that returns real model output) but a definitive
+// *timeout* means zero usable output was ever produced — the provider
+// call was killed by OUR OWN configured ceiling, not a cost the coach
+// should absorb. Only `errorCode: "timeout"` failures in
+// staged-generation.ts / regenerateDayAction release their claim;
+// every other failure (invalid_output, provider_unavailable,
+// not_configured, a real validation failure after real content came
+// back) still counts, unchanged.
+export type ClaimQuotaResult = { ok: true; claimId: string } | { ok: false; retryAfterMs: number };
 
 // Atomicity under concurrency: a plain "SELECT count(*) ... ; if under
 // limit, INSERT" is a genuine TOCTOU race between two concurrent callers
@@ -688,8 +715,11 @@ export async function claimGenerationQuota(
         return { ok: false, retryAfterMs };
       }
 
-      await tx.insert(programGenerationQuotaClaims).values({ coachId, draftId, scope });
-      return { ok: true };
+      const [inserted] = await tx
+        .insert(programGenerationQuotaClaims)
+        .values({ coachId, draftId, scope })
+        .returning({ id: programGenerationQuotaClaims.id });
+      return { ok: true, claimId: inserted.id };
     });
   } catch (err) {
     // Postgres 55P03 = lock_not_available — the lock_timeout above
@@ -705,6 +735,23 @@ export async function claimGenerationQuota(
     }
     throw err;
   }
+}
+
+// Undoes a specific quota claim — see ClaimQuotaResult's own comment
+// for exactly when this should (and should not) be called: only when
+// the attempt that claim paid for produced zero usable provider output
+// (a definitive timeout), never for a failure that got real content
+// back from the model. Deleting (not just marking) the row is correct
+// here: the claims table is a pure rolling-window counter (see this
+// file's count(*) query above) with no other reader that would need a
+// tombstone — a deleted row simply never counts against the coach's
+// window, exactly as if the claim had never been taken. Best-effort:
+// a delete that hits zero rows (already deleted, or the id was never a
+// real claim) is not an error — never let quota bookkeeping cleanup
+// fail the caller's actual failure-handling path.
+export async function releaseGenerationQuotaClaim(claimId: string): Promise<void> {
+  const db = getDb();
+  await db.delete(programGenerationQuotaClaims).where(eq(programGenerationQuotaClaims.id, claimId));
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -36,6 +36,7 @@ import { users } from "../schema";
 import { programGenerationQuotaClaims, programGenerationDrafts } from "../schema-program-generator";
 import {
   claimGenerationQuota,
+  releaseGenerationQuotaClaim,
   createDraft,
   saveProgramShell,
   saveGenerationWeek,
@@ -84,6 +85,13 @@ const coachConcurrent = { id: "" };
 const coachResume = { id: "" };
 const coachBoundaryExpired = { id: "" };
 const coachBoundaryActive = { id: "" };
+// One dedicated coach per releaseGenerationQuotaClaim test — see this
+// file's header comment: several of these drive a coach's claim count
+// to the limit, which would corrupt a shared ledger across tests.
+const coachReleaseBasic = { id: "" };
+const coachReleaseLimit = { id: "" };
+const coachReleaseIdempotent = { id: "" };
+const coachReleaseSpecific = { id: "" };
 
 const draftIds: string[] = [];
 
@@ -109,6 +117,10 @@ beforeAll(async () => {
     coachResume.id,
     coachBoundaryExpired.id,
     coachBoundaryActive.id,
+    coachReleaseBasic.id,
+    coachReleaseLimit.id,
+    coachReleaseIdempotent.id,
+    coachReleaseSpecific.id,
   ] = await Promise.all([
     createAuthUser("limit"),
     createAuthUser("iso-a"),
@@ -117,12 +129,26 @@ beforeAll(async () => {
     createAuthUser("resume"),
     createAuthUser("boundary-expired"),
     createAuthUser("boundary-active"),
+    createAuthUser("release-basic"),
+    createAuthUser("release-limit"),
+    createAuthUser("release-idempotent"),
+    createAuthUser("release-specific"),
   ]);
 
   await Promise.all(
-    [coachLimit, coachIsoA, coachIsoB, coachConcurrent, coachResume, coachBoundaryExpired, coachBoundaryActive].map(
-      (c) => db.update(users).set({ role: "coach", status: "active" }).where(eq(users.id, c.id)),
-    ),
+    [
+      coachLimit,
+      coachIsoA,
+      coachIsoB,
+      coachConcurrent,
+      coachResume,
+      coachBoundaryExpired,
+      coachBoundaryActive,
+      coachReleaseBasic,
+      coachReleaseLimit,
+      coachReleaseIdempotent,
+      coachReleaseSpecific,
+    ].map((c) => db.update(users).set({ role: "coach", status: "active" }).where(eq(users.id, c.id))),
   );
 }, 30_000);
 
@@ -150,6 +176,10 @@ afterAll(async () => {
     coachResume.id,
     coachBoundaryExpired.id,
     coachBoundaryActive.id,
+    coachReleaseBasic.id,
+    coachReleaseLimit.id,
+    coachReleaseIdempotent.id,
+    coachReleaseSpecific.id,
   ].filter(Boolean);
 
   // program_generation_drafts.coach_id is ON DELETE RESTRICT against
@@ -530,4 +560,77 @@ describe("claimGenerationQuota — window boundary behavior", () => {
       expect(result.retryAfterMs).toBeLessThanOrEqual(65_000);
     }
   }, 30_000);
+});
+
+// ─────────────────────────────────────────────────────────────
+// P0 regression — production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a
+// ("Maddie"): three real attempts each claimed a quota unit and each
+// failed on a plain infrastructure timeout — zero usable output ever
+// produced, three units gone for one program that never completed.
+// See ClaimQuotaResult's comment in program-generation-service.ts for
+// exactly when release is (and is not) appropriate; staged-generation.ts
+// and regenerateDayAction wire this in only for errorCode "timeout".
+// ─────────────────────────────────────────────────────────────
+
+describe("releaseGenerationQuotaClaim — undoing a claim that paid for a definitive timeout", () => {
+  it("a released claim no longer counts against the coach's window", async () => {
+    const claim = await claimGenerationQuota(coachReleaseBasic.id, null, "full_draft");
+    expect(claim.ok).toBe(true);
+    if (!claim.ok) return;
+
+    expect(await countClaims(coachReleaseBasic.id)).toBe(1);
+
+    await releaseGenerationQuotaClaim(claim.claimId);
+
+    expect(await countClaims(coachReleaseBasic.id)).toBe(0);
+  });
+
+  it("releasing frees up room under the limit for a genuinely new claim", async () => {
+    const claims: string[] = [];
+    for (let i = 0; i < GENERATION_QUOTA_LIMIT; i++) {
+      const result = await claimGenerationQuota(coachReleaseLimit.id, null, "full_draft");
+      expect(result.ok).toBe(true);
+      if (result.ok) claims.push(result.claimId);
+    }
+
+    // At the limit — the next claim is rejected exactly as
+    // "same coach repeated invocation" above proves.
+    expect((await claimGenerationQuota(coachReleaseLimit.id, null, "full_draft")).ok).toBe(false);
+
+    // Release one (simulating one of those attempts having failed on a
+    // definitive timeout) — a fresh claim now succeeds again.
+    await releaseGenerationQuotaClaim(claims[0]);
+    const afterRelease = await claimGenerationQuota(coachReleaseLimit.id, null, "full_draft");
+    expect(afterRelease.ok).toBe(true);
+  });
+
+  it("releasing an already-released (or nonexistent) claim id is a safe no-op, never an error", async () => {
+    const claim = await claimGenerationQuota(coachReleaseIdempotent.id, null, "full_draft");
+    expect(claim.ok).toBe(true);
+    if (!claim.ok) return;
+
+    await releaseGenerationQuotaClaim(claim.claimId);
+    // Second release of the same (now-deleted) id must not throw.
+    await expect(releaseGenerationQuotaClaim(claim.claimId)).resolves.toBeUndefined();
+    // A random, never-issued id must not throw either.
+    await expect(releaseGenerationQuotaClaim(randomUUID())).resolves.toBeUndefined();
+  });
+
+  it("only releases the specific claim by id — never touches another of the same coach's claims", async () => {
+    const first = await claimGenerationQuota(coachReleaseSpecific.id, null, "full_draft");
+    const second = await claimGenerationQuota(coachReleaseSpecific.id, null, "full_draft");
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+
+    const before = await countClaims(coachReleaseSpecific.id);
+    await releaseGenerationQuotaClaim(first.claimId);
+    expect(await countClaims(coachReleaseSpecific.id)).toBe(before - 1);
+
+    const [remaining] = await db
+      .select({ id: programGenerationQuotaClaims.id })
+      .from(programGenerationQuotaClaims)
+      .where(eq(programGenerationQuotaClaims.coachId, coachReleaseSpecific.id));
+    expect(remaining.id).toBe(second.claimId);
+  });
 });

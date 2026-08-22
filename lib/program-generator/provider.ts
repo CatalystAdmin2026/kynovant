@@ -10,10 +10,28 @@
 //   PROGRAM_GENERATOR_MODEL      — required for the real provider. A
 //     Vercel AI Gateway model string, e.g. "anthropic/claude-sonnet-4-5"
 //     or "openai/gpt-4o". Read at call time, never a compiled-in default.
-//   PROGRAM_GENERATOR_TIMEOUT_MS — optional, defaults to 45000. Applied
-//     PER provider call (shell, each week, day regeneration) — a staged
-//     generation with 10 weeks makes 11 independently-timed calls, never
-//     one call sized to fit the whole program in a single window.
+//   PROGRAM_GENERATOR_TIMEOUT_MS — optional. When set, OVERRIDES the
+//     per-call-type default below for every call (shell, week, day
+//     regen) uniformly — an emergency/ops escape hatch, not the normal
+//     tuning knob. Applied PER provider call, never once for the whole
+//     staged generation.
+//
+//   P0 incident (production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a,
+//   "Maddie"): every attempt failed at Week 1 with "Generation exceeded
+//   45000ms and was aborted." A single week's structured-output call
+//   (up to WEEK_MAX_OUTPUT_TOKENS) can legitimately take longer than
+//   45s at real-world Claude Sonnet throughput — 45s was simply too
+//   short, not a provider outage. Fixed with per-call-type defaults
+//   below instead of one blanket constant, because shell/week/day-regen
+//   have very different output sizes (and the week default, unlike day
+//   regen, sits inside runStagedGeneration()'s sequential per-week loop
+//   — see that file's GENERATION_TIME_BUDGET_MS comment for why the
+//   week default can't just be set as generously as day regen's without
+//   separately bounding how many weeks one invocation attempts. Vercel
+//   Hobby's function duration is capped at a HARD 300s — default and
+//   maximum are the same number on this plan, so a per-call timeout
+//   alone can never be raised enough to "solve" an unbounded sequential
+//   loop; the two fixes are independent and both required).
 //   PROGRAM_GENERATOR_USE_FIXTURE — optional, "true" to force the dev
 //     fixture provider even if PROGRAM_GENERATOR_MODEL is also set.
 //     Must be explicit — the fixture is never a silent fallback for a
@@ -116,7 +134,29 @@ export interface GenerationSuccess {
 }
 export type GenerationOutcome = GenerationSuccess | GenerationFailure;
 
-const DEFAULT_TIMEOUT_MS = 45_000;
+// Per-call-type defaults, not one blanket constant — see file header
+// for the reasoning (output size varies a lot by call type, and the
+// week default specifically has to stay compatible with
+// runStagedGeneration()'s sequential-loop time budget). All three are
+// exported so staged-generation.ts's budget guard can reason about the
+// REAL configured week timeout (respecting the env override) rather
+// than duplicating a hardcoded number that could silently drift out of
+// sync with this file's.
+//
+//   SHELL — smallest output (SHELL_MAX_OUTPUT_TOKENS); a call still
+//     stuck at 60s is much more likely a genuine hang than legitimate
+//     slowness, so it keeps a tighter ceiling than week/day-regen.
+//   WEEK  — the call actually responsible for Maddie's incident.
+//     90s comfortably clears the observed 45s failure point while
+//     leaving real headroom under Hobby's fixed 300s function-duration
+//     ceiling for a multi-week sequential run (see staged-generation.ts).
+//   DAY_REGEN — largest output cap (DAY_REGEN_MAX_OUTPUT_TOKENS) and,
+//     unlike week, always exactly one call outside any sequential loop
+//     — no cumulative-duration concern, so it can afford the most
+//     generous default.
+export const SHELL_DEFAULT_TIMEOUT_MS = 60_000;
+export const WEEK_DEFAULT_TIMEOUT_MS = 90_000;
+export const DAY_REGEN_DEFAULT_TIMEOUT_MS = 120_000;
 
 // Sized from measured output for realistic content at each scope (see
 // the latency investigation this staged design replaces): a lightweight
@@ -134,10 +174,13 @@ const DAY_REGEN_MAX_OUTPUT_TOKENS = 16_000;
 // Never the SDK default (2) — see file header.
 const PROVIDER_MAX_RETRIES = 1;
 
-function resolveTimeoutMs(): number {
+// PROGRAM_GENERATOR_TIMEOUT_MS, when set, overrides every call type
+// uniformly (ops escape hatch). Unset (the normal case) falls through
+// to the per-call-type default passed in by the caller.
+export function resolveTimeoutMs(defaultMs: number): number {
   const raw = process.env.PROGRAM_GENERATOR_TIMEOUT_MS;
   const parsed = raw ? Number(raw) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultMs;
 }
 
 function isFixtureModeEnabled(): boolean {
@@ -285,7 +328,7 @@ export async function generateProgramShell(
   const result = await callProvider({
     prompt,
     schema: ProgramShellSchema,
-    timeoutMs: resolveTimeoutMs(),
+    timeoutMs: resolveTimeoutMs(SHELL_DEFAULT_TIMEOUT_MS),
     maxOutputTokens: SHELL_MAX_OUTPUT_TOKENS,
   });
   if (!result.ok) return result;
@@ -313,7 +356,7 @@ export async function generateProgramWeek(params: {
   const result = await callProvider({
     prompt,
     schema: ModelWeekDraftSchema,
-    timeoutMs: resolveTimeoutMs(),
+    timeoutMs: resolveTimeoutMs(WEEK_DEFAULT_TIMEOUT_MS),
     maxOutputTokens: WEEK_MAX_OUTPUT_TOKENS,
   });
   if (!result.ok) return result;
@@ -345,7 +388,7 @@ export async function regenerateDayDraft(
   const result = await callProvider({
     prompt,
     schema: ModelProgramDraftSchema,
-    timeoutMs: resolveTimeoutMs(),
+    timeoutMs: resolveTimeoutMs(DAY_REGEN_DEFAULT_TIMEOUT_MS),
     maxOutputTokens: DAY_REGEN_MAX_OUTPUT_TOKENS,
   });
   if (!result.ok) return result;

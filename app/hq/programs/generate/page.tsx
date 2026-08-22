@@ -11,6 +11,15 @@ import HQPageHeader from "@/components/hq/HQPageHeader";
 import HQBreadcrumbs from "@/components/hq/HQBreadcrumbs";
 import GenerateBriefForm from "./GenerateBriefForm";
 
+// Explicit, not load-bearing on its own: Vercel Hobby's function
+// duration default already equals its hard maximum (300s — verified
+// against Vercel's docs, not assumed), so this can't raise the real
+// ceiling on this plan. Set anyway so the number driving
+// staged-generation.ts's GENERATION_TIME_BUDGET_MS is documented in
+// the one place a future Pro-plan upgrade would actually need to
+// reconsider it, rather than left as an implicit platform default.
+export const maxDuration = 300;
+
 export default async function GenerateProgramPage({
   searchParams,
 }: {
