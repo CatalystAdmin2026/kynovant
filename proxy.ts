@@ -71,6 +71,7 @@ const CATALYST_ONLY_PREFIXES = [
   "/programs",
   "/apply",
   "/enroll",
+  "/partners",
   "/onboarding",
   "/onboarding-complete",
   "/executive-onboarding",
