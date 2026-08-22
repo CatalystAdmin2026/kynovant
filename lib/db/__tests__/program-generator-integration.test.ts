@@ -769,6 +769,7 @@ describe("staged generation orchestration", () => {
       brief,
       clientContext: null,
       existingShell: null,
+      isResume: false,
       startFromWeek: 1,
       existingCompletedWeeks: new Map(),
     });
@@ -932,6 +933,7 @@ describe("staged generation orchestration", () => {
       brief,
       clientContext: null,
       existingShell: shell,
+      isResume: true,
       startFromWeek: 3,
       existingCompletedWeeks,
     });
@@ -985,6 +987,7 @@ describe("staged generation orchestration", () => {
         brief,
         clientContext: null,
         existingShell: null,
+        isResume: false,
         startFromWeek: 1,
         existingCompletedWeeks: new Map(),
       });
@@ -1024,6 +1027,7 @@ describe("staged generation orchestration", () => {
       brief,
       clientContext: null,
       existingShell: null,
+      isResume: false,
       startFromWeek: 1,
       existingCompletedWeeks: new Map(),
     });
@@ -1111,6 +1115,7 @@ describe("staged generation orchestration", () => {
       brief: exhaustedBrief,
       clientContext: null,
       existingShell: null,
+      isResume: false,
       startFromWeek: 1,
       existingCompletedWeeks: new Map(),
     });

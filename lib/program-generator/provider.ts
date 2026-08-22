@@ -99,12 +99,18 @@ export type GenerationErrorCode =
   | "cancelled"
   | "unknown";
 
+// elapsedMs/timeoutMs exist so callers can emit
+// lib/program-generator/observability.ts's structured logs without
+// duplicating timing logic — this file is the only place a provider
+// call's clock actually runs (see callProvider() below).
 export interface GenerationFailure {
   ok: false;
   errorCode: GenerationErrorCode;
   errorMessage: string;
   provider: string;
   model: string;
+  elapsedMs: number;
+  timeoutMs: number;
 }
 
 export interface ShellGenerationSuccess {
@@ -112,6 +118,7 @@ export interface ShellGenerationSuccess {
   shell: ProgramShell;
   provider: string;
   model: string;
+  elapsedMs: number;
 }
 export type ShellGenerationOutcome = ShellGenerationSuccess | GenerationFailure;
 
@@ -120,6 +127,7 @@ export interface WeekGenerationSuccess {
   week: ModelWeekDraft;
   provider: string;
   model: string;
+  elapsedMs: number;
 }
 export type WeekGenerationOutcome = WeekGenerationSuccess | GenerationFailure;
 
@@ -131,6 +139,7 @@ export interface GenerationSuccess {
   draft: ModelProgramDraft;
   provider: string;
   model: string;
+  elapsedMs: number;
 }
 export type GenerationOutcome = GenerationSuccess | GenerationFailure;
 
@@ -204,10 +213,11 @@ interface CallProviderParams<T> {
 }
 
 type CallProviderResult<T> =
-  | { ok: true; object: T; provider: string; model: string }
+  | { ok: true; object: T; provider: string; model: string; elapsedMs: number }
   | GenerationFailure;
 
 async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProviderResult<T>> {
+  const startedAt = Date.now();
   const model = process.env.PROGRAM_GENERATOR_MODEL;
   if (!model) {
     return {
@@ -219,6 +229,8 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
         "enable the development fixture.",
       provider: "unconfigured",
       model: "unconfigured",
+      elapsedMs: Date.now() - startedAt,
+      timeoutMs: params.timeoutMs,
     };
   }
 
@@ -236,7 +248,7 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
     });
     clearTimeout(timer);
 
-    return { ok: true, object: result.object, provider: "vercel-ai-gateway", model };
+    return { ok: true, object: result.object, provider: "vercel-ai-gateway", model, elapsedMs: Date.now() - startedAt };
   } catch (err) {
     clearTimeout(timer);
 
@@ -247,6 +259,8 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
         errorMessage: `Generation exceeded ${params.timeoutMs}ms and was aborted.`,
         provider: "vercel-ai-gateway",
         model,
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs: params.timeoutMs,
       };
     }
 
@@ -257,12 +271,20 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
     // don't discriminate further here — both are "the provider did not
     // give us a usable result" and both must fail safely (locked rule:
     // no partial persistence, safe failure state).
+    //
+    // err.message only — NEVER err.cause or (for NoObjectGeneratedError
+    // specifically) err.text, which can carry the model's raw generated
+    // output. This is the one place that boundary is enforced; see
+    // observability.ts's header comment for why it's still truncated
+    // again defensively before being logged.
     return {
       ok: false,
       errorCode: "provider_unavailable",
       errorMessage: err instanceof Error ? err.message : "Unknown provider error.",
       provider: "vercel-ai-gateway",
       model,
+      elapsedMs: Date.now() - startedAt,
+      timeoutMs: params.timeoutMs,
     };
   }
 }
@@ -272,9 +294,12 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
 // a silent fallback. See lib/program-generator/fixture.ts.
 // ─────────────────────────────────────────────────────────────
 
+// Fixture calls are synchronous/in-process (no provider round trip and
+// no real timeout window), so elapsedMs/timeoutMs are always 0 here —
+// never fabricated, just genuinely not applicable.
 async function callFixtureShellProvider(brief: ProgramGenerationBrief): Promise<ShellGenerationOutcome> {
   const shell = buildFixtureProgramShell(brief);
-  return { ok: true, shell, provider: "dev-fixture", model: "dev-fixture" };
+  return { ok: true, shell, provider: "dev-fixture", model: "dev-fixture", elapsedMs: 0 };
 }
 
 async function callFixtureWeekProvider(
@@ -292,9 +317,11 @@ async function callFixtureWeekProvider(
         "exercises exist in the Exercise Library. Seed more active exercises to use the fixture.",
       provider: "dev-fixture",
       model: "dev-fixture",
+      elapsedMs: 0,
+      timeoutMs: 0,
     };
   }
-  return { ok: true, week, provider: "dev-fixture", model: "dev-fixture" };
+  return { ok: true, week, provider: "dev-fixture", model: "dev-fixture", elapsedMs: 0 };
 }
 
 async function callFixtureProvider(candidates: ExerciseCandidate[]): Promise<GenerationOutcome> {
@@ -308,9 +335,11 @@ async function callFixtureProvider(candidates: ExerciseCandidate[]): Promise<Gen
         "exercises exist in the Exercise Library. Seed more active exercises to use the fixture.",
       provider: "dev-fixture",
       model: "dev-fixture",
+      elapsedMs: 0,
+      timeoutMs: 0,
     };
   }
-  return { ok: true, draft, provider: "dev-fixture", model: "dev-fixture" };
+  return { ok: true, draft, provider: "dev-fixture", model: "dev-fixture", elapsedMs: 0 };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -332,7 +361,7 @@ export async function generateProgramShell(
     maxOutputTokens: SHELL_MAX_OUTPUT_TOKENS,
   });
   if (!result.ok) return result;
-  return { ok: true, shell: result.object, provider: result.provider, model: result.model };
+  return { ok: true, shell: result.object, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
 }
 
 export async function generateProgramWeek(params: {
@@ -360,7 +389,7 @@ export async function generateProgramWeek(params: {
     maxOutputTokens: WEEK_MAX_OUTPUT_TOKENS,
   });
   if (!result.ok) return result;
-  return { ok: true, week: result.object, provider: result.provider, model: result.model };
+  return { ok: true, week: result.object, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -392,5 +421,5 @@ export async function regenerateDayDraft(
     maxOutputTokens: DAY_REGEN_MAX_OUTPUT_TOKENS,
   });
   if (!result.ok) return result;
-  return { ok: true, draft: result.object, provider: result.provider, model: result.model };
+  return { ok: true, draft: result.object, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
 }

@@ -37,6 +37,7 @@ import {
   GENERATION_QUOTA_LIMIT,
 } from "@/lib/db/program-generation-service";
 import { generateProgramShell, generateProgramWeek, resolveTimeoutMs, WEEK_DEFAULT_TIMEOUT_MS } from "./provider";
+import { logGenerationFailure, logProviderSuccess, logQuotaRelease } from "./observability";
 import { summarizeWeekForPrompt } from "./prompt";
 import { resolveProgramDraftExercises } from "./exercise-resolution";
 import { validateGeneratedDraft, catalogGapFindings, type ValidationFinding } from "./validation";
@@ -94,6 +95,13 @@ export interface StagedGenerationParams {
   startFromWeek: number;
   // Already-'completed' weeks, keyed by weekNumber — never regenerated.
   existingCompletedWeeks: Map<number, ModelWeekDraft>;
+  // Explicit, not inferred from existingShell/existingCompletedWeeks
+  // being empty — a resume whose very first attempt failed during the
+  // shell call itself would have BOTH empty too, which is
+  // indistinguishable from a fresh generation by those fields alone.
+  // Observability-only (isRetryOrResume on the structured failure log)
+  // — never affects generation behavior itself.
+  isResume: boolean;
 }
 
 export type StagedGenerationResult = { ok: true } | { ok: false; error: string };
@@ -138,6 +146,27 @@ export function resolveGenerationTimeBudgetMs(): number {
   const raw = process.env.PROGRAM_GENERATOR_TIME_BUDGET_MS;
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GENERATION_TIME_BUDGET_MS;
+}
+
+// Shared by the shell- and week-failure branches below. Never lets a
+// release-path DB error crash the actual failure-handling flow it's
+// called from — logs its own outcome and returns whether release
+// actually fired, for the failure log's quotaReleased field.
+async function releaseQuotaOnTimeout(
+  errorCode: string,
+  claimId: string | undefined,
+  draftId: string,
+  runId: string,
+): Promise<boolean> {
+  if (errorCode !== "timeout" || !claimId) return false;
+  try {
+    await releaseGenerationQuotaClaim(claimId);
+    logQuotaRelease({ draftId, runId, reason: "provider_timeout", success: true });
+    return true;
+  } catch {
+    logQuotaRelease({ draftId, runId, reason: "provider_timeout", success: false });
+    return false;
+  }
 }
 
 export async function runStagedGeneration(params: StagedGenerationParams): Promise<StagedGenerationResult> {
@@ -221,12 +250,34 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
       // a definitive timeout produced zero usable output — the coach's
       // quota shouldn't be charged for infrastructure aborting its own
       // call. Every other errorCode still counts.
-      if (shellOutcome.errorCode === "timeout" && claimId) await releaseGenerationQuotaClaim(claimId);
+      const quotaReleased = await releaseQuotaOnTimeout(shellOutcome.errorCode, claimId, params.draftId, run.id);
+      logGenerationFailure({
+        draftId: params.draftId,
+        runId: run.id,
+        stage: "shell",
+        errorCode: shellOutcome.errorCode,
+        errorMessage: shellOutcome.errorMessage,
+        provider: shellOutcome.provider,
+        model: shellOutcome.model,
+        elapsedMs: shellOutcome.elapsedMs,
+        timeoutMs: shellOutcome.timeoutMs,
+        isRetryOrResume: params.isResume,
+        completedWeeks: params.existingCompletedWeeks.size,
+        quotaClaimed: !!claimId,
+        quotaReleased,
+      });
       await failRun(run.id, shellOutcome.errorMessage, { provider: shellOutcome.provider, model: shellOutcome.model });
       const failureReason = "Generation failed while designing the program structure. You can retry.";
       await setDraftStatus(params.draftId, "failed", { failureReason });
       return { ok: false, error: failureReason };
     }
+    logProviderSuccess({
+      draftId: params.draftId,
+      stage: "shell",
+      provider: shellOutcome.provider,
+      model: shellOutcome.model,
+      elapsedMs: shellOutcome.elapsedMs,
+    });
     if (shellOutcome.shell.totalWeeks !== params.brief.weeks) {
       await failRun(
         run.id,
@@ -281,13 +332,37 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     });
 
     if (!weekOutcome.ok) {
-      if (weekOutcome.errorCode === "timeout" && claimId) await releaseGenerationQuotaClaim(claimId);
+      const quotaReleased = await releaseQuotaOnTimeout(weekOutcome.errorCode, claimId, params.draftId, run.id);
+      logGenerationFailure({
+        draftId: params.draftId,
+        runId: run.id,
+        stage: "week",
+        weekNumber,
+        errorCode: weekOutcome.errorCode,
+        errorMessage: weekOutcome.errorMessage,
+        provider: weekOutcome.provider,
+        model: weekOutcome.model,
+        elapsedMs: weekOutcome.elapsedMs,
+        timeoutMs: weekOutcome.timeoutMs,
+        isRetryOrResume: params.isResume,
+        completedWeeks: allWeeks.size,
+        quotaClaimed: !!claimId,
+        quotaReleased,
+      });
       await saveGenerationWeek(params.draftId, weekNumber, { status: "failed", errorMessage: weekOutcome.errorMessage });
       await failRun(run.id, weekOutcome.errorMessage, { provider: weekOutcome.provider, model: weekOutcome.model });
       const failureReason = `Generation failed while creating Week ${weekNumber} of ${shell.totalWeeks}. Completed weeks were saved — you can retry to continue from here.`;
       await setDraftStatus(params.draftId, "failed", { failureReason });
       return { ok: false, error: failureReason };
     }
+    logProviderSuccess({
+      draftId: params.draftId,
+      stage: "week",
+      weekNumber,
+      provider: weekOutcome.provider,
+      model: weekOutcome.model,
+      elapsedMs: weekOutcome.elapsedMs,
+    });
 
     // Never trust a returned exerciseId merely because the model
     // supplied one — verify every prescription's id against the exact

@@ -345,6 +345,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       brief,
       clientContext: null,
       existingShell: null,
+      isResume: false,
       startFromWeek: 1,
       existingCompletedWeeks: new Map(),
     });
@@ -367,6 +368,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       brief,
       clientContext: null,
       existingShell: shell,
+      isResume: true,
       startFromWeek: 1,
       existingCompletedWeeks: new Map(),
     });
@@ -392,6 +394,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       brief,
       clientContext: null,
       existingShell: shell,
+      isResume: true,
       startFromWeek: 2, // > shell.totalWeeks (1) — nothing left to generate
       existingCompletedWeeks: new Map([[1, week1]]),
     });

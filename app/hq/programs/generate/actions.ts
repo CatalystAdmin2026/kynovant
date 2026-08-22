@@ -66,6 +66,7 @@ import {
   type ModelWeekDraft,
 } from "@/lib/program-generator/contracts";
 import { regenerateDayDraft } from "@/lib/program-generator/provider";
+import { logGenerationFailure, logProviderSuccess, logQuotaRelease } from "@/lib/program-generator/observability";
 import { resolveProgramDraftExercises, normalizeExerciseName } from "@/lib/program-generator/exercise-resolution";
 import { buildExerciseCandidateSet, verifyProgramDraftAgainstCandidates } from "@/lib/program-generator/exercise-candidates";
 import { catalogGapFindings } from "@/lib/program-generator/validation";
@@ -159,6 +160,7 @@ export async function generateProgramDraftAction(input: {
     brief: parsedBrief.data,
     clientContext,
     existingShell: null,
+    isResume: false,
     startFromWeek: 1,
     existingCompletedWeeks: new Map(),
   });
@@ -235,6 +237,7 @@ export async function resumeGenerationAction(draftId: string): Promise<ActionRes
     brief: parsedBrief.data,
     clientContext,
     existingShell,
+    isResume: true,
     startFromWeek,
     existingCompletedWeeks,
   });
@@ -535,10 +538,40 @@ export async function regenerateDayAction(params: {
     // See ClaimQuotaResult's comment in program-generation-service.ts:
     // a definitive timeout produced zero usable output — don't charge
     // the coach's quota for infrastructure aborting its own call.
-    if (outcome.errorCode === "timeout") await releaseGenerationQuotaClaim(claim.claimId);
+    let quotaReleased = false;
+    if (outcome.errorCode === "timeout") {
+      try {
+        await releaseGenerationQuotaClaim(claim.claimId);
+        logQuotaRelease({ draftId: params.draftId, runId: run.id, reason: "provider_timeout", success: true });
+        quotaReleased = true;
+      } catch {
+        logQuotaRelease({ draftId: params.draftId, runId: run.id, reason: "provider_timeout", success: false });
+      }
+    }
+    logGenerationFailure({
+      draftId: params.draftId,
+      runId: run.id,
+      stage: "day_regeneration",
+      errorCode: outcome.errorCode,
+      errorMessage: outcome.errorMessage,
+      provider: outcome.provider,
+      model: outcome.model,
+      elapsedMs: outcome.elapsedMs,
+      timeoutMs: outcome.timeoutMs,
+      isRetryOrResume: false,
+      quotaClaimed: true,
+      quotaReleased,
+    });
     await failRun(run.id, outcome.errorMessage, { provider: outcome.provider, model: outcome.model });
     return { ok: false, error: "Regeneration failed. Please try again." };
   }
+  logProviderSuccess({
+    draftId: params.draftId,
+    stage: "day_regeneration",
+    provider: outcome.provider,
+    model: outcome.model,
+    elapsedMs: outcome.elapsedMs,
+  });
 
   // Never trust a returned exerciseId merely because the model supplied
   // one — verify against the exact candidate set offered for this call
