@@ -3,7 +3,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://catalystcoachingelite.com"),
+  metadataBase: new URL("https://www.keptperformance.com"),
   applicationName: "Kept Performance",
   title: {
     default: "Kept Performance",
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
     title: "Kept Performance",
     description:
       "Precision coaching built around training, nutrition, accountability, and consistent execution.",
-    url: "https://catalystcoachingelite.com",
+    url: "https://www.keptperformance.com",
     siteName: "Kept Performance",
     type: "website",
   },

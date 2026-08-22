@@ -137,6 +137,7 @@ async function sendActivateCoachingEmail(
   const { apiKey, fromEmail } = config;
 
   const enrollUrl = `${SITE_ORIGIN}${enrollPath}`;
+  const displayDomain = SITE_ORIGIN.replace(/^https?:\/\//, "");
   const firstName = clientName.split(" ")[0] || clientName;
 
   const resend = new Resend(apiKey);
@@ -237,7 +238,7 @@ async function sendActivateCoachingEmail(
           <tr>
             <td style="padding:20px 0 0;text-align:center;">
               <p style="margin:0;font-size:10px;color:#374151;letter-spacing:0.05em;">
-                www.catalystcoachingelite.com
+                ${displayDomain}
               </p>
             </td>
           </tr>
