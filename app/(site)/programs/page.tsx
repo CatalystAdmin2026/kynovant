@@ -9,7 +9,11 @@ export const metadata: Metadata = {
     title: "Coaching | Kept Performance",
     description:
       "Two coaching experiences built around you. Discover which path is right for you.",
+    url: "https://www.keptperformance.com/programs",
     siteName: "Kept Performance",
+  },
+  alternates: {
+    canonical: "https://www.keptperformance.com/programs",
   },
 };
 

@@ -20,7 +20,11 @@ export const metadata: Metadata = {
     title: "Kept Performance",
     description:
       "Precision coaching built around training, nutrition, accountability, and consistent execution.",
+    url: "https://www.keptperformance.com/",
     siteName: "Kept Performance",
+  },
+  alternates: {
+    canonical: "https://www.keptperformance.com/",
   },
 };
 
