@@ -41,3 +41,41 @@ export function hostBrand(hostname: string): Brand {
   if (CATALYST_HOSTS.has(host)) return "catalyst";
   return null;
 }
+
+// ─────────────────────────────────────────────────────────────
+// STRIPE WEBHOOK SIGNING-SECRET SELECTION — Kept vs legacy Catalyst
+//
+// Both keptperformance.com and catalystcoachingelite.com classify as
+// the single "catalyst" brand above (same business, same page-routing
+// rules, same Stripe API key/account) — that's correct and unchanged
+// for everything except one thing: Stripe generates a SEPARATE
+// signing secret per registered webhook endpoint, and both domains
+// now have their own endpoint registered (Kept/Catalyst Stripe
+// parallel-verification pass — see docs/domain-architecture.md).
+// app/api/stripe/webhook/route.ts needs this finer split ONLY to pick
+// the correct signing secret. Nothing else (page routing, redirects,
+// brand dispatch) should ever use this — use hostBrand() above for
+// everything else.
+// ─────────────────────────────────────────────────────────────
+
+export type CatalystStripeWebhookSecretSource = "kept" | "catalyst-legacy" | null;
+
+const KEPT_STRIPE_WEBHOOK_HOSTS = new Set(["keptperformance.com", "www.keptperformance.com"]);
+const CATALYST_LEGACY_STRIPE_WEBHOOK_HOSTS = new Set([
+  "catalystcoachingelite.com",
+  "www.catalystcoachingelite.com",
+]);
+
+/** Classifies a request hostname for Stripe webhook SIGNING SECRET
+ *  selection only. Returns null for anything that isn't exactly one
+ *  of the four known Catalyst-brand hostnames (including localhost/
+ *  preview) — callers MUST fail closed on null, never guess or fall
+ *  back to the other secret. */
+export function catalystStripeWebhookSecretSource(
+  hostname: string,
+): CatalystStripeWebhookSecretSource {
+  const host = hostname.toLowerCase().split(":")[0];
+  if (KEPT_STRIPE_WEBHOOK_HOSTS.has(host)) return "kept";
+  if (CATALYST_LEGACY_STRIPE_WEBHOOK_HOSTS.has(host)) return "catalyst-legacy";
+  return null;
+}

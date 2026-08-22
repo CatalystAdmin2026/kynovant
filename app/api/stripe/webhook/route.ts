@@ -4,29 +4,45 @@
 // Kept Performance and Kynovant are two separate businesses
 // with two separate Stripe accounts (separate secret keys, separate
 // webhook signing secrets, separate registered endpoints). This ONE
-// route file serves BOTH of their webhook URLs — Next.js's own
+// route file serves ALL of their webhook URLs — Next.js's own
 // domain-based rewriting maps each hostname's /api/stripe/webhook path
 // here (see proxy.ts; API routes are deliberately excluded from that
 // proxy's page-routing logic, so this file does its own classification):
-//   https://www.catalystcoachingelite.com/api/stripe/webhook
+//   https://www.catalystcoachingelite.com/api/stripe/webhook  (legacy)
+//   https://www.keptperformance.com/api/stripe/webhook        (current)
 //   https://www.kynovant.com/api/stripe/webhook
 //
-// POST() below resolves which business a request belongs to from its
+// Catalyst and Kept share ONE Stripe account/API key
+// (CATALYST_STRIPE_SECRET_KEY) — they are the same business under two
+// domain names during the cutover — but Stripe issues a SEPARATE
+// signing secret per registered endpoint, so each domain has its own:
+// CATALYST_STRIPE_WEBHOOK_SECRET (catalystcoachingelite.com) and
+// KEPT_STRIPE_WEBHOOK_SECRET (keptperformance.com). Neither is ever
+// used as a fallback for the other — an unrecognized or misconfigured
+// host fails closed. See resolveCatalystStripeSecretSource() below and
+// lib/domain-routing.ts's catalystStripeWebhookSecretSource().
+//
+// POST() below resolves which BUSINESS a request belongs to from its
 // HOSTNAME FIRST — before reading any Stripe secret or running any
 // business-specific logic — then dispatches to handleCatalystWebhook()
 // or handleKynovantWebhook(), two fully independent functions that each
-// use only their own business's env vars (CATALYST_STRIPE_* /
-// KYNOVANT_STRIPE_*) and only their own business's data (Catalyst:
-// client coaching-package payments, emails, Drive workspace, Sheets
-// logging. Kynovant: coach_subscriptions). Neither function calls the
-// other, imports the other's Stripe client, or touches the other's
-// side effects.
+// use only their own business's env vars and only their own business's
+// data (Catalyst/Kept: client coaching-package payments, emails, Drive
+// workspace, Sheets logging. Kynovant: coach_subscriptions). Neither
+// function calls the other, imports the other's Stripe client, or
+// touches the other's side effects. handleCatalystWebhook() then does
+// its OWN second, finer classification to pick between its two
+// signing secrets — Kynovant is never involved in that second step.
 //
 // Local testing (no real DNS, so hostname alone can't classify):
 //   stripe listen --forward-to "localhost:3000/api/stripe/webhook?__brand=kynovant"
-//   stripe listen --forward-to "localhost:3000/api/stripe/webhook?__brand=catalyst"
-//   (requires Stripe CLI — brew install stripe/stripe-cli/stripe; the
-//   ?__brand= override mirrors proxy.ts's own local/preview convention)
+//   stripe listen --forward-to "localhost:3000/api/stripe/webhook?__brand=catalyst&__catalyst_secret=catalyst-legacy"
+//   stripe listen --forward-to "localhost:3000/api/stripe/webhook?__brand=catalyst&__catalyst_secret=kept"
+//   (requires Stripe CLI — brew install stripe/stripe-cli/stripe; both
+//   overrides mirror proxy.ts's own local/preview convention. Note
+//   ?__catalyst_secret= is REQUIRED alongside ?__brand=catalyst — a
+//   bare ?__brand=catalyst request still fails closed on secret
+//   selection, by design.)
 //
 // ── Catalyst-specific behavior (unchanged from before this split) ──
 // Persistence (Phase 2B): the normalized payload is POSTed to the
@@ -63,7 +79,12 @@ import {
 } from "@/lib/stripe";
 import type { GasStripePayload, NormalizedStripeEvent } from "@/lib/stripe";
 import { kynovantStripe } from "@/lib/billing/stripe-client";
-import { hostBrand, type Brand } from "@/lib/domain-routing";
+import {
+  hostBrand,
+  type Brand,
+  catalystStripeWebhookSecretSource,
+  type CatalystStripeWebhookSecretSource,
+} from "@/lib/domain-routing";
 import { getCatalystResendConfig } from "@/lib/email/resend-brand-config";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
@@ -637,15 +658,55 @@ function resolveWebhookBrand(req: NextRequest): Brand {
 
 // ─────────────────────────────────────────────────────────────
 // CATALYST HANDLER — client coaching-package payments. Uses only
-// CATALYST_STRIPE_* env vars and catalystStripe(). Never reads a
+// CATALYST_STRIPE_*/KEPT_STRIPE_WEBHOOK_SECRET env vars and
+// catalystStripe() (one shared Stripe API key/account for both
+// endpoints — only the webhook SIGNING SECRET differs by domain, see
+// resolveCatalystStripeSecretSource below). Never reads a
 // KYNOVANT_STRIPE_* var, never touches coach_subscriptions.
 // ─────────────────────────────────────────────────────────────
 
-async function handleCatalystWebhook(rawBody: string, sigHeader: string): Promise<NextResponse> {
-  const webhookSecret = process.env.CATALYST_STRIPE_WEBHOOK_SECRET;
+/** Picks which of the two Catalyst-brand signing secrets applies,
+ *  from the same hostname/host-header/override chain resolveWebhookBrand
+ *  uses above — but requires a SEPARATE explicit override
+ *  (?__catalyst_secret=kept|catalyst-legacy) for local/preview testing,
+ *  deliberately: a bare ?__brand=catalyst test request must still fail
+ *  closed on secret selection unless the tester opts into one specific
+ *  secret. Never falls back from one secret to the other. */
+function resolveCatalystStripeSecretSource(req: NextRequest): CatalystStripeWebhookSecretSource {
+  const fromHost = catalystStripeWebhookSecretSource(req.nextUrl.hostname);
+  if (fromHost) return fromHost;
+
+  const hostHeader = req.headers.get("host");
+  const fromHostHeader = hostHeader ? catalystStripeWebhookSecretSource(hostHeader) : null;
+  if (fromHostHeader) return fromHostHeader;
+
+  const override = req.nextUrl.searchParams.get("__catalyst_secret");
+  if (override === "kept" || override === "catalyst-legacy") return override;
+
+  return null;
+}
+
+async function handleCatalystWebhook(
+  req: NextRequest,
+  rawBody: string,
+  sigHeader: string,
+): Promise<NextResponse> {
+  const secretSource = resolveCatalystStripeSecretSource(req);
+  if (!secretSource) {
+    console.error(
+      `[Stripe Webhook] Could not classify Catalyst-brand host "${req.nextUrl.hostname}" ` +
+      "as Kept or legacy Catalyst for signing-secret selection, and no " +
+      "?__catalyst_secret override was supplied — refusing to process.",
+    );
+    return NextResponse.json({ error: "Unrecognized webhook host" }, { status: 400 });
+  }
+
+  const secretEnvVarName =
+    secretSource === "kept" ? "KEPT_STRIPE_WEBHOOK_SECRET" : "CATALYST_STRIPE_WEBHOOK_SECRET";
+  const webhookSecret = process.env[secretEnvVarName];
   if (!webhookSecret) {
     console.error(
-      "[Stripe Webhook] CATALYST_STRIPE_WEBHOOK_SECRET not set — " +
+      `[Stripe Webhook] ${secretEnvVarName} not set — ` +
       "add it to .env.local and see env.local.example.",
     );
     return NextResponse.json({ error: "Webhook not configured on server" }, { status: 503 });
@@ -656,7 +717,7 @@ async function handleCatalystWebhook(rawBody: string, sigHeader: string): Promis
     event = catalystStripe().webhooks.constructEvent(rawBody, sigHeader, webhookSecret);
   } catch (err) {
     console.error(
-      "[Stripe Webhook] Catalyst signature verification failed:",
+      `[Stripe Webhook] Catalyst (${secretSource}) signature verification failed:`,
       err instanceof Error ? err.message : err,
     );
     return NextResponse.json({ error: "Webhook signature invalid" }, { status: 400 });
@@ -860,7 +921,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (brand === "catalyst") {
-    return handleCatalystWebhook(rawBody, sigHeader);
+    return handleCatalystWebhook(req, rawBody, sigHeader);
   }
   return handleKynovantWebhook(rawBody, sigHeader);
 }
