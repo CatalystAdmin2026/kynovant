@@ -10,6 +10,7 @@ import { resolve } from "node:path";
 import {
   expandCanonicalWeek,
   expandBlockFromCanonicalWeek,
+  validateProgressionContext,
   PROGRESSION_ELIGIBLE_SECTION_TYPES,
   type CanonicalWeek,
   type CanonicalDay,
@@ -17,6 +18,7 @@ import {
   type CanonicalPrescription,
 } from "../progression";
 import type { ExperienceLevel, PhaseType, ProgressionStrategy } from "../strategy";
+import { ModelWeekDraftSchema } from "../contracts";
 
 // ─────────────────────────────────────────────────────────────
 // Compile-time drift contract — a test, not the pure module itself, so
@@ -1197,5 +1199,324 @@ describe("worked examples", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(firstPrescription(result.weeks[2]).restSeconds!).toBeLessThan(100);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Phase/strategy coherence guard — Phase B remediation Finding #1
+// ─────────────────────────────────────────────────────────────
+describe("validateProgressionContext", () => {
+  it("A. taper phase + volume_density strategy fails closed", () => {
+    expect(validateProgressionContext({ phaseType: "taper", progressionStrategy: "volume_density", experienceLevel: "advanced" }).ok).toBe(false);
+  });
+  it("B. taper phase + rep strategy fails closed", () => {
+    expect(validateProgressionContext({ phaseType: "taper", progressionStrategy: "rep", experienceLevel: "beginner" }).ok).toBe(false);
+  });
+  it("C. taper phase + double strategy fails closed", () => {
+    expect(validateProgressionContext({ phaseType: "taper", progressionStrategy: "double", experienceLevel: "intermediate" }).ok).toBe(false);
+  });
+  it("D. taper phase + rir strategy fails closed", () => {
+    expect(validateProgressionContext({ phaseType: "taper", progressionStrategy: "rir", experienceLevel: "advanced" }).ok).toBe(false);
+  });
+  it("E. taper phase + taper strategy succeeds", () => {
+    expect(validateProgressionContext({ phaseType: "taper", progressionStrategy: "taper", experienceLevel: "competitive" }).ok).toBe(true);
+  });
+  it("F. taper strategy outside a taper phase fails closed (the inverse of A-D)", () => {
+    for (const phaseType of ["foundation", "accumulation", "intensification", "realization", "resensitization"] as PhaseType[]) {
+      expect(validateProgressionContext({ phaseType, progressionStrategy: "taper", experienceLevel: "advanced" }).ok, phaseType).toBe(false);
+    }
+  });
+  it("G. deload expansion fails closed regardless of progressionStrategy or experienceLevel", () => {
+    for (const progressionStrategy of ["rep", "double", "volume_density", "taper"] as ProgressionStrategy[]) {
+      expect(validateProgressionContext({ phaseType: "deload", progressionStrategy, experienceLevel: "intermediate" }).ok).toBe(false);
+    }
+  });
+  it("H. valid, non-contradictory phase/strategy/experience combinations continue to succeed", () => {
+    const validCombos: ProgressionContextFixture[] = [
+      { phaseType: "foundation", progressionStrategy: "rep", experienceLevel: "beginner" },
+      { phaseType: "accumulation", progressionStrategy: "volume_density", experienceLevel: "advanced" },
+      { phaseType: "intensification", progressionStrategy: "double", experienceLevel: "intermediate" },
+      { phaseType: "intensification", progressionStrategy: "rir", experienceLevel: "advanced" },
+      { phaseType: "realization", progressionStrategy: "rir", experienceLevel: "competitive" },
+      // Deliberately "unused by Phase A today, but not incoherent" —
+      // volume_density during foundation isn't a contradiction, just an
+      // untaken path, and must NOT be rejected (Finding #1's explicit
+      // "do not artificially forbid reasonable combinations" instruction).
+      { phaseType: "foundation", progressionStrategy: "volume_density", experienceLevel: "beginner" },
+    ];
+    for (const combo of validCombos) {
+      expect(validateProgressionContext(combo).ok, JSON.stringify(combo)).toBe(true);
+    }
+  });
+
+  it("rir + beginner still fails closed via the consolidated guard", () => {
+    expect(validateProgressionContext({ phaseType: "intensification", progressionStrategy: "rir", experienceLevel: "beginner" }).ok).toBe(false);
+  });
+});
+
+type ProgressionContextFixture = { phaseType: PhaseType; progressionStrategy: ProgressionStrategy; experienceLevel: ExperienceLevel };
+
+describe("coherence guard — enforced by the public API, not just the standalone validator", () => {
+  it("expandCanonicalWeek rejects an incoherent taper/volume_density pairing before producing any output", () => {
+    const result = expandCanonicalWeek({
+      canonicalWeek: week(),
+      progressionStrategy: "volume_density",
+      phaseType: "taper",
+      experienceLevel: "advanced",
+      blockWeekIndex: 2,
+      blockLength: 2,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("expandBlockFromCanonicalWeek rejects the same incoherent pairing before running any part of the loop", () => {
+    const result = expandBlockFromCanonicalWeek({
+      canonicalWeek: week(),
+      progressionStrategy: "rep",
+      phaseType: "taper",
+      experienceLevel: "beginner",
+      blockLength: 2,
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Taper set-count table — Phase B remediation Finding #2
+// ─────────────────────────────────────────────────────────────
+describe("taper set reduction — bounded relative table", () => {
+  const table: Array<[number, number]> = [
+    [1, 1],
+    [2, 1],
+    [3, 2],
+    [4, 3],
+    [5, 3],
+    [6, 4],
+    [8, 5],
+    [10, 6],
+    [15, 9],
+    [20, 12],
+  ];
+
+  it.each(table)("%i sets -> %i sets under taper", (input, expected) => {
+    const canonical = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ sets: input })] })] } })] });
+    const expanded = expandOk({ canonicalWeek: canonical, progressionStrategy: "taper", phaseType: "taper", experienceLevel: "competitive", blockWeekIndex: 2, blockLength: 2 });
+    expect(firstPrescription(expanded).sets).toBe(expected);
+  });
+
+  it("output is always >= 1, and strictly less than input whenever input > 1", () => {
+    for (const [input] of table) {
+      const canonical = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ sets: input })] })] } })] });
+      const expanded = expandOk({ canonicalWeek: canonical, progressionStrategy: "taper", phaseType: "taper", experienceLevel: "competitive", blockWeekIndex: 2, blockLength: 2 });
+      const output = firstPrescription(expanded).sets!;
+      expect(output).toBeGreaterThanOrEqual(1);
+      if (input > 1) expect(output).toBeLessThan(input);
+    }
+  });
+
+  it("10->9 and 20->19 (the old flat -1 behavior) are impossible", () => {
+    const canonical10 = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ sets: 10 })] })] } })] });
+    const canonical20 = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ sets: 20 })] })] } })] });
+    const expanded10 = expandOk({ canonicalWeek: canonical10, progressionStrategy: "taper", phaseType: "taper", experienceLevel: "competitive", blockWeekIndex: 2, blockLength: 2 });
+    const expanded20 = expandOk({ canonicalWeek: canonical20, progressionStrategy: "taper", phaseType: "taper", experienceLevel: "competitive", blockWeekIndex: 2, blockLength: 2 });
+    expect(firstPrescription(expanded10).sets).not.toBe(9);
+    expect(firstPrescription(expanded20).sets).not.toBe(19);
+  });
+
+  it("relative reduction is materially larger for high-set prescriptions than for low-set ones", () => {
+    const fractionCut = (input: number, output: number) => (input - output) / input;
+    const low = fractionCut(3, 2); // ~0.33
+    const high = fractionCut(20, 12); // ~0.40
+    expect(high).toBeGreaterThan(low - 0.05); // high-volume cut is at least as large, materially
+    expect(fractionCut(2, 1)).toBeCloseTo(0.5, 5);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Runtime schema round-trip — Phase B remediation Finding #3
+//
+// Compile-time assignability (the _compileTimeDriftCheck above) proves
+// SHAPE compatibility but not VALUE validity — a field could be the
+// right TypeScript type and still violate a runtime refinement (e.g.
+// repsMin <= repsMax, unique orderIndex). These tests parse actual
+// expanded output through the real ModelWeekDraftSchema. contracts.ts
+// is safe to import from a test (not from progression.ts itself) — it
+// only references pgEnum() enum-value arrays from lib/db/schema.ts,
+// not a live DB connection (no DATABASE_URL required), exactly as
+// domain-enums.test.ts already established for ProgramGenerationBriefSchema.
+// ─────────────────────────────────────────────────────────────
+describe("runtime schema round-trip against the real ModelWeekDraftSchema", () => {
+  function realisticCanonicalWeek(weekNumber: number): CanonicalWeek {
+    return {
+      id: `week-${weekNumber}`,
+      weekNumber,
+      days: [
+        {
+          id: "day-1",
+          dayOfWeek: 1,
+          workout: {
+            id: "bp-1",
+            name: "Upper Body",
+            sections: [
+              {
+                id: "sec-main",
+                name: "Main Lifts",
+                sectionType: "main_lift",
+                orderIndex: 0,
+                prescriptions: [
+                  {
+                    id: "p-1",
+                    exerciseId: "11111111-1111-4111-8111-111111111111",
+                    exerciseName: "Barbell Bench Press",
+                    orderIndex: 0,
+                    sets: 4,
+                    repsMin: 6,
+                    repsMax: 10,
+                    restSeconds: 120,
+                    targetRir: 3,
+                    setTechnique: "straight_set",
+                    isRequired: true,
+                  },
+                ],
+              },
+              {
+                id: "sec-cond",
+                name: "Finisher",
+                sectionType: "conditioning",
+                orderIndex: 1,
+                prescriptions: [
+                  {
+                    id: "p-2",
+                    exerciseId: "22222222-2222-4222-8222-222222222222",
+                    exerciseName: "Bike Sprints",
+                    orderIndex: 0,
+                    sets: 3,
+                    durationSeconds: 240,
+                    restSeconds: 60,
+                    isRequired: true,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+  }
+
+  function assertParses(w: CanonicalWeek) {
+    const result = ModelWeekDraftSchema.safeParse(w);
+    expect(result.success, result.success ? undefined : JSON.stringify(result.error.issues)).toBe(true);
+  }
+
+  it("rep block: canonical + every expanded week parses against ModelWeekDraftSchema", () => {
+    const canonical = realisticCanonicalWeek(1);
+    const result = expandBlockFromCanonicalWeek({ canonicalWeek: canonical, progressionStrategy: "rep", phaseType: "foundation", experienceLevel: "beginner", blockLength: 3 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    result.weeks.forEach(assertParses);
+  });
+
+  it("double block parses", () => {
+    const canonical = realisticCanonicalWeek(1);
+    const result = expandBlockFromCanonicalWeek({ canonicalWeek: canonical, progressionStrategy: "double", phaseType: "intensification", experienceLevel: "intermediate", blockLength: 3 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    result.weeks.forEach(assertParses);
+  });
+
+  it("RIR block parses", () => {
+    const canonical = realisticCanonicalWeek(1);
+    const result = expandBlockFromCanonicalWeek({ canonicalWeek: canonical, progressionStrategy: "rir", phaseType: "intensification", experienceLevel: "advanced", blockLength: 3 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    result.weeks.forEach(assertParses);
+  });
+
+  it("volume/density block parses", () => {
+    const canonical = realisticCanonicalWeek(1);
+    const result = expandBlockFromCanonicalWeek({ canonicalWeek: canonical, progressionStrategy: "volume_density", phaseType: "accumulation", experienceLevel: "advanced", blockLength: 3 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    result.weeks.forEach(assertParses);
+  });
+
+  it("taper block parses", () => {
+    const canonical = realisticCanonicalWeek(14);
+    const result = expandBlockFromCanonicalWeek({ canonicalWeek: canonical, progressionStrategy: "taper", phaseType: "taper", experienceLevel: "competitive", blockLength: 2 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    result.weeks.forEach(assertParses);
+  });
+
+  it("a non-Week-1 canonical block (weekNumber=7) still parses correctly, including sequential weekNumbers", () => {
+    const canonical = realisticCanonicalWeek(7);
+    const result = expandBlockFromCanonicalWeek({ canonicalWeek: canonical, progressionStrategy: "rir", phaseType: "realization", experienceLevel: "competitive", blockLength: 3 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.weeks.map((w) => w.weekNumber)).toEqual([7, 8, 9]);
+    result.weeks.forEach(assertParses);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Note de-duplication — Phase B remediation Finding #4
+// ─────────────────────────────────────────────────────────────
+describe("note de-duplication", () => {
+  const REP_MID_NOTE = "Aim for the higher end of your prescribed rep range this week while keeping every set clean.";
+
+  it("no existing note: the deterministic template is appended once", () => {
+    const canonical = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ coachNotes: undefined, repsMin: 8, repsMax: 12 })] })] } })] });
+    const expanded = expandOk({ canonicalWeek: canonical, progressionStrategy: "rep", phaseType: "foundation", experienceLevel: "beginner", blockWeekIndex: 2, blockLength: 3 });
+    expect(firstPrescription(expanded).coachNotes).toBe(REP_MID_NOTE);
+  });
+
+  it("unrelated existing note: preserved, and the template is appended alongside it", () => {
+    const canonical = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ coachNotes: "Watch elbow flare.", repsMin: 8, repsMax: 12 })] })] } })] });
+    const expanded = expandOk({ canonicalWeek: canonical, progressionStrategy: "rep", phaseType: "foundation", experienceLevel: "beginner", blockWeekIndex: 2, blockLength: 3 });
+    const note = firstPrescription(expanded).coachNotes!;
+    expect(note).toContain("Watch elbow flare.");
+    expect(note).toContain(REP_MID_NOTE);
+  });
+
+  it("template already present: expanding an already-expanded week again does not duplicate the template", () => {
+    const canonicalStep1 = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ coachNotes: undefined, repsMin: 8, repsMax: 12 })] })] } })] });
+    const expandedOnce = expandOk({ canonicalWeek: canonicalStep1, progressionStrategy: "rep", phaseType: "foundation", experienceLevel: "beginner", blockWeekIndex: 2, blockLength: 3 });
+    // Misuse scenario: treat the already-expanded week as if it were a
+    // fresh canonical week and expand it again at the same block position.
+    const expandedTwice = expandOk({ canonicalWeek: expandedOnce, progressionStrategy: "rep", phaseType: "foundation", experienceLevel: "beginner", blockWeekIndex: 2, blockLength: 3 });
+    const note = firstPrescription(expandedTwice).coachNotes!;
+    const occurrences = note.split(REP_MID_NOTE).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("near-match text does not incorrectly suppress the real template", () => {
+    // Shares words with the real template but is not an exact substring
+    // match — must NOT be treated as "already present."
+    const nearMiss = "Aim for the higher end of your rep range eventually.";
+    const canonical = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ coachNotes: nearMiss, repsMin: 8, repsMax: 12 })] })] } })] });
+    const expanded = expandOk({ canonicalWeek: canonical, progressionStrategy: "rep", phaseType: "foundation", experienceLevel: "beginner", blockWeekIndex: 2, blockLength: 3 });
+    const note = firstPrescription(expanded).coachNotes!;
+    expect(note).toContain(nearMiss);
+    expect(note).toContain(REP_MID_NOTE);
+  });
+
+  it("template already present in a long-but-in-bounds existing note: dedup still applies, length stays within the schema bound", () => {
+    const existingNote = "x".repeat(800) + " " + REP_MID_NOTE; // well under 1000, template already present
+    const canonical = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ coachNotes: existingNote, repsMin: 8, repsMax: 12 })] })] } })] });
+    const expanded = expandOk({ canonicalWeek: canonical, progressionStrategy: "rep", phaseType: "foundation", experienceLevel: "beginner", blockWeekIndex: 2, blockLength: 3 });
+    const note = firstPrescription(expanded).coachNotes!;
+    expect(note.length).toBeLessThanOrEqual(1000);
+    const occurrences = note.split(REP_MID_NOTE).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("a fresh append that would exceed 1000 chars is still clamped to the schema bound (pre-existing truncation behavior, unaffected by dedup)", () => {
+    const nearLimitNote = "y".repeat(950); // no template present yet
+    const canonical = week({ days: [day({ workout: { id: "bp", name: "D", sections: [section({ prescriptions: [prescription({ coachNotes: nearLimitNote, repsMin: 8, repsMax: 12 })] })] } })] });
+    const expanded = expandOk({ canonicalWeek: canonical, progressionStrategy: "rep", phaseType: "foundation", experienceLevel: "beginner", blockWeekIndex: 2, blockLength: 3 });
+    const note = firstPrescription(expanded).coachNotes!;
+    expect(note.length).toBe(1000);
+    expect(note.startsWith("y".repeat(950))).toBe(true);
   });
 });

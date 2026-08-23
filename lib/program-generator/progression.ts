@@ -216,6 +216,83 @@ export interface ExpandBlockInput {
 export type ExpandBlockResult = { ok: true; weeks: CanonicalWeek[] } | { ok: false; error: string };
 
 // ─────────────────────────────────────────────────────────────
+// PHASE/STRATEGY COHERENCE GUARD
+//
+// Review finding on Phase B candidate 643af6c: the original API
+// accepted semantically incoherent inputs — e.g. phaseType="taper"
+// paired with progressionStrategy="volume_density" — and would
+// execute density progression (a rest-reduction/set-increment lever)
+// INSIDE what was supposed to be a fatigue-dissipating taper week.
+// This is a small, deliberately narrow guard against TRULY IMPOSSIBLE
+// pairings only — strategy.ts's own selectProgressionStrategy is
+// still the normal selector; this guard exists purely as a defensive
+// backstop against a caller bypassing it (directly, or via a future
+// bug), not as a broad compatibility matrix. A combination Phase A
+// simply wouldn't currently choose (e.g. phaseType="foundation" with
+// progressionStrategy="volume_density") is NOT rejected here — nothing
+// about that pairing is incoherent, it's just unused today.
+//
+// Hard contradictions enforced (and only these):
+//   1. phaseType="taper" requires progressionStrategy="taper" — a
+//      taper phase run through any other strategy would apply the
+//      wrong lever (e.g. volume_density's rest reduction / set
+//      increment) during a week whose entire purpose is dissipating
+//      fatigue.
+//   2. progressionStrategy="taper" requires phaseType="taper" — the
+//      inverse: taper's own transform (flat volume cut, technique
+//      strip, rest increase) has no defined meaning outside a taper
+//      phase.
+//   3. phaseType="deload" is never expanded, full stop — see
+//      PHASE_BLOCK_BOUNDS in strategy.ts (deload is pinned to exactly
+//      1 week); there is no progressionStrategy for which expanding a
+//      deload phase is coherent.
+//   4. progressionStrategy="rir" is never valid for experienceLevel=
+//      "beginner" — carried over unchanged from the original
+//      implementation, now expressed through this single guard instead
+//      of a separate inline check.
+// ─────────────────────────────────────────────────────────────
+
+export interface ProgressionContext {
+  phaseType: PhaseType;
+  progressionStrategy: ProgressionStrategy;
+  experienceLevel: ExperienceLevel;
+}
+
+export type ProgressionContextValidationResult = { ok: true } | { ok: false; error: string };
+
+export function validateProgressionContext(context: ProgressionContext): ProgressionContextValidationResult {
+  const { phaseType, progressionStrategy, experienceLevel } = context;
+
+  if (phaseType === "deload") {
+    return {
+      ok: false,
+      error:
+        "deload phases are always exactly one week (see PHASE_BLOCK_BOUNDS in strategy.ts) and are never expanded — " +
+        "the canonical week generated for a deload block IS the deload week.",
+    };
+  }
+  if (phaseType === "taper" && progressionStrategy !== "taper") {
+    return {
+      ok: false,
+      error: `phaseType="taper" requires progressionStrategy="taper" — got progressionStrategy="${progressionStrategy}".`,
+    };
+  }
+  if (progressionStrategy === "taper" && phaseType !== "taper") {
+    return {
+      ok: false,
+      error: `progressionStrategy="taper" is only valid for phaseType="taper" — got phaseType="${phaseType}".`,
+    };
+  }
+  if (progressionStrategy === "rir" && experienceLevel === "beginner") {
+    return {
+      ok: false,
+      error: "RIR progression is not valid for beginner experienceLevel — this combination should never occur.",
+    };
+  }
+  return { ok: true };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Small, named classifications this module owns. Neither array claims
 // to mirror a full DB enum (that would belong in domain-enums.ts, next
 // to TEMPLATE_CATEGORY_VALUES) — these are Phase-B-specific judgments
@@ -292,15 +369,66 @@ function clampInt(value: number, [min, max]: readonly [number, number]): number 
   return Math.max(min, Math.min(max, Math.round(value)));
 }
 
+// Review finding on Phase B candidate 643af6c (P2): repeated
+// deterministic note appending could duplicate the same template text
+// if a week were, for any reason, run back through expansion again.
+// Exact-template detection is enough — no fuzzy/NLP matching. A
+// coach-written note is never touched or removed; only an EXACT repeat
+// of one of this module's own deterministic templates is suppressed.
+function clampCoachNotes(value: string): string {
+  return value.length > BOUNDS.coachNotesLength ? value.slice(0, BOUNDS.coachNotesLength) : value;
+}
+
 function appendCoachNote(existing: string | undefined, note: string): string {
   const trimmed = existing?.trim();
+  // Exact template already present — do not duplicate, but still run
+  // the length clamp so this path can never bypass the schema's own
+  // coachNotes bound (defensive: a real canonical week's coachNotes
+  // could never actually exceed 1000 chars in the first place, since
+  // GeneratedPrescriptionDraftObjectSchema enforces that bound upstream
+  // — this just ensures the invariant holds unconditionally regardless).
+  if (trimmed && trimmed.includes(note)) return clampCoachNotes(trimmed);
   const combined = trimmed ? `${trimmed} ${note}` : note;
-  return combined.length > BOUNDS.coachNotesLength ? combined.slice(0, BOUNDS.coachNotesLength) : combined;
+  return clampCoachNotes(combined);
 }
 
 function defaultIdFactory(): string {
   return crypto.randomUUID();
 }
+
+// RE-EXPANSION / IDENTITY CONTRACT (review finding on Phase B
+// candidate 643af6c, P2 — documented, not a pure-layer defect):
+// this module's CONTENT is deterministic — the same canonicalWeek plus
+// the same progressionStrategy/phaseType/experienceLevel/blockWeekIndex/
+// blockLength always produces the same prescriptions, notes, and
+// numbers (see progression.test.ts's own determinism-adjacent
+// invariant tests). Structural IDs are NOT deterministic by default —
+// crypto.randomUUID() intentionally mints a fresh, real, application-
+// owned identity every call, exactly as contracts.ts's own comment on
+// generator-assigned ids describes for the rest of this codebase.
+//
+// This means calling expandBlockFromCanonicalWeek() twice for the same
+// canonical week produces two DIFFERENT sets of week/day/section/
+// prescription ids for otherwise-identical content. That is correct
+// behavior for a pure function whose caller is expected to persist
+// exactly ONE successful result — it is NOT something to "fix" by
+// making ids deterministic by default, since two truly separate blocks
+// legitimately need distinct ids from each other regardless of content
+// equality.
+//
+// The contract Phase C (persistence/wiring) MUST honor as a result:
+//   - persist the first successful expansion and treat it as final —
+//     never call expandBlockFromCanonicalWeek() again for a block that
+//     already has a persisted result, "just to check."
+//   - if a caller genuinely needs exact-replay semantics (e.g. a retry
+//     path that must reproduce the exact same ids on a second attempt),
+//     supply a deterministic `idFactory` explicitly — the parameter
+//     exists specifically for this, and progression.test.ts's injected-
+//     idFactory test proves the override path is honored exactly.
+// No code change was needed here — the injectable idFactory this
+// module already had is precisely the right pure-layer answer; the
+// only defect potential lived entirely on the not-yet-built Phase C
+// persistence side, which this comment exists to steer correctly.
 
 // ─────────────────────────────────────────────────────────────
 // SECTION 11 — TECHNIQUE TIMING
@@ -314,6 +442,45 @@ function defaultIdFactory(): string {
 // This runs BEFORE the per-strategy transform; taper's own
 // unconditional removal (Section 9) still applies afterward regardless
 // of experience level or block position.
+//
+// OWNERSHIP CONTRACT (review finding on Phase B candidate 643af6c, P2
+// — documented here, deliberately NOT solved in this pass): this
+// function infers "was this technique deliberately placed, or should
+// it just ride along" purely from the technique's mere PRESENCE on the
+// canonical week's prescription plus the current block position. That
+// produces a structurally odd case for intermediate/mixed: a canonical
+// Week 1 already carrying, say, rest_pause gets it withheld in Week 2
+// and reintroduced only in the block's final week — as if canonical
+// Week 1 and the final week share a technique that the middle weeks
+// don't, even though nothing about Week 1's own authored content
+// changed.
+//
+// The correct long-term contract is that intermediate/mixed timing is
+// really about ELIGIBILITY, not presence: the canonical-week/blueprint
+// generator (a Phase C concern) should be able to mark a technique as
+// "eligible for late-block activation" as a concept distinct from "is
+// active on this exact prescription right now." Phase B would then
+// only ever OWN THE TIMING of an eligibility flag the upstream
+// generator set, instead of inferring intent from where the technique
+// happens to already sit. That requires a new field somewhere in the
+// canonical-week authoring path — out of scope here: this pass does
+// not invent a DB/schema field or broaden the architecture to add one.
+//
+// A tiny, PURE, non-schema representation that could carry this
+// without touching any persisted schema (proposed for Phase C's
+// consideration, not built here): an optional
+// `techniqueEligibility?: "assigned" | "eligible_late_block"` on a
+// Phase-C-only enriched prescription type that wraps CanonicalPrescription
+// before calling into this module — read by applyTechniqueTiming when
+// present, falling back to today's presence-based inference when
+// absent, so this stays backward compatible with every canonical week
+// that doesn't have the concept yet. This is a proposal only.
+//
+// Until Phase C addresses this, current Phase B behavior is correct
+// within its stated limits and is preserved as an explicit P2
+// deferred integration contract, not a silent gap: it never invents a
+// technique the canonical week didn't already carry, and taper always
+// strips high-fatigue techniques regardless of this timing logic.
 // ─────────────────────────────────────────────────────────────
 function applyTechniqueTiming(
   setTechnique: string | undefined,
@@ -489,11 +656,43 @@ function applyVolumeDensityProgression(p: CanonicalPrescription, ctx: StrategyCo
 const TAPER_REST_INCREASE_FRACTION = 0.15;
 const TAPER_CONDITIONING_DURATION_REDUCTION_FRACTION = 0.2;
 
+// Review finding on Phase B candidate 643af6c: a flat "-1 set" taper
+// cut is material at low set counts (2->1, 3->2) but essentially
+// meaningless at high ones (10->9, 20->19 barely register as a taper
+// at all). Replaced with a tiered, BOUNDED RELATIVE reduction — not a
+// claim to one universal, precisely-validated sports-science
+// percentage, but a directionally-justified rule keyed to the
+// schema's own set-count bound (1-20) and the taper contract itself
+// ("dissipate fatigue while preserving familiar movement exposure"):
+//   1-2 sets  -> keep ~50%. A prescription already this low has little
+//                room to cut without eliminating the movement's
+//                exposure entirely — floored at 1 regardless.
+//   3-5 sets  -> keep ~2/3 (cut about a third) — the most common
+//                working-set range, and roughly the taper-volume-cut
+//                heuristic used broadly in strength/physique coaching
+//                (a directional guideline, not a fabricated exact
+//                figure).
+//   6+ sets   -> keep ~60% (cut ~40%) — higher-volume prescriptions
+//                have materially more volume that can be shed while
+//                still preserving exposure to the movement.
+// Never below 1 (the schema's own floor). Always a real reduction
+// whenever sets > 1 (see progression.test.ts's full 1/2/3/4/5/6/8/10/
+// 15/20 table).
+function taperSetsRetentionFraction(sets: number): number {
+  if (sets <= 2) return 0.5;
+  if (sets <= 5) return 2 / 3;
+  return 0.6;
+}
+
+function applyTaperSetReduction(sets: number): number {
+  return Math.max(1, Math.round(sets * taperSetsRetentionFraction(sets)));
+}
+
 function applyTaperProgression(p: CanonicalPrescription, ctx: StrategyContext): CanonicalPrescription {
   const next: CanonicalPrescription = { ...p };
 
   if (p.sets != null) {
-    next.sets = clampInt(p.sets - 1, BOUNDS.sets);
+    next.sets = clampInt(applyTaperSetReduction(p.sets), BOUNDS.sets);
   }
   if (isIntensitySetTechnique(p.setTechnique)) {
     next.setTechnique = STRAIGHT_SET;
@@ -526,12 +725,13 @@ function transformEligiblePrescription(p: CanonicalPrescription, ctx: StrategyCo
     case "rir":
       return applyRirProgression(timed, ctx);
     case "volume_density":
-      // phaseType === "taper" never reaches here — selectProgressionStrategy
-      // (strategy.ts) always returns "taper" for a taper phase, never
-      // "volume_density". Deload IS reachable in principle (see the
-      // guard in expandCanonicalWeek below, which rejects it before any
-      // prescription is ever touched) — this branch's deload case is
-      // therefore unreachable in practice, not silently mishandled.
+      // phaseType === "taper" never reaches here — validateProgressionContext
+      // rejects a volume_density+taper pairing before any prescription
+      // is touched (see its own header for why that pairing is a hard
+      // contradiction, not just an unused combination). phaseType ===
+      // "deload" is likewise always rejected before this point. Neither
+      // case is silently mishandled by this branch — both fail closed
+      // upstream.
       return applyVolumeDensityProgression(timed, ctx);
     case "taper":
       return applyTaperProgression(timed, ctx);
@@ -625,20 +825,12 @@ export function expandCanonicalWeek(input: ExpandCanonicalWeekInput): ExpandCano
   const { canonicalWeek, progressionStrategy, phaseType, experienceLevel, blockWeekIndex, blockLength } = input;
   const idFactory = input.idFactory ?? defaultIdFactory;
 
-  // SECTION 10 — DELOAD. strategy.ts's own PHASE_BLOCK_BOUNDS pins
-  // every deload phase to exactly 1 week — there is never a
-  // "remaining" week to expand into. The canonical week generated for
-  // a deload block IS the deload week already; this is deload's
-  // expansion semantics, defined explicitly as "never expand" rather
-  // than left as an accidental gap.
-  if (phaseType === "deload") {
-    return {
-      ok: false,
-      error:
-        "deload phases are always exactly one week (see PHASE_BLOCK_BOUNDS in strategy.ts) and are never expanded — " +
-        "the canonical week generated for a deload block IS the deload week.",
-    };
-  }
+  // Coherence first — fail closed before any bounds/id work if the
+  // phase/strategy/experience triple is semantically impossible. See
+  // validateProgressionContext's own header for exactly which
+  // combinations this rejects and why the list is deliberately short.
+  const coherence = validateProgressionContext({ phaseType, progressionStrategy, experienceLevel });
+  if (!coherence.ok) return coherence;
 
   if (!Number.isInteger(blockLength) || blockLength < 2) {
     return { ok: false, error: `blockLength must be an integer >= 2 to expand a canonical week — got ${blockLength}.` };
@@ -647,18 +839,6 @@ export function expandCanonicalWeek(input: ExpandCanonicalWeekInput): ExpandCano
     return {
       ok: false,
       error: `blockWeekIndex must be an integer between 2 and blockLength (${blockLength}) — got ${blockWeekIndex}.`,
-    };
-  }
-  // Structural guard against a leaked review-finding class from Phase
-  // A's own remediation report: RIR progression must never reach a
-  // beginner. strategy.ts's selectProgressionStrategy never produces
-  // this combination itself, but this module accepts progressionStrategy
-  // as a direct input — a caller bypassing strategy.ts could otherwise
-  // pass it in by mistake.
-  if (progressionStrategy === "rir" && experienceLevel === "beginner") {
-    return {
-      ok: false,
-      error: "RIR progression is not valid for beginner experienceLevel — this combination should never occur.",
     };
   }
 
@@ -677,16 +857,19 @@ export function expandBlockFromCanonicalWeek(input: ExpandBlockInput): ExpandBlo
   if (blockLength === 1) {
     // Nothing to expand — the canonical week IS the whole block. Its
     // own id/weekNumber are returned exactly as given (see Section 4:
-    // only NEWLY produced weeks get fresh ids).
+    // only NEWLY produced weeks get fresh ids). Deliberately BEFORE the
+    // coherence guard below: a deload block is REQUIRED to have
+    // blockLength=1, so this is the one legitimate case where
+    // phaseType="deload" reaches this function at all, and it must
+    // succeed, not be rejected.
     return { ok: true, weeks: [canonicalWeek] };
   }
 
-  if (phaseType === "deload") {
-    return {
-      ok: false,
-      error: "deload blocks must be exactly 1 week (see PHASE_BLOCK_BOUNDS in strategy.ts) — a deload blockLength >= 2 should never occur.",
-    };
-  }
+  // Coherence check up front — fail closed before touching the loop
+  // below (and before expandCanonicalWeek would otherwise discover the
+  // same problem only on its first inner call).
+  const coherence = validateProgressionContext({ phaseType, progressionStrategy, experienceLevel });
+  if (!coherence.ok) return coherence;
 
   const weeks: CanonicalWeek[] = [canonicalWeek];
   for (let blockWeekIndex = 2; blockWeekIndex <= blockLength; blockWeekIndex++) {
