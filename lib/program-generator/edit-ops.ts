@@ -64,6 +64,61 @@ function findSection(
   return { ok: true, ...matches[0] };
 }
 
+// Same fail-closed principle as findSection, one level up — locates a
+// day by id alone (no section), for callers that need the day and its
+// containing week (regenerateDayAction) rather than a specific section.
+// Exported: this is the same "prove the target is unique before doing
+// anything else" gate a caller outside this file (a Server Action) is
+// expected to check FIRST, before any provider call or quota claim —
+// never as an afterthought once work has already started.
+export function findDayUnique(
+  draft: GeneratedProgramDraft,
+  dayId: string,
+): { ok: true; week: GeneratedWeekDraft; day: GeneratedDayDraft } | { ok: false; reason: "not_found" | "ambiguous" } {
+  const matches: { week: GeneratedWeekDraft; day: GeneratedDayDraft }[] = [];
+  for (const week of draft.weeks) {
+    for (const day of week.days) {
+      if (day.id === dayId) matches.push({ week, day });
+    }
+  }
+  if (matches.length === 0) return { ok: false, reason: "not_found" };
+  if (matches.length > 1) return { ok: false, reason: "ambiguous" };
+  return { ok: true, ...matches[0] };
+}
+
+// Splices ONE day's regenerated content into the draft, in place of the
+// day matching targetDayId, leaving every other week/day byte-for-byte
+// unchanged (same array, same object references, for anything not on
+// the direct path to the replaced day) — the core guarantee behind
+// "surgical" single-day regeneration (see regenerateDayAction's own
+// comment on why the model is never asked to echo the rest of the
+// program). newDay must already carry the CORRECT application-owned
+// id/dayOfWeek/label (the caller's job — see canonicalizeRegeneratedDay
+// in actions.ts) — this function does not second-guess or realign
+// those fields itself, only places the given day at the given slot.
+export function replaceDayContent(
+  draft: GeneratedProgramDraft,
+  targetDayId: string,
+  newDay: GeneratedDayDraft,
+): EditOpResult {
+  const located = findDayUnique(draft, targetDayId);
+  if (!located.ok) {
+    return { ok: false, error: located.reason === "ambiguous" ? AMBIGUOUS_MATCH_ERROR : "Day not found in draft." };
+  }
+  const before = located.day;
+
+  const next: GeneratedProgramDraft = {
+    ...draft,
+    weeks: draft.weeks.map((week) =>
+      week.id !== located.week.id
+        ? week
+        : { ...week, days: week.days.map((day) => (day.id === targetDayId ? newDay : day)) },
+    ),
+  };
+
+  return { ok: true, draft: next, before, after: newDay };
+}
+
 export function updatePrescription(
   draft: GeneratedProgramDraft,
   params: { dayId: string; sectionId: string; prescriptionId: string; patch: PrescriptionEditPatch },

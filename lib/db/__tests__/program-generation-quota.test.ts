@@ -487,19 +487,29 @@ describe("full model-invocation coverage", () => {
   });
 
   it("no route/action other than app/hq/programs/generate/actions.ts (directly or via staged-generation.ts) imports the model-calling provider functions", () => {
-    // generateProgramShell / generateProgramWeek / regenerateDayDraft are
-    // the ONLY functions in this codebase that reach the AI SDK
-    // (provider.ts's own file header: "the only file in the feature that
-    // may reference an LLM API key or call out to a model provider").
-    // A real repo-wide grep (not just checking actions.ts's own content)
-    // — so this actually regresses if someone later adds a second,
-    // ungated call site rather than merely asserting today's known-good
-    // shape.
+    // generateProgramShell / generateProgramWeek / generateProgramDay /
+    // regenerateDayDraft are the ONLY functions in this codebase that
+    // reach the AI SDK (provider.ts's own file header: "the only file
+    // in the feature that may reference an LLM API key or call out to a
+    // model provider"). A real repo-wide grep (not just checking
+    // actions.ts's own content) — so this actually regresses if someone
+    // later adds a second, ungated call site rather than merely
+    // asserting today's known-good shape.
+    //
+    // Matches both import styles: the "@/lib/program-generator/
+    // provider" alias (used by app/hq/programs/generate/actions.ts) AND
+    // the "./provider" relative form (used by staged-generation.ts,
+    // which lives in the same directory as provider.ts) — day-metadata/
+    // day.id hardening moved actions.ts's regenerateDayAction onto
+    // staged-generation.ts's regenerateDaySurgically() instead of
+    // calling provider.ts directly, so actions.ts is no longer
+    // guaranteed to be an importer itself; staged-generation.ts's own
+    // relative import is what this check must actually catch.
     const providerSrc = source("lib/program-generator/provider.ts");
     expect(providerSrc).toContain("This is the only file in the feature that may reference");
 
     const grepResult = execSync(
-      String.raw`grep -rl 'from "@/lib/program-generator/provider"' --include="*.ts" --include="*.tsx" --exclude-dir=node_modules --exclude-dir=.next .`,
+      String.raw`grep -rlE 'from "@/lib/program-generator/provider"|from "\./provider"' --include="*.ts" --include="*.tsx" --exclude-dir=node_modules --exclude-dir=.next .`,
       { cwd: process.cwd(), encoding: "utf8" },
     );
     const importers = grepResult

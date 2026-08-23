@@ -55,7 +55,7 @@ import {
   releaseGenerationQuotaClaim,
   GENERATION_QUOTA_LIMIT,
 } from "@/lib/db/program-generation-service";
-import { generateProgramShell, generateProgramDay, resolveTimeoutMs, DAY_DEFAULT_TIMEOUT_MS } from "./provider";
+import { generateProgramShell, generateProgramDay, resolveTimeoutMs, DAY_DEFAULT_TIMEOUT_MS, type GenerationFailure } from "./provider";
 import { logGenerationFailure, logProviderSuccess, logQuotaRelease } from "./observability";
 import { summarizeDayForPrompt, summarizeWeekSoFarForPrompt } from "./prompt";
 import { resolveProgramDraftExercises } from "./exercise-resolution";
@@ -66,12 +66,15 @@ import {
   narrowCandidatesForDay,
   verifyDayAgainstCandidates,
   type ExerciseCandidate,
+  type ExerciseCandidateSet,
 } from "./exercise-candidates";
+import { findDayUnique, replaceDayContent } from "./edit-ops";
 import {
   parseGeneratedProgramDraft,
   ModelWeekDraftSchema,
   type ProgramGenerationBrief,
   type GeneratedProgramDraft,
+  type GeneratedDayDraft,
   type ProgramShell,
   type ProgramShellDay,
   type ModelDayDraft,
@@ -155,6 +158,170 @@ export function alignDayToShellDay(day: ModelDayDraft, shellDay: ProgramShellDay
 // separate check-for-an-existing-id step is needed here.
 export function assignCanonicalDayId(day: ModelDayDraft): ModelDayDraft {
   return { ...day, id: randomUUID() };
+}
+
+export type RegenerateDaySuccess = { ok: true; draft: GeneratedProgramDraft; provider: string; model: string; elapsedMs: number };
+export type RegenerateDayResult = RegenerateDaySuccess | GenerationFailure | { ok: false; error: string };
+
+// P0 review finding, fixed here: app/hq/programs/generate/actions.ts's
+// regenerateDayAction used to ask the model to echo the ENTIRE program
+// back (schema: ModelProgramDraftSchema, "leave every other day
+// unchanged") while never actually giving it the existing draft's
+// content to echo — the model had no way to honor "unchanged" for
+// content it never saw, so every single-day regeneration risked
+// silently fabricating new content for the rest of the whole program.
+//
+// Surgical instead: locate the target day (failing closed on any
+// ambiguity BEFORE any provider call), generate ONLY that one day via
+// generateProgramDay() — the exact same call staged generation makes
+// for every day, never asking the model to touch anything else — then
+// splice just that one day back into the draft. Every other week/day
+// is passed through by reference via edit-ops.ts's replaceDayContent,
+// never re-serialized through the model at all.
+//
+// Kept separate from the Server Action (same "auth/quota/run-tracking
+// in actions.ts, domain logic here" split as runStagedGeneration) so
+// this is directly testable without Next.js's request-scoped
+// cookies()/headers() — see this file's own header comment.
+export async function regenerateDaySurgically(params: {
+  draft: GeneratedProgramDraft;
+  shell: ProgramShell;
+  brief: ProgramGenerationBrief;
+  clientContext: ClientContextSummary | null;
+  dayId: string;
+  coachId: string;
+  candidateSet: ExerciseCandidateSet;
+}): Promise<RegenerateDayResult> {
+  // Fail closed FIRST — before any provider call — exactly the "do not
+  // regenerate, do not persist anything" requirement for a target that
+  // can't be uniquely resolved.
+  const located = findDayUnique(params.draft, params.dayId);
+  if (!located.ok) {
+    return {
+      ok: false,
+      error: located.reason === "ambiguous"
+        ? "This draft has more than one day sharing the same identifier — refusing to guess which one to regenerate. Regenerate this draft or contact support."
+        : "Day not found in draft.",
+    };
+  }
+  const targetWeek = located.week;
+  const targetDay = located.day;
+
+  // dayOfWeek is application-owned (alignDayToShellDay/
+  // assignCanonicalDayId above) — reliable as the join key back to the
+  // immutable shell's own day-slot definition, unlike array position
+  // (moveWorkoutDay swaps dayOfWeek between two days without reordering
+  // the days array itself).
+  const shellDayIndex = params.shell.days.findIndex((d) => d.dayOfWeek === targetDay.dayOfWeek);
+  if (shellDayIndex === -1) {
+    return { ok: false, error: "This day's structural slot no longer matches the Program Shell — cannot safely regenerate." };
+  }
+  const shellDay = params.shell.days[shellDayIndex];
+  const dayIndex = shellDayIndex + 1;
+
+  const candidatesById = new Map(params.candidateSet.candidates.map((c) => [c.id, c]));
+  const dayCandidates = narrowCandidatesForDay(params.candidateSet, shellDay, params.brief.musclePriorities);
+
+  // Same two continuity sources every staged-generation day call gets
+  // (point I — quality context, not just correctness), rebuilt from the
+  // CURRENT draft — this draft's own content is the authoritative
+  // record of what's already there, never re-derived from provider
+  // output. Neither is required for correctness; both meaningfully
+  // improve output quality relative to the old regeneration prompt,
+  // which had zero cross-day continuity at all.
+  const priorWeek = params.draft.weeks.find((w) => w.weekNumber === targetWeek.weekNumber - 1);
+  const priorSameDay = priorWeek?.days.find((d) => d.dayOfWeek === shellDay.dayOfWeek);
+  const priorSameDaySummary = priorSameDay ? summarizeDayForPrompt(toDaySummaryShape(priorSameDay)) : null;
+
+  const otherDaysThisWeek = new Map<number, ModelDayDraft>();
+  for (const otherDay of targetWeek.days) {
+    if (otherDay.id === targetDay.id) continue;
+    const otherSlotIndex = params.shell.days.findIndex((d) => d.dayOfWeek === otherDay.dayOfWeek);
+    if (otherSlotIndex === -1) continue;
+    otherDaysThisWeek.set(otherSlotIndex + 1, toDaySummaryShape(otherDay));
+  }
+  const weekSoFarSummary = summarizeWeekSoFarForPrompt(otherDaysThisWeek, candidatesById);
+
+  const outcome = await generateProgramDay({
+    brief: params.brief,
+    clientContext: params.clientContext,
+    shell: params.shell,
+    weekNumber: targetWeek.weekNumber,
+    dayIndex,
+    shellDay,
+    priorSameDaySummary,
+    weekSoFarSummary,
+    candidates: dayCandidates,
+  });
+  if (!outcome.ok) return outcome;
+
+  // Never trust a returned exerciseId merely because the model supplied
+  // one — verify against the exact (narrowed) candidate set offered for
+  // this call before it's persisted.
+  const { result: verifiedDay } = verifyDayAgainstCandidates(outcome.day, dayCandidates);
+  // Structural identity is application-owned, never the model's echo.
+  // id is PRESERVED from the existing day (this is a regeneration of an
+  // already-canonical slot, not a first-time completion) rather than
+  // minted fresh — "content changes, structural identity remains
+  // stable," per this fix's own requirement.
+  const alignedDay = alignDayToShellDay(verifiedDay, shellDay);
+  const canonicalDay: ModelDayDraft = { ...alignedDay, id: targetDay.id };
+
+  // Resolve exercise names/ids for JUST this one day — a throwaway
+  // single-day "program" wrapper reuses resolveProgramDraftExercises's
+  // existing, already-tested resolution logic without re-touching (or
+  // even reading) any other day/week's content.
+  const resolvedWrapper = await resolveProgramDraftExercises(
+    {
+      name: "regeneration-wrapper",
+      category: params.brief.goal,
+      experienceLevel: params.brief.experienceLevel,
+      defaultDurationWeeks: params.brief.weeks,
+      recommendedDaysPerWeek: params.brief.daysPerWeek,
+      weeks: [{ id: "wrapper-week", weekNumber: 1, days: [canonicalDay] }],
+    },
+    params.coachId,
+  );
+  const resolvedDay = resolvedWrapper.weeks[0].days[0];
+
+  // Splice ONLY this day into the draft — every other week/day is
+  // passed through by reference, completely untouched by this call.
+  const spliced = replaceDayContent(params.draft, targetDay.id, resolvedDay);
+  if (!spliced.ok) {
+    // findDayUnique already succeeded above with the SAME draft/dayId,
+    // so this is unreachable in practice — kept as a real discriminated
+    // check rather than a non-null assertion.
+    return { ok: false, error: spliced.error };
+  }
+
+  return { ok: true, draft: spliced.draft, provider: outcome.provider, model: outcome.model, elapsedMs: outcome.elapsedMs };
+}
+
+// summarizeDayForPrompt/summarizeWeekSoFarForPrompt read only
+// id/dayOfWeek/label/notes/workout.name/workout.primaryFocus/
+// workout.sections[].prescriptions[].{exerciseId,exerciseName,sets} —
+// every one of those fields exists on GeneratedDayDraft with the same
+// name and meaning. The one real difference (exerciseId: string|null
+// here vs. string|undefined on ModelDayDraft) is irrelevant to what
+// these summary functions actually do with it (a truthy check), so
+// this is a safe, narrow shape adapter for display/summary purposes
+// only — never used to persist or re-validate anything.
+function toDaySummaryShape(day: GeneratedDayDraft): ModelDayDraft {
+  return {
+    id: day.id,
+    dayOfWeek: day.dayOfWeek,
+    label: day.label,
+    notes: day.notes,
+    workout: day.workout
+      ? {
+          ...day.workout,
+          sections: day.workout.sections.map((section) => ({
+            ...section,
+            prescriptions: section.prescriptions.map((p) => ({ ...p, exerciseId: p.exerciseId ?? undefined })),
+          })),
+        }
+      : null,
+  };
 }
 
 // Shared by every code path that needs "validate the current draft

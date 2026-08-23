@@ -15,7 +15,12 @@
 // directly — that's lib/db/program-generation-service.ts's job — and
 // nothing here calls a model provider directly — that's
 // lib/program-generator/provider.ts's job, reached only through its
-// exported generate*()/regenerateDayDraft() functions.
+// exported generate*() functions — regenerateDayAction below calls
+// generateProgramDay() (the same one staged generation uses for every
+// day), not regenerateDayDraft() (provider.ts's older whole-draft-echo
+// function, now unused by this file — see regenerateDayAction's own
+// comment for why it was replaced, kept in provider.ts only because
+// program-generator-integration.test.ts still tests it directly).
 //
 // Staged generation orchestration (runStagedGeneration, below) is the
 // composition point the diagnosed 180s-timeout fix required: it drives
@@ -66,10 +71,9 @@ import {
   type ProgramShell,
   type ModelWeekDraft,
 } from "@/lib/program-generator/contracts";
-import { regenerateDayDraft } from "@/lib/program-generator/provider";
 import { logGenerationFailure, logProviderSuccess, logQuotaRelease } from "@/lib/program-generator/observability";
-import { resolveProgramDraftExercises, normalizeExerciseName } from "@/lib/program-generator/exercise-resolution";
-import { buildExerciseCandidateSet, verifyProgramDraftAgainstCandidates } from "@/lib/program-generator/exercise-candidates";
+import { normalizeExerciseName } from "@/lib/program-generator/exercise-resolution";
+import { buildExerciseCandidateSet } from "@/lib/program-generator/exercise-candidates";
 import { catalogGapFindings } from "@/lib/program-generator/validation";
 import { buildClientContextSummary, type ClientContextSummary } from "@/lib/program-generator/client-context";
 import {
@@ -78,9 +82,10 @@ import {
   replaceExerciseByName,
   reorderExercises,
   moveWorkoutDay,
+  findDayUnique,
 } from "@/lib/program-generator/edit-ops";
 import { approveDraft } from "@/lib/program-generator/approval";
-import { runStagedGeneration, runAndSaveValidation } from "@/lib/program-generator/staged-generation";
+import { runStagedGeneration, runAndSaveValidation, regenerateDaySurgically } from "@/lib/program-generator/staged-generation";
 import { notifyProgramDraftReady, notifyProgramDraftFailed } from "@/lib/db/coach-notification-service";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
 
@@ -490,6 +495,22 @@ export async function moveWorkoutDayAction(params: {
   });
 }
 
+// P0 review finding, fixed here: this used to ask the model to echo
+// the ENTIRE program back (schema: ModelProgramDraftSchema) with an
+// instruction to leave every day but the target "unchanged" — but the
+// prompt (buildDayRegenerationPrompt) never actually included the
+// existing draft's content, only a one-line description of the target
+// day. The model had no way to honor "unchanged" for content it never
+// saw, so every single-day regeneration risked silently fabricating
+// new content for the rest of the whole program.
+//
+// Rewritten to delegate the actual generation to
+// staged-generation.ts's regenerateDaySurgically() — the same
+// "auth/quota/run-tracking in actions.ts, domain logic in a plain
+// testable module" split runStagedGeneration already uses. This
+// wrapper's own job is just: fail closed on an ambiguous/missing
+// target BEFORE any provider call or quota claim, parse the shell,
+// handle quota bookkeeping, and persist the result.
 export async function regenerateDayAction(params: {
   draftId: string;
   dayId: string;
@@ -497,6 +518,32 @@ export async function regenerateDayAction(params: {
 }): Promise<ActionResult> {
   const loaded = await loadEditableDraft(params.draftId);
   if (!loaded.ok) return { ok: false, error: loaded.error };
+
+  // Fail closed FIRST — before any provider call, quota claim, or run
+  // record — exactly the "do not regenerate, do not persist anything"
+  // requirement for a target that can't be uniquely resolved.
+  // regenerateDaySurgically re-checks this itself too (defense in
+  // depth, and so it's safe to call directly, e.g. from a test) — this
+  // earlier check exists purely to avoid claiming quota/starting a run
+  // for a request that's already known to be invalid.
+  const located = findDayUnique(loaded.draft, params.dayId);
+  if (!located.ok) {
+    return {
+      ok: false,
+      error: located.reason === "ambiguous"
+        ? "This draft has more than one day sharing the same identifier — refusing to guess which one to regenerate. Regenerate this draft or contact support."
+        : "Day not found in draft.",
+    };
+  }
+
+  if (!loaded.draftRow.shellJson) {
+    return { ok: false, error: "This draft has no stored Program Shell — cannot safely regenerate a single day." };
+  }
+  const parsedShell = parseProgramShell(loaded.draftRow.shellJson);
+  if (!parsedShell.ok) {
+    return { ok: false, error: "This draft's Program Shell is no longer valid — cannot safely regenerate a single day." };
+  }
+  const shell = parsedShell.data;
 
   const clientContext = await resolveClientContext(loaded.draftRow.clientId);
 
@@ -530,12 +577,12 @@ export async function regenerateDayAction(params: {
     };
   }
 
-  // Rate-limit gate — regenerateDayDraft() below always makes exactly
-  // one model call, so (unlike staged generation's resume path) this is
-  // unconditional once we're past the candidate-exhaustion fail-fast
-  // above. Shares the SAME per-coach quota as full-draft generation/
-  // resume (claimGenerationQuota's own comment) — a coach cannot dodge
-  // the limiter by only ever using "Regenerate Day".
+  // Rate-limit gate — regenerateDaySurgically() below always makes
+  // exactly one model call, so (unlike staged generation's resume path)
+  // this is unconditional once we're past the candidate-exhaustion
+  // fail-fast above. Shares the SAME per-coach quota as full-draft
+  // generation/resume (claimGenerationQuota's own comment) — a coach
+  // cannot dodge the limiter by only ever using "Regenerate Day".
   const claim = await claimGenerationQuota(loaded.coachId, params.draftId, "single_day");
   if (!claim.ok) {
     const minutes = Math.max(1, Math.ceil(claim.retryAfterMs / 60_000));
@@ -546,71 +593,75 @@ export async function regenerateDayAction(params: {
     };
   }
 
-  const outcome = await regenerateDayDraft(
-    loaded.brief,
+  const result = await regenerateDaySurgically({
+    draft: loaded.draft,
+    shell,
+    brief: loaded.brief,
     clientContext,
-    loaded.draft,
-    params.dayId,
-    params.instruction,
-    candidateSet.candidates,
-  );
+    dayId: params.dayId,
+    coachId: loaded.coachId,
+    candidateSet,
+  });
 
-  if (!outcome.ok) {
-    // See ClaimQuotaResult's comment in program-generation-service.ts:
-    // a definitive timeout produced zero usable output — don't charge
-    // the coach's quota for infrastructure aborting its own call.
-    let quotaReleased = false;
-    if (outcome.errorCode === "timeout") {
-      try {
-        await releaseGenerationQuotaClaim(claim.claimId);
-        logQuotaRelease({ draftId: params.draftId, runId: run.id, reason: "provider_timeout", success: true });
-        quotaReleased = true;
-      } catch {
-        logQuotaRelease({ draftId: params.draftId, runId: run.id, reason: "provider_timeout", success: false });
+  if (!result.ok) {
+    // GenerationFailure (has errorCode/provider/model/elapsedMs) vs. a
+    // plain {ok:false,error} from findDayUnique/shell-slot-mismatch/
+    // replaceDayContent — only the former needs quota-release-on-
+    // timeout and the sanitized structured failure log.
+    if ("errorCode" in result) {
+      // See ClaimQuotaResult's comment in program-generation-service.ts:
+      // a definitive timeout produced zero usable output — don't charge
+      // the coach's quota for infrastructure aborting its own call.
+      let quotaReleased = false;
+      if (result.errorCode === "timeout") {
+        try {
+          await releaseGenerationQuotaClaim(claim.claimId);
+          logQuotaRelease({ draftId: params.draftId, runId: run.id, reason: "provider_timeout", success: true });
+          quotaReleased = true;
+        } catch {
+          logQuotaRelease({ draftId: params.draftId, runId: run.id, reason: "provider_timeout", success: false });
+        }
       }
+      logGenerationFailure({
+        draftId: params.draftId,
+        runId: run.id,
+        stage: "day_regeneration",
+        errorCode: result.errorCode,
+        errorMessage: result.errorMessage,
+        provider: result.provider,
+        model: result.model,
+        elapsedMs: result.elapsedMs,
+        timeoutMs: result.timeoutMs,
+        isRetryOrResume: false,
+        quotaClaimed: true,
+        quotaReleased,
+      });
+      await failRun(run.id, result.errorMessage, { provider: result.provider, model: result.model });
+    } else {
+      await failRun(run.id, result.error);
     }
-    logGenerationFailure({
-      draftId: params.draftId,
-      runId: run.id,
-      stage: "day_regeneration",
-      errorCode: outcome.errorCode,
-      errorMessage: outcome.errorMessage,
-      provider: outcome.provider,
-      model: outcome.model,
-      elapsedMs: outcome.elapsedMs,
-      timeoutMs: outcome.timeoutMs,
-      isRetryOrResume: false,
-      quotaClaimed: true,
-      quotaReleased,
-    });
-    await failRun(run.id, outcome.errorMessage, { provider: outcome.provider, model: outcome.model });
-    return { ok: false, error: "Regeneration failed. Please try again." };
+    // Fail closed: draftJson was never touched — the pre-regeneration
+    // draft is exactly what's still persisted.
+    return { ok: false, error: "errorCode" in result ? "Regeneration failed. Please try again." : result.error };
   }
+
   logProviderSuccess({
     draftId: params.draftId,
     stage: "day_regeneration",
-    provider: outcome.provider,
-    model: outcome.model,
-    elapsedMs: outcome.elapsedMs,
+    provider: result.provider,
+    model: result.model,
+    elapsedMs: result.elapsedMs,
   });
 
-  // Never trust a returned exerciseId merely because the model supplied
-  // one — verify against the exact candidate set offered for this call
-  // before it's persisted (same rule as every week in staged generation).
-  const { result: verifiedDraft } = verifyProgramDraftAgainstCandidates(outcome.draft, candidateSet.candidates);
-
-  // Same resolution path as full generation — anything that didn't
-  // verify above (including days echoed back unchanged, which may not
-  // have carried a verifiable id at all) falls back to name-based
-  // resolution here, exactly as staged generation's assembly step does.
-  const resolvedDraft = await resolveProgramDraftExercises(verifiedDraft, loaded.coachId);
-  const reparsed = parseGeneratedProgramDraft(resolvedDraft);
+  const reparsed = parseGeneratedProgramDraft(result.draft);
   if (!reparsed.ok) {
-    await failRun(run.id, reparsed.error, { provider: outcome.provider, model: outcome.model });
+    await failRun(run.id, reparsed.error, { provider: result.provider, model: result.model });
+    // Fail closed: draftJson was never touched — the pre-regeneration
+    // draft is exactly what's still persisted.
     return { ok: false, error: `Regeneration produced an invalid draft: ${reparsed.error}` };
   }
 
-  await completeRun(run.id, { provider: outcome.provider, model: outcome.model });
+  await completeRun(run.id, { provider: result.provider, model: result.model });
   await saveDraftContent(params.draftId, reparsed.data, "ready_for_review");
   await runAndSaveValidation(
     params.draftId,
