@@ -13,7 +13,13 @@
 
 import "server-only";
 import { normalizeExerciseName } from "./exercise-resolution";
-import type { GeneratedProgramDraft, PrescriptionEditPatch } from "./contracts";
+import type {
+  GeneratedBlueprintSectionDraft,
+  GeneratedDayDraft,
+  GeneratedProgramDraft,
+  GeneratedWeekDraft,
+  PrescriptionEditPatch,
+} from "./contracts";
 
 export type EditOpResult =
   | { ok: true; draft: GeneratedProgramDraft; before: unknown; after: unknown }
@@ -23,15 +29,39 @@ function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function findSection(draft: GeneratedProgramDraft, dayId: string, sectionId: string) {
+// day.id review finding: under day-level generation, day.id came from
+// an independent per-day model call with zero visibility into ids used
+// by any OTHER week's call, so a duplicate was plausible — and this
+// function used to return the FIRST match across the entire program,
+// which would silently edit the wrong day if two ever collided.
+// staged-generation.ts now assigns a real crypto.randomUUID() the one
+// time a day is first persisted, making a NEW collision practically
+// impossible going forward — but this is the second, independent line
+// of defense: detect an ambiguous match (this draft still has a
+// pre-hardening duplicate, or some future bug reintroduces one) and
+// refuse to guess, rather than silently acting on whichever match
+// happens to be encountered first.
+const AMBIGUOUS_MATCH_ERROR =
+  "This draft has more than one day/section sharing the same identifier — refusing to guess which one to edit. Regenerate this draft or contact support.";
+
+function findSection(
+  draft: GeneratedProgramDraft,
+  dayId: string,
+  sectionId: string,
+):
+  | { ok: true; week: GeneratedWeekDraft; day: GeneratedDayDraft; section: GeneratedBlueprintSectionDraft }
+  | { ok: false; reason: "not_found" | "ambiguous" } {
+  const matches: { week: GeneratedWeekDraft; day: GeneratedDayDraft; section: GeneratedBlueprintSectionDraft }[] = [];
   for (const week of draft.weeks) {
     for (const day of week.days) {
       if (day.id !== dayId || !day.workout) continue;
       const section = day.workout.sections.find((s) => s.id === sectionId);
-      if (section) return { week, day, section };
+      if (section) matches.push({ week, day, section });
     }
   }
-  return null;
+  if (matches.length === 0) return { ok: false, reason: "not_found" };
+  if (matches.length > 1) return { ok: false, reason: "ambiguous" };
+  return { ok: true, ...matches[0] };
 }
 
 export function updatePrescription(
@@ -40,7 +70,9 @@ export function updatePrescription(
 ): EditOpResult {
   const next = deepClone(draft);
   const located = findSection(next, params.dayId, params.sectionId);
-  if (!located) return { ok: false, error: "Section not found in draft." };
+  if (!located.ok) {
+    return { ok: false, error: located.reason === "ambiguous" ? AMBIGUOUS_MATCH_ERROR : "Section not found in draft." };
+  }
   const idx = located.section.prescriptions.findIndex((p) => p.id === params.prescriptionId);
   if (idx === -1) return { ok: false, error: "Prescription not found in draft." };
 
@@ -55,7 +87,9 @@ export function replaceExercise(
 ): EditOpResult {
   const next = deepClone(draft);
   const located = findSection(next, params.dayId, params.sectionId);
-  if (!located) return { ok: false, error: "Section not found in draft." };
+  if (!located.ok) {
+    return { ok: false, error: located.reason === "ambiguous" ? AMBIGUOUS_MATCH_ERROR : "Section not found in draft." };
+  }
   const idx = located.section.prescriptions.findIndex((p) => p.id === params.prescriptionId);
   if (idx === -1) return { ok: false, error: "Prescription not found in draft." };
 
@@ -146,7 +180,9 @@ export function reorderExercises(
 ): EditOpResult {
   const next = deepClone(draft);
   const located = findSection(next, params.dayId, params.sectionId);
-  if (!located) return { ok: false, error: "Section not found in draft." };
+  if (!located.ok) {
+    return { ok: false, error: located.reason === "ambiguous" ? AMBIGUOUS_MATCH_ERROR : "Section not found in draft." };
+  }
 
   const before = deepClone(located.section.prescriptions);
   const byId = new Map(located.section.prescriptions.map((p) => [p.id, p]));
@@ -181,8 +217,16 @@ export function moveWorkoutDay(
   const next = deepClone(draft);
   const week = next.weeks.find((w) => w.id === params.weekId);
   if (!week) return { ok: false, error: "Week not found in draft." };
-  const day = week.days.find((d) => d.id === params.dayId);
-  if (!day) return { ok: false, error: "Day not found in draft." };
+  // Same ambiguity guard as findSection above — week.id is always
+  // application-owned (assembleWeekFromDays's own crypto.randomUUID(),
+  // never model-generated), so the risk here is narrower than
+  // findSection's cross-program search, but a duplicate day.id WITHIN
+  // one week is exactly as possible (each day, in every week, comes
+  // from its own independent model call).
+  const matchingDays = week.days.filter((d) => d.id === params.dayId);
+  if (matchingDays.length === 0) return { ok: false, error: "Day not found in draft." };
+  if (matchingDays.length > 1) return { ok: false, error: AMBIGUOUS_MATCH_ERROR };
+  const day = matchingDays[0];
 
   const before = { dayId: day.id, dayOfWeek: day.dayOfWeek };
 

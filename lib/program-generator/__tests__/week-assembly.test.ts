@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from "vitest";
-import { alignDayToShellDay, assembleWeekFromDays } from "../staged-generation";
+import { alignDayToShellDay, assembleWeekFromDays, assignCanonicalDayId } from "../staged-generation";
 import type { ModelDayDraft, ProgramShellDay } from "../contracts";
 
 function day(dayOfWeek: number, label: string, id?: string): ModelDayDraft {
@@ -143,5 +143,88 @@ describe("assembleWeekFromDays — never throws, always a discriminated result",
     if (!result.ok) return;
     expect(result.week.days.map((d) => d.dayOfWeek)).toEqual([1, 3, 5]);
     expect(result.week.days[1].label).toBe("Day B");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// assignCanonicalDayId — day.id review finding. Each day comes from an
+// independent provider call with no visibility into ids used by other
+// weeks/days, so the model can echo the same id for two unrelated
+// days. This is the application-owned replacement, called exactly once
+// per day slot at first persistence (see staged-generation.ts's own
+// comment on the one real call site).
+// ─────────────────────────────────────────────────────────────
+describe("assignCanonicalDayId", () => {
+  it("[A] two days that echo the SAME model id get different canonical ids", () => {
+    const dayA = day(1, "Day A", "same-model-id");
+    const dayB = day(3, "Day B", "same-model-id");
+    const canonicalA = assignCanonicalDayId(dayA);
+    const canonicalB = assignCanonicalDayId(dayB);
+    expect(canonicalA.id).not.toBe(canonicalB.id);
+    expect(canonicalA.id).not.toBe("same-model-id");
+    expect(canonicalB.id).not.toBe("same-model-id");
+  });
+
+  it("[B] the same colliding model id echoed across independent WEEKS still yields unique canonical ids", () => {
+    // Simulates week 1 day 1 and week 5 day 1 — same shell day-slot,
+    // completely independent provider calls — both echoing the exact
+    // same id, exactly the scenario edit-ops.ts's cross-week findSection
+    // search is vulnerable to if left uncorrected.
+    const week1Day1 = assignCanonicalDayId(day(1, "Day A", "push-day-id"));
+    const week5Day1 = assignCanonicalDayId(day(1, "Day A", "push-day-id"));
+    expect(week1Day1.id).not.toBe(week5Day1.id);
+  });
+
+  it("[C] wrong dayOfWeek + duplicate id are both corrected when composed the same way runStagedGeneration does", () => {
+    const drifted = day(3, "Wrong Echoed Label", "colliding-id");
+    const alreadyUsed = assignCanonicalDayId(day(1, "Day A", "colliding-id"));
+    const fixed = assignCanonicalDayId(alignDayToShellDay(drifted, SHELL_DAYS[1]));
+    expect(fixed.dayOfWeek).toBe(SHELL_DAYS[1].dayOfWeek);
+    expect(fixed.label).toBe(SHELL_DAYS[1].label);
+    expect(fixed.id).not.toBe("colliding-id");
+    expect(fixed.id).not.toBe(alreadyUsed.id);
+  });
+
+  it("[D] content survives normalization unchanged — only id changes", () => {
+    const original = day(4, "Some Day", "model-id");
+    const canonical = assignCanonicalDayId(original);
+    expect(canonical.id).not.toBe(original.id);
+    expect(canonical.dayOfWeek).toBe(original.dayOfWeek);
+    expect(canonical.label).toBe(original.label);
+    expect(canonical.notes).toBe(original.notes);
+    expect(canonical.workout).toBe(original.workout);
+  });
+
+  it("[E] a day's canonical id, once assembled, does not change on a later re-assembly of the same completed-days map", () => {
+    // Simulates "assembled once, then read again on a later
+    // resume/re-assembly call" — assembleWeekFromDays itself never
+    // calls assignCanonicalDayId (only the ONE call site in
+    // runStagedGeneration does, at first persistence), so re-running
+    // assembly against the SAME already-completed days must be a
+    // pure, id-stable read, never a re-mint.
+    const completed = new Map<number, ModelDayDraft>([
+      [1, assignCanonicalDayId(day(1, "Day A"))],
+      [2, assignCanonicalDayId(day(3, "Day B"))],
+      [3, assignCanonicalDayId(day(5, "Day C"))],
+    ]);
+    const first = assembleWeekFromDays(1, SHELL_DAYS, completed);
+    const second = assembleWeekFromDays(1, SHELL_DAYS, completed);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(first.week.days.map((d) => d.id)).toEqual(second.week.days.map((d) => d.id));
+  });
+
+  it("[H] happy path — a day whose model id was already fine still gets replaced with a real canonical id", () => {
+    // Not a regression in behavior (assignCanonicalDayId always
+    // replaces id, whether or not the original looked fine) but proves
+    // the happy path doesn't throw or corrupt content just because
+    // nothing was actually wrong.
+    const fine = day(1, "Day A", "already-unique-id");
+    const result = assignCanonicalDayId(fine);
+    expect(result.id).toEqual(expect.any(String));
+    expect(result.id.length).toBeGreaterThan(0);
+    expect(result.dayOfWeek).toBe(1);
+    expect(result.label).toBe("Day A");
   });
 });
