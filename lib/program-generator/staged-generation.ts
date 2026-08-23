@@ -109,7 +109,7 @@ export function assembleWeekFromDays(
       // both branches.
       return { ok: false, error: `Missing content for week ${weekNumber} day ${idx + 1} during week assembly.` };
     }
-    days.push(day);
+    days.push(alignDayToShellDay(day, shellDays[idx]));
   }
 
   const candidate: ModelWeekDraft = { id: randomUUID(), weekNumber, label: `Week ${weekNumber}`, days };
@@ -125,6 +125,18 @@ export function assembleWeekFromDays(
     return { ok: false, error: `Assembled week ${weekNumber} failed schema validation: ${parsed.error.message}` };
   }
   return { ok: true, week: parsed.data };
+}
+
+// The persisted slot (week_number, day_number) and shell day are the
+// structural source of truth. The model can still drift on dayOfWeek or
+// label despite the prompt; never let that metadata make an otherwise
+// usable day unassemblable or poison future resumes.
+export function alignDayToShellDay(day: ModelDayDraft, shellDay: ProgramShellDay): ModelDayDraft {
+  return {
+    ...day,
+    dayOfWeek: shellDay.dayOfWeek,
+    label: shellDay.label,
+  };
 }
 
 // Shared by every code path that needs "validate the current draft
@@ -536,14 +548,15 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
       // back to name-only, which exercise-resolution.ts's fallback
       // resolver covers at final assembly time.
       const { result: verifiedDay } = verifyDayAgainstCandidates(dayOutcome.day, dayCandidates);
+      const alignedDay = alignDayToShellDay(verifiedDay, shellDay);
 
       await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
         status: "completed",
-        dayJson: verifiedDay,
+        dayJson: alignedDay,
         provider: dayOutcome.provider,
         model: dayOutcome.model,
       });
-      completedDaysThisWeek.set(dayIndex, verifiedDay);
+      completedDaysThisWeek.set(dayIndex, alignedDay);
       lastProvider = dayOutcome.provider;
       lastModel = dayOutcome.model;
 
