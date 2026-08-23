@@ -172,20 +172,21 @@ describe("findBlockForWeek", () => {
 });
 
 describe("resolveGenerationArchitecture", () => {
-  it("routes a genuinely fresh draft (no existing progress) to 'block' for every supported goal", () => {
+  // Review finding on Phase C candidate 5bfc4bc: this function no
+  // longer takes a "hasAnyExistingProgress" flag at all — it only ever
+  // answers "what would a genuinely NEW draft get." The
+  // resume-with-null-architecture case (what "hasAnyExistingProgress"
+  // used to gate) is now handled entirely by runStagedGeneration's own
+  // isResume check, never by this function inferring anything from
+  // content state — see staged-generation.test.ts's routing-lifecycle
+  // tests (via the DB-backed integration suite) for that behavior.
+  it("routes a genuinely fresh draft to 'block' for every supported goal", () => {
     for (const goal of SUPPORTED_GOALS) {
-      expect(resolveGenerationArchitecture({ goal, hasAnyExistingProgress: false })).toBe("block");
+      expect(resolveGenerationArchitecture({ goal })).toBe("block");
     }
   });
 
-  it("athletic_performance always routes to 'legacy_day', with or without existing progress", () => {
-    expect(resolveGenerationArchitecture({ goal: "athletic_performance", hasAnyExistingProgress: false })).toBe("legacy_day");
-    expect(resolveGenerationArchitecture({ goal: "athletic_performance", hasAnyExistingProgress: true })).toBe("legacy_day");
-  });
-
-  it("ANY existing progress routes to 'legacy_day', regardless of goal — this is what protects a pre-Phase-C draft like Maddie's", () => {
-    for (const goal of SUPPORTED_GOALS) {
-      expect(resolveGenerationArchitecture({ goal, hasAnyExistingProgress: true })).toBe("legacy_day");
-    }
+  it("athletic_performance always routes to 'legacy_day'", () => {
+    expect(resolveGenerationArchitecture({ goal: "athletic_performance" })).toBe("legacy_day");
   });
 });

@@ -8,8 +8,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from "vitest";
-import { alignDayToShellDay, assembleWeekFromDays, assignCanonicalDayId } from "../staged-generation";
-import type { ModelDayDraft, ProgramShellDay } from "../contracts";
+import { alignDayToShellDay, assembleWeekFromDays, assignCanonicalDayId, resolvePriorWeekContinuityFallback } from "../staged-generation";
+import type { ModelDayDraft, ModelWeekDraft, ProgramShellDay } from "../contracts";
 
 function day(dayOfWeek: number, label: string, id?: string): ModelDayDraft {
   return {
@@ -226,5 +226,93 @@ describe("assignCanonicalDayId", () => {
     expect(result.id.length).toBeGreaterThan(0);
     expect(result.dayOfWeek).toBe(1);
     expect(result.label).toBe("Day A");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// resolvePriorWeekContinuityFallback — Phase C review finding (candidate
+// 5bfc4bc): a deterministically expanded week (Phase B) persists a
+// single program_generation_weeks row and ZERO program_generation_days
+// rows, so the real per-day-row continuity lookup finds nothing for it.
+// This is the fallback: locate each day-slot's content directly from
+// the prior week's own persisted ModelWeekDraft instead, by structural
+// dayOfWeek (never array position).
+// ─────────────────────────────────────────────────────────────
+describe("resolvePriorWeekContinuityFallback", () => {
+  function week(days: ModelDayDraft[]): ModelWeekDraft {
+    return { id: "week-id", weekNumber: 1, days };
+  }
+
+  it("[fallback B] prior week has completed week JSON but no day rows — produces a summary for every matching slot", () => {
+    const priorWeek = week([day(1, "Push"), day(3, "Pull"), day(5, "Legs")]);
+    const result = resolvePriorWeekContinuityFallback(priorWeek, SHELL_DAYS);
+    expect(result.size).toBe(3);
+    expect(result.get(1)?.label).toBe("Push");
+    expect(result.get(2)?.label).toBe("Pull");
+    expect(result.get(3)?.label).toBe("Legs");
+  });
+
+  it("[fallback C] targets the correct SAME-day slot by dayOfWeek, never by array position", () => {
+    // Deliberately out of order and with an extra, unrelated day —
+    // proves the match is structural (dayOfWeek), not positional.
+    const priorWeek = week([day(5, "Legs"), day(1, "Push"), day(9, "Unrelated Extra Day"), day(3, "Pull")]);
+    const result = resolvePriorWeekContinuityFallback(priorWeek, SHELL_DAYS);
+    expect(result.get(1)?.label).toBe("Push"); // dayOfWeek 1
+    expect(result.get(2)?.label).toBe("Pull"); // dayOfWeek 3
+    expect(result.get(3)?.label).toBe("Legs"); // dayOfWeek 5
+    expect([...result.values()].some((d) => d.label === "Unrelated Extra Day")).toBe(false);
+  });
+
+  it("[fallback F/G] no prior week content (undefined) produces an empty map — never fabricated continuity", () => {
+    const result = resolvePriorWeekContinuityFallback(undefined, SHELL_DAYS);
+    expect(result.size).toBe(0);
+  });
+
+  it("a slot with no matching dayOfWeek in the prior week is simply absent from the result, not fabricated", () => {
+    const priorWeek = week([day(1, "Push")]); // missing dayOfWeek 3 and 5
+    const result = resolvePriorWeekContinuityFallback(priorWeek, SHELL_DAYS);
+    expect(result.size).toBe(1);
+    expect(result.has(2)).toBe(false);
+    expect(result.has(3)).toBe(false);
+  });
+
+  it("[fallback H] reflects the expanded week's OWN progression-adjusted content, not a generic/original copy", () => {
+    // The critical distinction: this must summarize whatever the prior
+    // week's PERSISTED content actually is — which, for an expanded
+    // week, already has Phase B's progression fields (e.g. a narrowed
+    // rep floor, a lower targetRir) baked in — never re-derive or
+    // reach past it to some other, earlier source.
+    const progressedDay: ModelDayDraft = {
+      id: "d1",
+      dayOfWeek: 1,
+      label: "Push",
+      workout: {
+        id: "w1",
+        name: "Push",
+        sections: [
+          {
+            id: "s1",
+            name: "Main",
+            sectionType: "main_lift",
+            orderIndex: 0,
+            prescriptions: [
+              { id: "p1", exerciseName: "Bench Press", orderIndex: 0, isRequired: true, repsMin: 11, repsMax: 12, targetRir: 1 },
+            ],
+          },
+        ],
+      },
+    };
+    const priorWeek = week([progressedDay, day(3, "Pull"), day(5, "Legs")]);
+    const result = resolvePriorWeekContinuityFallback(priorWeek, SHELL_DAYS);
+    const prescription = result.get(1)?.workout?.sections[0].prescriptions[0];
+    expect(prescription?.repsMin).toBe(11);
+    expect(prescription?.targetRir).toBe(1);
+  });
+
+  it("is a pure function — never mutates the prior week content it reads from", () => {
+    const priorWeek = week([day(1, "Push"), day(3, "Pull"), day(5, "Legs")]);
+    const snapshot = structuredClone(priorWeek);
+    resolvePriorWeekContinuityFallback(priorWeek, SHELL_DAYS);
+    expect(priorWeek).toEqual(snapshot);
   });
 });

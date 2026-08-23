@@ -200,20 +200,41 @@ export function findBlockForWeek(blocks: BlockPlan[], weekNumber: number): Block
 //
 // A typed decision point instead of a fragile string check scattered
 // through orchestration (Phase C task's own explicit instruction).
-// Deliberately conservative: ANY existing progress on a draft — a
-// persisted shell, or any completed week — routes to legacy_day
-// unconditionally, regardless of goal. This is what keeps every
-// currently-in-flight or already-completed production draft (including
-// production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a, "Maddie":
-// shell exists, weeks 1-2 completed) on the legacy path with ZERO
-// goal-based branching and ZERO new persisted "architecture" flag — the
-// check is purely a function of the draft's OWN already-persisted
-// state, never a clock, a migration, or a special-cased draft id. Only
-// a draft with NO existing shell and ZERO completed weeks at all (a
-// genuinely fresh, first-ever generation attempt) is even eligible for
-// block routing, and then only if its goal is one of the six Phase A/B
-// support (see strategy.ts's isPhaseBlockSupportedGoal —
-// athletic_performance is never eligible, at any point).
+//
+// Review finding on Phase C candidate 5bfc4bc: an earlier version of
+// this decision inferred "is this draft new" from whether it had any
+// PERSISTED PROGRESS (a shell, or a completed week) — but that is a
+// content-state heuristic, not a lifecycle signal, and a historical
+// draft that failed before ever producing a shell or a completed week
+// (e.g. the very first provider call itself failed) has EXACTLY the
+// same "zero progress" shape as a genuinely brand-new draft. Under the
+// old rule, resuming that historical draft for a now-Phase-C-supported
+// goal would silently route it into block architecture — a real
+// backward-compatibility violation: a draft's generation philosophy
+// must never change based on accidental content state.
+//
+// Fixed by using this repository's own EXISTING explicit lifecycle
+// signal — StagedGenerationParams.isResume, which every caller already
+// sets correctly (generateProgramDraftAction: false; resumeGenerationAction:
+// true) — instead of guessing from shell/week state. This function
+// itself now only ever answers "what would a genuinely NEW draft get,"
+// and is called from exactly one place (runStagedGeneration) in
+// exactly one case: isResume === false AND no persisted
+// generationArchitecture exists yet. Every resume with a still-null
+// persisted architecture (migration 0036) — regardless of how much or
+// how little progress happens to exist — is forced to legacy_day
+// directly in runStagedGeneration, never routed through this function
+// at all. See runStagedGeneration's own routing comment for the full
+// three-way decision.
+//
+// This is what keeps a historical draft (including production draft
+// 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a, "Maddie": shell exists, weeks
+// 1-2 completed, generationArchitecture null) on the legacy path
+// unconditionally, AND now also covers the historical-draft shapes
+// Maddie's own specific state doesn't happen to exercise (no shell at
+// all, a failed Week 1, partial day rows) — every one of them shares
+// the same defining trait: isResume is true and generationArchitecture
+// is still null, which is a lifecycle fact, not a content-state guess.
 // ─────────────────────────────────────────────────────────────
 
 export const GENERATION_ARCHITECTURES = ["block", "legacy_day"] as const;
@@ -221,15 +242,12 @@ export type GenerationArchitecture = (typeof GENERATION_ARCHITECTURES)[number];
 
 export interface GenerationArchitectureContext {
   goal: TemplateCategory;
-  // True if this draft already has a persisted shell OR at least one
-  // completed week, from ANY prior attempt — never inferred from
-  // isResume alone, since a resume whose every prior attempt failed
-  // during the shell call itself would still have zero real progress
-  // and should still be treated as fresh.
-  hasAnyExistingProgress: boolean;
 }
 
+// Only ever answers "what would a genuinely NEW draft get" — see this
+// section's own header for why resume-with-null-architecture is
+// handled entirely by the caller instead, never by inferring anything
+// here from progress state.
 export function resolveGenerationArchitecture(context: GenerationArchitectureContext): GenerationArchitecture {
-  if (context.hasAnyExistingProgress) return "legacy_day";
   return isPhaseBlockSupportedGoal(context.goal) ? "block" : "legacy_day";
 }

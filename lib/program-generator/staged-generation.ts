@@ -467,6 +467,33 @@ export function resolveGenerationTimeBudgetMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GENERATION_TIME_BUDGET_MS;
 }
 
+// Phase C continuity fallback (review finding on candidate 5bfc4bc):
+// pure — given the prior week's own persisted ModelWeekDraft (from
+// `allWeeks`, regardless of whether it was produced by AI day-by-day
+// generation or Phase B's deterministic expansion — both are the same
+// shape) and the shell's fixed day list, locates each day-slot's
+// content by structural dayOfWeek (never array position) and returns
+// it keyed by dayIndex (1-based position in shellDays), the SAME key
+// space listGenerationDaysForWeek's real rows already use. Returns an
+// EMPTY map — never fabricated content — when priorWeekContent is
+// undefined (should be structurally unreachable in production; only
+// reachable here defensively) or when a given slot genuinely has no
+// matching day. Exported specifically so this lookup is unit-testable
+// without a database: see __tests__/week-assembly.test.ts.
+export function resolvePriorWeekContinuityFallback(
+  priorWeekContent: ModelWeekDraft | undefined,
+  shellDays: ProgramShellDay[],
+): Map<number, ModelDayDraft> {
+  const result = new Map<number, ModelDayDraft>();
+  if (!priorWeekContent) return result;
+  for (let priorDayIndex = 1; priorDayIndex <= shellDays.length; priorDayIndex++) {
+    const priorShellDay = shellDays[priorDayIndex - 1];
+    const matchingDay = priorWeekContent.days.find((d) => d.dayOfWeek === priorShellDay.dayOfWeek);
+    if (matchingDay) result.set(priorDayIndex, matchingDay);
+  }
+  return result;
+}
+
 // Phase C quota-gate helper: true if ANY week in [startFromWeek,
 // totalWeeks] is a block's canonical week — the only kind of week that
 // ever invokes the model under block architecture. Pure, no DB/network.
@@ -544,31 +571,50 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     return { ok: false, error: failureReason };
   }
 
-  // ── Phase C: legacy-vs-block architecture routing.
+  // ── Phase C: legacy-vs-block architecture routing — a three-way
+  // decision keyed on LIFECYCLE (isResume + persisted architecture),
+  // never on content state (shell/week progress).
   //
-  // If this draft already has a persisted decision (drizzle/0036's
-  // generationArchitecture column, read by the caller and passed in),
-  // it is ALWAYS honored as-is — never re-derived. A block-architecture
-  // canonical week and an ordinary legacy week are produced by the
-  // identical AI day-by-day mechanism and are byte-for-byte
-  // indistinguishable once persisted, so re-deriving from "does this
-  // draft have any existing progress" on a resume would incorrectly
-  // kick an in-progress BLOCK draft back to legacy_day the moment it
-  // has completed even one week — exactly the review finding this
-  // column exists to fix.
+  //   1. A persisted decision already exists (drizzle/0036's
+  //      generationArchitecture column, read by the caller and passed
+  //      in) — ALWAYS honored as-is, never re-derived. A block-
+  //      architecture canonical week and an ordinary legacy week are
+  //      produced by the identical AI day-by-day mechanism and are
+  //      byte-for-byte indistinguishable once persisted, so re-deriving
+  //      from "does this draft have any existing progress" would
+  //      incorrectly kick an in-progress BLOCK draft back to
+  //      legacy_day the moment it completes even one week.
   //
-  // Only a genuinely fresh draft (existingGenerationArchitecture still
-  // null) makes this decision now, via resolveGenerationArchitecture's
-  // "any existing progress -> legacy_day, unconditionally" rule — see
-  // its own header (block-plan.ts) — and persists it immediately below
-  // so every later call for this SAME draft reads it back instead.
+  //   2. This is a RESUME (isResume === true) with no persisted
+  //      decision yet — this can ONLY be a historical draft that
+  //      predates drizzle/0036 (or a resume of a draft whose very
+  //      first attempt never got far enough to make this decision at
+  //      all). Review finding on Phase C candidate 5bfc4bc: forcing
+  //      legacy_day here is the entire fix — see
+  //      resolveGenerationArchitecture's own header (block-plan.ts) for
+  //      why inferring "new" from shell/week state was the bug (a
+  //      historical draft that failed before its first shell call has
+  //      the exact same "zero progress" shape as a genuinely new one).
+  //      This holds regardless of shell state, day-row state, or
+  //      completed-week state — the ONLY signal that matters here is
+  //      "was this call told it's a resume."
+  //
+  //   3. Neither of the above — a genuinely NEW draft
+  //      (isResume === false, which every fresh-generation caller sets
+  //      unconditionally) — makes the real decision now, via
+  //      resolveGenerationArchitecture's goal-based rule.
+  //
+  // Case 3's result (and case 2's forced legacy_day) is persisted
+  // immediately below so every later call for this SAME draft reads it
+  // back via case 1 instead of re-deriving anything.
   let architecture: GenerationArchitecture;
   let blocks: BlockPlan[] = [];
   if (params.existingGenerationArchitecture) {
     architecture = params.existingGenerationArchitecture;
+  } else if (params.isResume) {
+    architecture = "legacy_day";
   } else {
-    const hasAnyExistingProgress = params.existingShell !== null || params.existingCompletedWeeks.size > 0;
-    architecture = resolveGenerationArchitecture({ goal: params.brief.goal, hasAnyExistingProgress });
+    architecture = resolveGenerationArchitecture({ goal: params.brief.goal });
   }
 
   if (architecture === "block") {
@@ -847,6 +893,27 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
           .filter((row) => row.status === "completed" && row.dayJson)
           .map((row) => [row.dayNumber, row.dayJson as ModelDayDraft]),
       );
+
+      // Review finding on Phase C candidate 5bfc4bc: the lookup above
+      // finds NOTHING for a prior week that was deterministically
+      // expanded (Phase B) rather than AI-generated day-by-day — an
+      // expanded week persists a single program_generation_weeks row
+      // and ZERO program_generation_days rows (see the expansion
+      // branch above), by design. Without this fallback, the first
+      // canonical week of every block after the first silently lost
+      // all prior-day continuity the moment its own preceding week was
+      // an expanded one. Only engages when the real lookup found
+      // nothing at all: a canonical week is never left partially
+      // day-rowed by the time a LATER week starts generating (resume
+      // always completes a week fully, or the whole invocation stops,
+      // before ever moving to the next one), so "empty" here can only
+      // mean "this prior week was expanded," not "this prior week was
+      // a partially-completed canonical week." See
+      // resolvePriorWeekContinuityFallback's own comment for the
+      // lookup itself.
+      if (priorWeekDaysByIndex.size === 0) {
+        priorWeekDaysByIndex = resolvePriorWeekContinuityFallback(allWeeks.get(weekNumber - 1), shell.days);
+      }
     }
 
     for (let dayIndex = dayStartIndex; dayIndex <= shell.days.length; dayIndex++) {

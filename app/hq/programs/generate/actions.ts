@@ -116,14 +116,30 @@ async function requireOwnedDraft(draftId: string) {
   return { ok: true as const, coachId: actor.coachId, scope: actor.scope, draft: access.draft };
 }
 
-// drizzle/0036's generation_architecture column is a plain nullable
-// text column (app-layer-validated, not a Postgres enum — see that
-// migration's own header) — narrows the raw DB value to the real
-// GenerationArchitecture union, or null for anything else (every
-// existing row today, and defensively any value this app didn't itself
-// write, rather than trusting the column blindly).
+// drizzle/0036/0037's generation_architecture column is a plain
+// nullable text column with a DB-level CHECK constraint (app-layer-
+// validated union, not a Postgres enum — see 0036's own header) —
+// narrows the raw DB value to the real GenerationArchitecture union.
+//
+// Review finding on Phase C candidate 5bfc4bc: a genuinely unset
+// column (null — every draft that hasn't made this decision yet) and
+// a MALFORMED non-null value (should be prevented entirely by 0037's
+// CHECK constraint going forward, but this function must not assume a
+// constraint added after the fact retroactively fixed every existing
+// row, and a raw SQL statement could still theoretically bypass it)
+// must not be silently treated as the same case. Both still end up
+// routed to legacy_day by runStagedGeneration's own isResume-based
+// safety rule regardless — that outcome is correct either way — but a
+// malformed value is a genuine data-integrity signal worth surfacing,
+// never a value this application itself ever writes.
 function parseGenerationArchitecture(value: string | null): GenerationArchitecture | null {
-  return (GENERATION_ARCHITECTURES as readonly string[]).includes(value ?? "") ? (value as GenerationArchitecture) : null;
+  if (value === null) return null;
+  if ((GENERATION_ARCHITECTURES as readonly string[]).includes(value)) return value as GenerationArchitecture;
+  console.error(
+    `[program-generator] draft has a malformed generation_architecture value ("${value}") — ` +
+      "this should be impossible under drizzle/0037's CHECK constraint. Falling back to legacy_day via the resume path.",
+  );
+  return null;
 }
 
 function revalidateDraft(draftId: string) {

@@ -245,6 +245,15 @@ export const programGenerationDrafts = pgTable(
     index("idx_program_generation_drafts_client_id").on(table.clientId),
     index("idx_program_generation_drafts_status").on(table.status),
     index("idx_program_generation_drafts_created_at").on(table.createdAt),
+    // Mirrors drizzle/0037_generation_architecture_check.sql — kept as
+    // a plain text column + CHECK (not a Postgres enum) per drizzle/
+    // 0036's own header; the allowed values are block-plan.ts's
+    // GENERATION_ARCHITECTURES, restated here rather than imported
+    // (this schema file has no dependency on lib/program-generator/).
+    check(
+      "chk_program_generation_drafts_generation_architecture",
+      sql`${table.generationArchitecture} IS NULL OR ${table.generationArchitecture} IN ('legacy_day', 'block')`,
+    ),
   ],
 );
 
