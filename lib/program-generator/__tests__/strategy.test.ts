@@ -12,19 +12,22 @@ import {
   PHASE_TYPES,
   EXERCISE_ROLES,
   PROGRESSION_STRATEGIES,
+  ROTATION_POLICIES,
   EFFORT_BANDS,
   isPhaseBlockSupportedGoal,
   derivePhaseSequence,
   deriveBlockLength,
   selectProgressionStrategy,
   minimumRetentionBlocks,
-  rotatesAtBlockTransitionByDefault,
+  rotationPolicyFor,
   defaultPhaseDisplayName,
   effortBandFor,
   type TemplateCategory,
   type ExperienceLevel,
   type PhaseType,
+  type RotationPolicy,
 } from "../strategy";
+import { MIN_PROGRAM_WEEKS, MAX_PROGRAM_WEEKS } from "../domain-enums";
 
 const ALL_GOALS: TemplateCategory[] = [
   "fat_loss",
@@ -68,9 +71,20 @@ describe("architectural boundary — pure logic only", () => {
     }
   });
 
-  it("contains no `import` statement at all other than none — this file has zero imports", () => {
+  it("imports exactly one thing — domain-enums.ts — and nothing else", () => {
+    // Review finding on Phase A candidate 6df43c1 (canonical-enum drift):
+    // strategy.ts used to hand-mirror TemplateCategory/ExperienceLevel and
+    // have zero imports at all. It now imports the canonical values from
+    // ./domain-enums, which is itself dependency-free (see that file's own
+    // header and domain-enums.test.ts) — so this file is still fully
+    // isolated from the AI/DB/network surface, just no longer duplicating
+    // values that could drift. Assert there is exactly this one import line,
+    // and that it points at domain-enums specifically, so a future edit
+    // can't quietly reintroduce a real dependency alongside it.
     const importLines = source.split("\n").filter((l) => /^\s*import\s/.test(l));
-    expect(importLines).toEqual([]);
+    expect(importLines).toEqual([importLines[0]]);
+    expect(importLines).toHaveLength(1);
+    expect(importLines[0]).toMatch(/from\s+["']\.\/domain-enums["']/);
   });
 });
 
@@ -148,8 +162,13 @@ describe("derivePhaseSequence", () => {
     expect(result.phases).toContain("intensification");
   });
 
-  it("physique competition_prep ALWAYS ends in taper, even for a short program (the goal's defining feature, never collapsed away)", () => {
-    for (const weeks of [4, 5, 6, 7, 8]) {
+  it("physique competition_prep ALWAYS ends in taper, even for a pathologically short program (the goal's defining feature, never collapsed away)", () => {
+    // Range extended down to 1 through the full supported domain per the
+    // Phase A remediation's pathological-length coverage requirement — the
+    // existing weeks<=8 branch already returns ["accumulation","taper"] all
+    // the way down to 1 week, so this proves that rather than just assuming
+    // it from the 4-8 range that was previously tested.
+    for (const weeks of [1, 2, 3, 4, 5, 6, 7, 8]) {
       for (const experienceLevel of ALL_EXPERIENCE) {
         const result = derivePhaseSequence("competition_prep", experienceLevel, weeks);
         expect(result.ok).toBe(true);
@@ -197,6 +216,95 @@ describe("derivePhaseSequence", () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// Pathological program lengths — Phase A remediation, Sections 4 & 5.
+// derivePhaseSequence's weeks parameter must fail closed outside the
+// real generator's own supported domain (ProgramGenerationBriefSchema:
+// integer, 1-16 — see domain-enums.ts) rather than silently guessing
+// what an out-of-domain program length should look like, and every
+// IN-domain pathological length (very short, or the max) must still
+// produce a sensible, deterministic, non-fragmented sequence.
+// ─────────────────────────────────────────────────────────────
+describe("derivePhaseSequence — pathological lengths", () => {
+  const IN_DOMAIN_PATHOLOGICAL = [1, 2, 3, 5, 7, 10, 16];
+  const OUT_OF_DOMAIN = [0, -1, 17, 20, 52];
+
+  it(`out-of-domain weeks values (${OUT_OF_DOMAIN.join(", ")}) fail explicitly, for every goal and experience level`, () => {
+    for (const goal of ALL_GOALS) {
+      for (const experienceLevel of ALL_EXPERIENCE) {
+        for (const weeks of OUT_OF_DOMAIN) {
+          const result = derivePhaseSequence(goal, experienceLevel, weeks);
+          expect(result.ok, `expected weeks=${weeks} (${goal}/${experienceLevel}) to fail closed`).toBe(false);
+          if (result.ok) continue;
+          expect(result.error).toMatch(/weeks/i);
+          expect(result.error).toContain(String(MIN_PROGRAM_WEEKS));
+          expect(result.error).toContain(String(MAX_PROGRAM_WEEKS));
+        }
+      }
+    }
+  });
+
+  it("a non-integer weeks value also fails closed, not just out-of-range integers", () => {
+    const result = derivePhaseSequence("muscle_growth", "intermediate", 8.5);
+    expect(result.ok).toBe(false);
+  });
+
+  it(`every in-domain pathological length (${IN_DOMAIN_PATHOLOGICAL.join(", ")}) succeeds, deterministically, for every supported goal`, () => {
+    for (const goal of SUPPORTED_GOALS) {
+      for (const experienceLevel of ALL_EXPERIENCE) {
+        for (const weeks of IN_DOMAIN_PATHOLOGICAL) {
+          const first = derivePhaseSequence(goal, experienceLevel, weeks);
+          const second = derivePhaseSequence(goal, experienceLevel, weeks);
+          expect(first.ok, `expected weeks=${weeks} (${goal}/${experienceLevel}) to succeed`).toBe(true);
+          expect(second).toEqual(first);
+          if (!first.ok) continue;
+          expect(first.phases.length).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+
+  it("very short in-domain programs (1-3 weeks) collapse to a single phase for every supported goal", () => {
+    for (const goal of SUPPORTED_GOALS) {
+      for (const experienceLevel of ALL_EXPERIENCE) {
+        for (const weeks of [1, 2, 3]) {
+          const result = derivePhaseSequence(goal, experienceLevel, weeks);
+          expect(result.ok).toBe(true);
+          if (!result.ok) continue;
+          // competition_prep is the sole goal that structurally needs 2
+          // phases even at minimum length, to preserve its defining taper —
+          // see the dedicated "physique competition_prep ALWAYS ends in
+          // taper" test above. Every other supported goal collapses to one.
+          const expectedMax = goal === "competition_prep" ? 2 : 1;
+          expect(result.phases.length).toBeLessThanOrEqual(expectedMax);
+        }
+      }
+    }
+  });
+
+  it("no non-competition_prep goal accidentally gains a taper phase at any in-domain length", () => {
+    for (const goal of SUPPORTED_GOALS.filter((g) => g !== "competition_prep")) {
+      for (const experienceLevel of ALL_EXPERIENCE) {
+        for (const weeks of [...IN_DOMAIN_PATHOLOGICAL, ...PROGRAM_LENGTHS]) {
+          const result = derivePhaseSequence(goal, experienceLevel, weeks);
+          expect(result.ok).toBe(true);
+          if (!result.ok) continue;
+          expect(result.phases).not.toContain("taper");
+        }
+      }
+    }
+  });
+
+  it("the maximum in-domain length (16 weeks) still succeeds for every supported goal, and 17 does not", () => {
+    for (const goal of SUPPORTED_GOALS) {
+      for (const experienceLevel of ALL_EXPERIENCE) {
+        expect(derivePhaseSequence(goal, experienceLevel, MAX_PROGRAM_WEEKS).ok).toBe(true);
+        expect(derivePhaseSequence(goal, experienceLevel, MAX_PROGRAM_WEEKS + 1).ok).toBe(false);
+      }
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
 // deriveBlockLength
 // ─────────────────────────────────────────────────────────────
 describe("deriveBlockLength", () => {
@@ -221,11 +329,11 @@ describe("deriveBlockLength", () => {
     expect(lenForFatLoss).toBe(lenForGrowth);
   });
 
-  it("[J] never produces a 1-week orphan for phases whose bounds require at least 2 weeks", () => {
+  it("[J] never produces a 1-week orphan for phases whose bounds require at least 2 weeks, even at pathological total lengths (up to 52)", () => {
     const phasesRequiringAtLeast2: PhaseType[] = ["foundation", "accumulation", "intensification", "realization", "resensitization"];
     for (const phaseType of phasesRequiringAtLeast2) {
       for (const experienceLevel of ALL_EXPERIENCE) {
-        for (let totalWeeks = 2; totalWeeks <= 20; totalWeeks++) {
+        for (let totalWeeks = 2; totalWeeks <= 52; totalWeeks++) {
           // Simulate carving the whole phase into blocks, exactly how a
           // future caller would.
           let remaining = totalWeeks;
@@ -314,12 +422,44 @@ describe("selectProgressionStrategy", () => {
     }
   });
 
-  it("fat_loss selects volume_density in every non-taper/deload phase, regardless of experience", () => {
+  it("fat_loss selects volume_density specifically in accumulation, but reverts to the experience-driven default in every other phase", () => {
+    // Review finding on Phase A candidate 6df43c1: fat_loss previously
+    // mapped EVERY non-taper/deload phase to volume_density unconditionally,
+    // flattening phase objective into a single strategy for this goal's
+    // entire program. That's fixed now — fat_loss gets the SAME
+    // accumulation-only density override as body_recomposition/
+    // executive_performance, and nothing else.
     for (const experienceLevel of ALL_EXPERIENCE) {
-      for (const phaseType of ["foundation", "accumulation", "intensification", "realization"] as const) {
-        expect(selectProgressionStrategy("fat_loss", experienceLevel, phaseType)).toBe("volume_density");
-      }
+      expect(selectProgressionStrategy("fat_loss", experienceLevel, "accumulation")).toBe("volume_density");
     }
+    expect(selectProgressionStrategy("fat_loss", "beginner", "foundation")).toBe("rep");
+    expect(selectProgressionStrategy("fat_loss", "intermediate", "intensification")).toBe("double");
+    expect(selectProgressionStrategy("fat_loss", "mixed", "intensification")).toBe("double");
+    expect(selectProgressionStrategy("fat_loss", "advanced", "intensification")).toBe("rir");
+    expect(selectProgressionStrategy("fat_loss", "competitive", "realization")).toBe("rir");
+  });
+
+  it("[fat_loss does not flatten all phases] fat_loss produces more than one distinct progression strategy across its own phase graph", () => {
+    // Explicit proof, not just an absence of the old assertion: a real
+    // fat_loss program (advanced, enough weeks to reach intensification)
+    // must NOT collapse to a single repeated strategy across its phases —
+    // phase objective remains a meaningful, distinguishing concept for this
+    // goal, exactly as it is for every other goal. accumulation legitimately
+    // gets the density override; foundation/intensification/realization do
+    // NOT, and must all revert to the experience-driven default (rir, for
+    // "advanced") instead of also being volume_density.
+    const byPhase = Object.fromEntries(
+      (["foundation", "accumulation", "intensification", "realization"] as const).map((phaseType) => [
+        phaseType,
+        selectProgressionStrategy("fat_loss", "advanced", phaseType),
+      ]),
+    );
+    const strategies = new Set(Object.values(byPhase));
+    expect(strategies.size).toBeGreaterThan(1);
+    expect(byPhase.accumulation).toBe("volume_density");
+    expect(byPhase.foundation).toBe("rir");
+    expect(byPhase.intensification).toBe("rir");
+    expect(byPhase.realization).toBe("rir");
   });
 
   it("body_recomposition/executive_performance select volume_density specifically in accumulation, but revert to the experience-driven default in intensification", () => {
@@ -331,8 +471,14 @@ describe("selectProgressionStrategy", () => {
 
   it("[invariant] no strategy depends SOLELY on experienceLevel — goal/phase can always change the result for a fixed experience", () => {
     const experienceLevel: ExperienceLevel = "advanced";
-    const baseline = selectProgressionStrategy("muscle_growth", experienceLevel, "intensification");
-    const goalOverridden = selectProgressionStrategy("fat_loss", experienceLevel, "intensification");
+    // accumulation, not intensification: since the Phase A remediation
+    // fix to goalCallsForVolumeDensity (fat_loss no longer overrides every
+    // phase), fat_loss and muscle_growth legitimately agree at
+    // intensification ("rir" for both) — accumulation is where fat_loss's
+    // narrower, correct override actually still diverges from muscle_growth's
+    // unoverridden default.
+    const baseline = selectProgressionStrategy("muscle_growth", experienceLevel, "accumulation");
+    const goalOverridden = selectProgressionStrategy("fat_loss", experienceLevel, "accumulation");
     const phaseOverridden = selectProgressionStrategy("muscle_growth", experienceLevel, "taper");
     expect(goalOverridden).not.toBe(baseline);
     expect(phaseOverridden).not.toBe(baseline);
@@ -365,17 +511,24 @@ describe("selectProgressionStrategy", () => {
 // Exercise-role retention
 // ─────────────────────────────────────────────────────────────
 describe("exercise-role retention", () => {
-  it("[M] staple does NOT rotate at a block transition by default, and has the highest minimum retention among finite-retention roles", () => {
-    expect(rotatesAtBlockTransitionByDefault("staple")).toBe(false);
+  it("[M] staple retains by default at a block transition (never an unconditional rotate signal), and has the highest minimum retention among finite-retention roles", () => {
+    // Review finding on Phase A candidate 6df43c1: the old boolean API name,
+    // rotatesAtBlockTransitionByDefault(role): boolean, could be misread as
+    // "must rotate" rather than "eligible to consider rotating." Replaced
+    // with a three-value RotationPolicy that can't express an unconditional
+    // mutation command. CRITICAL INVARIANT: block transition ≠ exercise
+    // rotation — retain_by_default means a transition alone is never
+    // sufficient reason to rotate this role.
+    expect(rotationPolicyFor("staple")).toBe("retain_by_default");
     expect(minimumRetentionBlocks("staple")).toBe(2);
   });
 
-  it("[N] accessory/isolation/conditioning rotate at block transitions by default; secondary_compound/corrective do not", () => {
-    expect(rotatesAtBlockTransitionByDefault("accessory")).toBe(true);
-    expect(rotatesAtBlockTransitionByDefault("isolation")).toBe(true);
-    expect(rotatesAtBlockTransitionByDefault("conditioning")).toBe(true);
-    expect(rotatesAtBlockTransitionByDefault("secondary_compound")).toBe(false);
-    expect(rotatesAtBlockTransitionByDefault("corrective")).toBe(false);
+  it("[N] accessory is eligible (not mandated) to rotate at a block transition; isolation/conditioning are freely rotatable; secondary_compound/corrective retain by default", () => {
+    expect(rotationPolicyFor("accessory")).toBe("eligible_at_transition");
+    expect(rotationPolicyFor("isolation")).toBe("freely_rotatable");
+    expect(rotationPolicyFor("conditioning")).toBe("freely_rotatable");
+    expect(rotationPolicyFor("secondary_compound")).toBe("retain_by_default");
+    expect(rotationPolicyFor("corrective")).toBe("retain_by_default");
   });
 
   it("corrective/mobility has no elapsed-time-based retention requirement at all (Infinity, not a large finite number)", () => {
@@ -387,16 +540,18 @@ describe("exercise-role retention", () => {
     expect(minimumRetentionBlocks("conditioning")).toBe(0);
   });
 
-  it("every role produces a defined, finite-or-Infinity retention value and a boolean rotation default", () => {
+  it("every role produces a defined, finite-or-Infinity retention value and a named RotationPolicy — never a bare boolean", () => {
     for (const role of EXERCISE_ROLES) {
       expect(typeof minimumRetentionBlocks(role)).toBe("number");
-      expect(typeof rotatesAtBlockTransitionByDefault(role)).toBe("boolean");
+      const policy: RotationPolicy = rotationPolicyFor(role);
+      expect(ROTATION_POLICIES).toContain(policy);
+      expect(typeof policy).toBe("string");
     }
   });
 
   it("[invariant] neither retention function accepts an experienceLevel parameter at all — enforced by the exported function signatures themselves, not just by convention", () => {
     expect(minimumRetentionBlocks.length).toBe(1);
-    expect(rotatesAtBlockTransitionByDefault.length).toBe(1);
+    expect(rotationPolicyFor.length).toBe(1);
   });
 });
 

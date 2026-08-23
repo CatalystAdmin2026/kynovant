@@ -12,16 +12,16 @@
 // provider.ts, or actions.ts imports this file yet; wiring it in is a
 // later, separately-reviewed phase.
 //
-// TemplateCategory/ExperienceLevel are deliberately NOT imported from
-// contracts.ts (which would transitively reference lib/db/schema.ts).
-// The two unions below are hand-mirrored from templateCategoryEnum/
-// experienceLevelEnum (lib/db/schema.ts) — duplicated on purpose, not
-// because the values differ, so this module's "zero imports outside
-// itself" property is trivially, statically provable rather than
-// resting on import-type-erasure semantics. If those enums ever change,
-// TypeScript's exhaustiveness checks below (the `never` defaults in
-// each switch) will fail to compile until this file is updated too —
-// drift is caught at build time, not silently ignored.
+// TemplateCategory/ExperienceLevel/program-length bounds come from
+// domain-enums.ts — the one dependency-free module these values are
+// declared in for every pure-logic consumer. This file no longer hand-
+// mirrors its own copy (review finding on Phase A candidate 6df43c1:
+// an independent mirrored union could silently drift from the real DB
+// enum with nothing to catch it). domain-enums.ts has zero imports of
+// its own, so importing it does not compromise this file's "no AI/DB/
+// network" purity — see domain-enums.ts's own header for the drift-
+// detection test that keeps it byte-for-byte matched to the real
+// lib/db/schema.ts enums and contracts.ts's week bound.
 //
 // PRODUCT-SEMANTIC CONTRACT (verified against the real UI/schema/
 // nutrition code before this file was written, not assumed):
@@ -33,18 +33,9 @@
 // result, never a silent fallback) if called for it.
 // ─────────────────────────────────────────────────────────────
 
-// Mirrors lib/db/schema.ts's templateCategoryEnum exactly.
-export type TemplateCategory =
-  | "fat_loss"
-  | "muscle_growth"
-  | "body_recomposition"
-  | "athletic_performance"
-  | "lifestyle"
-  | "competition_prep"
-  | "executive_performance";
+import { MAX_PROGRAM_WEEKS, MIN_PROGRAM_WEEKS, type ExperienceLevel, type TemplateCategory } from "./domain-enums";
 
-// Mirrors lib/db/schema.ts's experienceLevelEnum exactly.
-export type ExperienceLevel = "beginner" | "intermediate" | "advanced" | "competitive" | "mixed";
+export type { ExperienceLevel, TemplateCategory };
 
 // ─────────────────────────────────────────────────────────────
 // TAXONOMY — deliberately this small. Nothing here exists unless the
@@ -74,6 +65,11 @@ export type ExerciseRole = (typeof EXERCISE_ROLES)[number];
 
 export const PROGRESSION_STRATEGIES = ["rep", "double", "rir", "volume_density", "taper"] as const;
 export type ProgressionStrategy = (typeof PROGRESSION_STRATEGIES)[number];
+
+// A permission/expectation, never a mutation command — see
+// rotationPolicyFor's own comment below for the full rationale.
+export const ROTATION_POLICIES = ["retain_by_default", "eligible_at_transition", "freely_rotatable"] as const;
+export type RotationPolicy = (typeof ROTATION_POLICIES)[number];
 
 // The six goals this architecture supports in v1. athletic_performance
 // is the one TemplateCategory value intentionally absent — see the
@@ -113,6 +109,21 @@ export function derivePhaseSequence(
   experienceLevel: ExperienceLevel,
   weeks: number,
 ): PhaseSequenceResult {
+  // Fail closed on any weeks value outside the real generator's own
+  // domain (ProgramGenerationBriefSchema: min 1, max 16 — see
+  // domain-enums.ts). Review finding on Phase A candidate 6df43c1: this
+  // function previously accepted pathological values (0, 17, 20, 52+)
+  // silently. A pure function has no business guessing what a program
+  // longer than the product actually supports should look like.
+  if (!Number.isInteger(weeks) || weeks < MIN_PROGRAM_WEEKS || weeks > MAX_PROGRAM_WEEKS) {
+    return {
+      ok: false,
+      error:
+        `weeks must be an integer between ${MIN_PROGRAM_WEEKS} and ${MAX_PROGRAM_WEEKS} ` +
+        `(matches ProgramGenerationBriefSchema's own bound) — got ${weeks}.`,
+    };
+  }
+
   if (goal === "athletic_performance") {
     return {
       ok: false,
@@ -275,14 +286,24 @@ export function deriveBlockLength(phaseType: PhaseType, experienceLevel: Experie
 
 // Goals whose density/adherence emphasis (framework report, Sections
 // 2, 4, 11) makes Volume/Density progression the legitimate choice —
-// but only in the phase(s) where that emphasis actually applies, never
-// a blanket override of every phase for these goals.
+// but ONLY in the accumulation (base-building) phase, never a blanket
+// override of every phase for these goals.
+//
+// Review finding on Phase A candidate 6df43c1: fat_loss previously
+// returned true unconditionally, flattening intensification to behave
+// identically to accumulation and erasing phase objective as a
+// meaningful concept for this goal. That directly contradicted the
+// framework's own principle (adversarial refinement report, Section
+// 2): exercise stability and strength/performance retention remain
+// valuable during fat_loss — density training is a legitimate lever
+// specifically for BUILDING that base, not a description of the whole
+// goal. fat_loss now gets exactly the same accumulation-only override
+// as body_recomposition/executive_performance; intensification (and
+// foundation/realization) revert to the experience-driven default for
+// all three, same as any other goal.
 function goalCallsForVolumeDensity(goal: TemplateCategory, phaseType: PhaseType): boolean {
-  if (goal === "fat_loss") return true; // flat emphasis across this goal's whole phase graph
-  if ((goal === "body_recomposition" || goal === "executive_performance") && phaseType === "accumulation") {
-    return true; // density matters most in the base-building phase for these two; intensification reverts to the experience-driven default
-  }
-  return false;
+  const goalsWithDensityAccumulation: TemplateCategory[] = ["fat_loss", "body_recomposition", "executive_performance"];
+  return goalsWithDensityAccumulation.includes(goal) && phaseType === "accumulation";
 }
 
 export function selectProgressionStrategy(
@@ -334,21 +355,37 @@ export function minimumRetentionBlocks(role: ExerciseRole): number {
   return MIN_RETENTION_BLOCKS[role];
 }
 
-// Whether a block transition is, by itself and with no other trigger,
-// a legitimate default point to rotate this role. false for
-// staple/secondary_compound/corrective — those require an independent
-// trigger regardless of how many blocks have elapsed.
-const ROTATES_AT_BLOCK_TRANSITION_BY_DEFAULT: Record<ExerciseRole, boolean> = {
-  staple: false,
-  secondary_compound: false,
-  accessory: true,
-  isolation: true,
-  corrective: false,
-  conditioning: true,
+// RotationPolicy — review finding on Phase A candidate 6df43c1: the
+// previous API, `rotatesAtBlockTransitionByDefault(role): boolean`,
+// reads as a command ("rotate this because a block transitioned") when
+// the intended meaning was always a PERMISSION/EXPECTATION ("is a
+// block transition, by itself, a reasonable checkpoint to even
+// consider rotating this role"). CRITICAL INVARIANT, restated: a block
+// transition is NOT an exercise-rotation event. This three-value type
+// makes that impossible to misread as a boolean mutation trigger:
+//
+//   retain_by_default    — a block transition alone is NOT a reason to
+//                           rotate; an independent trigger (pain,
+//                           equipment loss, genuine multi-block
+//                           stagnation) is required regardless of how
+//                           many blocks have elapsed.
+//   eligible_at_transition — a block transition is a legitimate, common
+//                           CHECKPOINT to consider rotating this role —
+//                           permission, not a mandate.
+//   freely_rotatable      — no floor at all; may rotate at a
+//                           transition, mid-block, or not — caller's
+//                           choice either way.
+const ROTATION_POLICY: Record<ExerciseRole, RotationPolicy> = {
+  staple: "retain_by_default",
+  secondary_compound: "retain_by_default",
+  accessory: "eligible_at_transition",
+  isolation: "freely_rotatable",
+  corrective: "retain_by_default",
+  conditioning: "freely_rotatable",
 };
 
-export function rotatesAtBlockTransitionByDefault(role: ExerciseRole): boolean {
-  return ROTATES_AT_BLOCK_TRANSITION_BY_DEFAULT[role];
+export function rotationPolicyFor(role: ExerciseRole): RotationPolicy {
+  return ROTATION_POLICY[role];
 }
 
 // ─────────────────────────────────────────────────────────────
