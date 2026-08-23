@@ -24,6 +24,11 @@ interface GenerationProgress {
   totalWeeks: number | null;
   completedWeeks: number | null;
   currentWeek: number | null;
+  // P0 day-level architecture change — see staged-generation.ts. Null
+  // for a run that predates this change (nothing to show, falls back
+  // to the week-only line below) or for a single_day-scope run.
+  currentDay: number | null;
+  completedDays: number | null;
 }
 
 interface GenerationWeekSummary {
@@ -140,7 +145,9 @@ export default function DraftReviewClient(props: Props) {
             <p className="text-[#C9A24D] text-xs mt-1">
               {props.progress.currentWeek === 0
                 ? "Designing program structure…"
-                : `Generating Week ${props.progress.currentWeek ?? 1} of ${props.progress.totalWeeks}`}
+                : `Generating Week ${props.progress.currentWeek ?? 1} of ${props.progress.totalWeeks}${
+                    props.progress.currentDay != null ? `, Day ${props.progress.currentDay}` : ""
+                  }`}
             </p>
           )}
           {props.status === "failed" && props.failureReason && (

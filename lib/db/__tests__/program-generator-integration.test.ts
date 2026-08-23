@@ -27,6 +27,9 @@ import {
   saveDraftContent,
   saveValidationResult,
   saveProgramShell,
+  saveGenerationDay,
+  listGenerationDays,
+  listGenerationDaysForWeek,
   saveGenerationWeek,
   listGenerationWeeks,
   getLatestRun,
@@ -39,7 +42,7 @@ import { approveDraft } from "@/lib/program-generator/approval";
 import { resolveProgramDraftExercises } from "@/lib/program-generator/exercise-resolution";
 import { coachOwnsProgramTemplate, coachOwnsWorkoutTemplate } from "@/lib/auth/guards";
 import { generateProgramShell, regenerateDayDraft } from "@/lib/program-generator/provider";
-import { buildFixtureProgramShell, buildFixtureProgramWeek } from "@/lib/program-generator/fixture";
+import { buildFixtureProgramShell, buildFixtureProgramWeek, buildFixtureProgramDay } from "@/lib/program-generator/fixture";
 import { runStagedGeneration } from "@/lib/program-generator/staged-generation";
 import { buildExerciseCandidateSet } from "@/lib/program-generator/exercise-candidates";
 import { summarizeWeekForPrompt, buildWeekGenerationPrompt } from "@/lib/program-generator/prompt";
@@ -47,6 +50,7 @@ import type {
   GeneratedProgramDraft,
   ModelProgramDraft,
   ModelWeekDraft,
+  ModelDayDraft,
 } from "@/lib/program-generator/contracts";
 import type { ProgramGenerationBrief } from "@/lib/program-generator/contracts";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
@@ -771,6 +775,7 @@ describe("staged generation orchestration", () => {
       existingShell: null,
       isResume: false,
       startFromWeek: 1,
+      startFromDay: 1,
       existingCompletedWeeks: new Map(),
     });
     expect(result.ok).toBe(true);
@@ -845,6 +850,43 @@ describe("staged generation orchestration", () => {
 
     const weekDbRows = await db.select().from(programWeeks).where(eq(programWeeks.programTemplateId, approval.programTemplateId));
     expect(weekDbRows).toHaveLength(10);
+  }, 120_000);
+
+  // "Maddie-shaped" fixture — 8 weeks x 5 days/week is the form's own
+  // default brief shape (see GenerateBriefForm.tsx) and matches
+  // production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a's actual
+  // size. 1 shell + 40 day calls, never one week-sized call.
+  it("an 8-week x 5-day/week program (the exact shape of the incident this architecture change fixes) completes via day-level generation", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 8, daysPerWeek: 5 };
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachA.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      isResume: false,
+      startFromWeek: 1,
+      startFromDay: 1,
+      existingCompletedWeeks: new Map(),
+    });
+    expect(result.ok).toBe(true);
+
+    const allDays = await listGenerationDays(row.id);
+    expect(allDays).toHaveLength(8 * 5);
+    expect(allDays.every((d) => d.status === "completed")).toBe(true);
+
+    const weekRows = await listGenerationWeeks(row.id);
+    expect(weekRows).toHaveLength(8);
+    expect(weekRows.every((w) => w.status === "completed")).toBe(true);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.status).toBe("ready_for_review");
+    const parsedDraft = draftRow.draftJson as GeneratedProgramDraft;
+    expect(parsedDraft.weeks).toHaveLength(8);
+    expect(parsedDraft.weeks[0].days).toHaveLength(5);
   }, 120_000);
 
   it("completed weeks persist even when a later week fails", async () => {
@@ -935,6 +977,7 @@ describe("staged generation orchestration", () => {
       existingShell: shell,
       isResume: true,
       startFromWeek: 3,
+      startFromDay: 1,
       existingCompletedWeeks,
     });
     expect(result.ok).toBe(true);
@@ -989,6 +1032,7 @@ describe("staged generation orchestration", () => {
         existingShell: null,
         isResume: false,
         startFromWeek: 1,
+        startFromDay: 1,
         existingCompletedWeeks: new Map(),
       });
 
@@ -1029,12 +1073,128 @@ describe("staged generation orchestration", () => {
       existingShell: null,
       isResume: false,
       startFromWeek: 1,
+      startFromDay: 1,
       existingCompletedWeeks: new Map(),
     });
     expect(result.ok).toBe(true);
 
     const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
     expect(draftRow.status).toBe("ready_for_review");
+  });
+
+  // P0 day-level architecture change (production draft
+  // 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a, "Maddie"): a retry must
+  // resume at the EXACT unfinished day, not the whole week, not the
+  // whole program. This is the regression that matters most for this
+  // change — see staged-generation.ts's per-week/per-day loop.
+  it("a resume mid-week regenerates only the exact unfinished day — completed days in that week are untouched, later weeks unaffected", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 2, daysPerWeek: 3 };
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const shell = buildFixtureProgramShell(brief);
+    await saveProgramShell(row.id, shell);
+
+    // Days 1-2 of week 1 are pre-seeded with a marker no real
+    // generation (fixture or live model) would ever produce — proves a
+    // resume leaves them byte-for-byte untouched. Day 3 is left
+    // unattempted (no row at all) — the exact unfinished day.
+    const markerDay = (dayNumber: number): ModelDayDraft => ({
+      id: randomUUID(),
+      dayOfWeek: shell.days[dayNumber - 1].dayOfWeek,
+      label: shell.days[dayNumber - 1].label,
+      workout: {
+        id: randomUUID(),
+        name: `Marker Session ${dayNumber}`,
+        sections: [
+          {
+            id: randomUUID(),
+            name: "Main",
+            sectionType: "main_lift",
+            orderIndex: 0,
+            prescriptions: [
+              { id: randomUUID(), exerciseName: `PRESEEDED-MARKER-W1-D${dayNumber}`, orderIndex: 0, isRequired: true },
+            ],
+          },
+        ],
+      },
+    });
+
+    await saveGenerationDay(row.id, 1, 1, {
+      status: "completed",
+      dayJson: markerDay(1),
+      provider: "test-marker",
+      model: "test-marker",
+    });
+    await saveGenerationDay(row.id, 1, 2, {
+      status: "completed",
+      dayJson: markerDay(2),
+      provider: "test-marker",
+      model: "test-marker",
+    });
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated failure for test" });
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachA.id,
+      brief,
+      clientContext: null,
+      existingShell: shell,
+      isResume: true,
+      startFromWeek: 1,
+      startFromDay: 3, // the exact unfinished day — not 1, not "whole week 1"
+      existingCompletedWeeks: new Map(),
+    });
+    expect(result.ok).toBe(true);
+
+    const week1Days = await listGenerationDaysForWeek(row.id, 1);
+    expect(week1Days).toHaveLength(3);
+    const day1Json = week1Days.find((d) => d.dayNumber === 1)?.dayJson as ModelDayDraft;
+    const day2Json = week1Days.find((d) => d.dayNumber === 2)?.dayJson as ModelDayDraft;
+    expect(day1Json.workout?.sections[0].prescriptions[0].exerciseName).toBe("PRESEEDED-MARKER-W1-D1");
+    expect(day2Json.workout?.sections[0].prescriptions[0].exerciseName).toBe("PRESEEDED-MARKER-W1-D2");
+
+    const day3 = week1Days.find((d) => d.dayNumber === 3);
+    expect(day3?.status).toBe("completed");
+    const day3Json = day3?.dayJson as ModelDayDraft;
+    expect(day3Json.workout?.sections[0].prescriptions[0].exerciseName).not.toContain("PRESEEDED-MARKER");
+
+    // Week 1 was assembled from all three days (two markers + the
+    // newly-generated day 3) into program_generation_weeks, exactly
+    // the same table/shape generateProgramWeek() used to write
+    // directly — proves the assembly step is unaffected by this change.
+    const weekRows = await listGenerationWeeks(row.id);
+    const week1Row = weekRows.find((w) => w.weekNumber === 1)!;
+    expect(week1Row.status).toBe("completed");
+    const week1Json = week1Row.weekJson as { days: { workout: { sections: { prescriptions: { exerciseName: string }[] }[] } | null }[] };
+    expect(week1Json.days).toHaveLength(3);
+
+    // Week 2 was generated fresh, starting at day 1 (never partially
+    // attempted) — untouched by week 1's mid-week resume.
+    const week2Days = await listGenerationDaysForWeek(row.id, 2);
+    expect(week2Days).toHaveLength(3);
+    expect(week2Days.every((d) => d.status === "completed")).toBe(true);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.status).toBe("ready_for_review");
+  });
+
+  it("saveGenerationDay upserts by (draft, week, day) — a retry never creates a duplicate row for the same day", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, weeks: 1, daysPerWeek: 1 };
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    await saveGenerationDay(row.id, 1, 1, { status: "failed", errorCode: "timeout", errorMessage: "first attempt", provider: "p", model: "m" });
+    await saveGenerationDay(row.id, 1, 1, { status: "failed", errorCode: "timeout", errorMessage: "second attempt", provider: "p", model: "m" });
+    const dayJson = await buildFixtureProgramDay(buildFixtureProgramShell(brief), 1, []);
+    if (dayJson) {
+      await saveGenerationDay(row.id, 1, 1, { status: "completed", dayJson, provider: "dev-fixture", model: "dev-fixture" });
+    }
+
+    const rows = await listGenerationDays(row.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].weekNumber).toBe(1);
+    expect(rows[0].dayNumber).toBe(1);
   });
 
   it("claimFailedDraftForResume closes the double-click resume race — only one concurrent caller wins the claim", async () => {
@@ -1117,6 +1277,7 @@ describe("staged generation orchestration", () => {
       existingShell: null,
       isResume: false,
       startFromWeek: 1,
+      startFromDay: 1,
       existingCompletedWeeks: new Map(),
     });
 

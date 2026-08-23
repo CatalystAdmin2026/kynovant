@@ -22,8 +22,10 @@ import type {
   ProgramGenerationBrief,
   GeneratedProgramDraft,
   ProgramShell,
+  ProgramShellDay,
   ProgramShellPhase,
   ModelWeekDraft,
+  ModelDayDraft,
 } from "./contracts";
 import type { ClientContextSummary } from "./client-context";
 import { formatCandidatesForPrompt, type ExerciseCandidate, type ExerciseCandidateSet } from "./exercise-candidates";
@@ -142,6 +144,82 @@ function formatPhase(phase: ProgramShellPhase | null, weekNumber: number): strin
   ].join("\n");
 }
 
+// P0 architecture change (see staged-generation.ts's header comment):
+// generateProgramWeek()/buildWeekGenerationPrompt() asked one call to
+// produce an entire week — proven too large/slow for reliable
+// serverless execution. This asks for exactly one training day at a
+// time (ModelDayDraftSchema — already the schema every week's `days`
+// array element used, unchanged), using the SAME narrowed-candidate
+// (exercise-candidates.ts's narrowCandidatesForDay(), not the full
+// program-wide pool) and compact-continuity principles as the week
+// prompt below, scoped down to one day.
+//
+// priorSameDaySummary is the LAST COMPLETED week's day at this exact
+// shell-day-slot (not "the previous day generated," which could be an
+// unrelated split day) — shell.days is a fixed weekly split reused
+// every week, so day index N always means the same training emphasis
+// across weeks (e.g. slot 1 = "Push" every week); progressing that
+// slot's own history is what keeps week 6's Push day building on week
+// 5's Push day rather than week 6's own Pull day.
+export function buildDayGenerationPrompt(
+  brief: ProgramGenerationBrief,
+  clientContext: ClientContextSummary | null,
+  shell: ProgramShell,
+  weekNumber: number,
+  shellDay: ProgramShellDay,
+  priorSameDaySummary: string | null,
+  candidates: ExerciseCandidate[],
+): string {
+  const phase = findPhaseForWeek(shell, weekNumber);
+
+  return [
+    `You are generating ONE training day — "${shellDay.label}" (week ${weekNumber} of ${shell.totalWeeks} of an already-structured multi-week strength training Program), for a professional coach's review. Produce ONLY this one day — do not restate or reference other days.`,
+    "",
+    "## Program Brief (context for the whole Program)",
+    formatBriefSection(brief),
+    "",
+    "## Client Context",
+    formatClientContextSection(clientContext),
+    "",
+    formatCatalogSection(candidates),
+    "",
+    "## Program Shell (fixed for the whole Program — do not deviate)",
+    `Title: ${shell.title}`,
+    shell.description,
+    "",
+    "Global constraints (apply to every day, including this one):",
+    shell.globalConstraints || "None beyond the brief above.",
+    "",
+    "## This Day",
+    `Week ${weekNumber} of ${shell.totalWeeks} — dayOfWeek ${shellDay.dayOfWeek}, label "${shellDay.label}"${shellDay.focus ? `, focus: ${shellDay.focus}` : ""}. Your output's dayOfWeek and label MUST match these exactly.`,
+    formatPhase(phase, weekNumber),
+    "",
+    "## Continuity With This Same Day In Prior Weeks",
+    priorSameDaySummary
+      ? [
+          `This day slot ("${shellDay.label}") has run before, in an earlier week. Build on it — do not generate an unrelated session:`,
+          priorSameDaySummary,
+          "Preserve the same core exercises where reasonable and progress them (more load, reps, sets, or reduced rest) according to the phase's progression target above. Only substitute an exercise if there's a clear reason (e.g. this phase's focus shifted, or a deload calls for lighter/simpler movements) — do not vary exercises just for the sake of variety.",
+        ].join("\n")
+      : `This is the first time this day slot ("${shellDay.label}") runs in the Program — establish the baseline exercises and loading that later weeks' same-slot days will progress from.`,
+    "",
+    "## Output Contract",
+    OUTPUT_CONTRACT_NOTES,
+  ].join("\n");
+}
+
+// Compact, human-readable summary of a single completed day — used as
+// buildDayGenerationPrompt's priorSameDaySummary. Same "ids, not full
+// JSON" principle as summarizeWeekForPrompt below.
+export function summarizeDayForPrompt(day: ModelDayDraft): string {
+  if (!day.workout) return `${day.label ?? `Day ${day.dayOfWeek}`}: rest day`;
+  const exercises = day.workout.sections
+    .flatMap((s) => s.prescriptions)
+    .map((p) => (p.exerciseId ? `${p.exerciseName} [id:${p.exerciseId}]` : p.exerciseName))
+    .join(", ");
+  return `${day.label ?? day.workout.name}${day.workout.primaryFocus ? ` (${day.workout.primaryFocus})` : ""}: ${exercises}`;
+}
+
 // Compact, human-readable summary of a completed week — used as "prior
 // week" context for the next week's generation. Deliberately NOT the
 // full JSON (that would reintroduce the large-payload problem staged
@@ -150,6 +228,10 @@ function formatPhase(phase: ProgramShellPhase | null, weekNumber: number): strin
 // ids (requirement: pass prior-week selected ids forward) so the model
 // can copy the exact same id forward for continuity instead of
 // re-selecting by name and risking a different-but-similar exercise.
+//
+// Retained for generateProgramWeek()'s still-existing (but, since the
+// P0 architecture change above, no longer staged-path-invoked) whole-
+// week contract — see that function's own comment.
 export function summarizeWeekForPrompt(week: ModelWeekDraft): string {
   const dayLines = week.days.map((day) => {
     if (!day.workout) return `${day.label ?? `Day ${day.dayOfWeek}`}: rest day`;

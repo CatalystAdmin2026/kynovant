@@ -81,6 +81,8 @@ export default async function DraftReviewPage({
                 totalWeeks: latestRun.totalWeeks,
                 completedWeeks: latestRun.completedWeeks,
                 currentWeek: latestRun.currentWeek,
+                currentDay: latestRun.currentDay,
+                completedDays: latestRun.completedDays,
               }
             : null
         }

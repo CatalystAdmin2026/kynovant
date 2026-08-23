@@ -36,7 +36,14 @@ import type {
 } from "@/lib/db/schema-exercise";
 import type { PilDefaultPrescription } from "@/lib/pil/types";
 import { normalizeExerciseName } from "./exercise-resolution";
-import type { ProgramGenerationBrief, ModelWeekDraft, ModelProgramDraft, ModelPrescription } from "./contracts";
+import type {
+  ProgramGenerationBrief,
+  ModelWeekDraft,
+  ModelDayDraft,
+  ModelProgramDraft,
+  ModelPrescription,
+  ProgramShellDay,
+} from "./contracts";
 
 // ─────────────────────────────────────────────────────────────
 // EQUIPMENT — single source of truth. validation.ts's equipment-
@@ -135,7 +142,7 @@ export interface ExerciseCandidateSet {
   gaps: CandidateCoverageGap[];
 }
 
-function sortCandidates(a: ExerciseCandidate, b: ExerciseCandidate): number {
+export function sortCandidates(a: ExerciseCandidate, b: ExerciseCandidate): number {
   const rank = (c: ExerciseClassification) => (c === "compound" ? 0 : c === "power" ? 1 : c === "skill" ? 2 : 3);
   const r = rank(a.classification) - rank(b.classification);
   if (r !== 0) return r;
@@ -392,6 +399,122 @@ export function formatCandidatesForPrompt(candidates: ExerciseCandidate[]): stri
 }
 
 // ─────────────────────────────────────────────────────────────
+// DAY-LEVEL CANDIDATE NARROWING
+//
+// P0 architecture change (see staged-generation.ts's header comment):
+// whole-week generation sent this module's full ~150-candidate program-
+// wide pool to every call, regardless of which muscle groups that
+// specific day actually trains — wasteful (every call re-pays the same
+// ~5-8k input tokens re-describing candidates the day will never use)
+// and hands the model more to search than it needs. This narrows the
+// ALREADY-computed candidate set (buildExerciseCandidateSet above is
+// unchanged — tenant visibility, equipment compatibility, difficulty
+// ceiling, and exclusions are still applied exactly once, upstream of
+// this) down to what one day actually needs, deterministically, before
+// the model ever sees it. The model never decides which muscles matter
+// for a day — that's either the shell's own structured
+// targetMuscleGroups (contracts.ts's ProgramShellDaySchema) or, for a
+// shell generated before that field existed, a keyword fallback over
+// the shell day's freeform label/focus text.
+//
+// Movement-pattern/unilateral-bilateral/substitution-aware narrowing
+// within a muscle group is a reasonable follow-up refinement, not
+// implemented in this pass — muscle-group narrowing alone already
+// reduces the pool by the target order of magnitude (see this file's
+// test suite for actual before/after counts on realistic fixtures).
+// ─────────────────────────────────────────────────────────────
+
+const DAY_FOCUS_MUSCLE_KEYWORDS: { pattern: RegExp; groups: MuscleGroup[] }[] = [
+  { pattern: /\bpush\b/i, groups: ["chest", "front_deltoid", "lateral_deltoid", "triceps"] },
+  { pattern: /\bpull\b/i, groups: ["lats", "upper_back", "rear_deltoid", "biceps"] },
+  {
+    pattern: /\bupper\b/i,
+    groups: ["chest", "lats", "upper_back", "front_deltoid", "lateral_deltoid", "rear_deltoid", "biceps", "triceps"],
+  },
+  { pattern: /\b(lower|leg)s?\b/i, groups: ["quadriceps", "hamstrings", "glutes", "calves"] },
+  { pattern: /\bchest\b/i, groups: ["chest", "triceps", "front_deltoid"] },
+  { pattern: /\bback\b/i, groups: ["lats", "upper_back", "rear_deltoid", "biceps"] },
+  { pattern: /\bshoulders?\b/i, groups: ["front_deltoid", "lateral_deltoid", "rear_deltoid"] },
+  { pattern: /\barms?\b/i, groups: ["biceps", "triceps"] },
+  { pattern: /\bglutes?\b/i, groups: ["glutes", "hamstrings"] },
+  { pattern: /\bquads?\b/i, groups: ["quadriceps"] },
+  { pattern: /\bhamstrings?\b/i, groups: ["hamstrings"] },
+  { pattern: /\bcore\b|\babs?\b/i, groups: ["rectus_abdominis", "obliques"] },
+  { pattern: /\bfull.?body\b/i, groups: CORE_MUSCLE_GROUPS },
+];
+
+// Exported for direct unit testing without needing a full ProgramShellDay.
+export function inferMuscleGroupsFromDayText(label: string, focus: string | undefined): MuscleGroup[] {
+  const text = [label, focus].filter(Boolean).join(" ");
+  const matched = new Set<MuscleGroup>();
+  for (const { pattern, groups } of DAY_FOCUS_MUSCLE_KEYWORDS) {
+    if (pattern.test(text)) for (const g of groups) matched.add(g);
+  }
+  return Array.from(matched);
+}
+
+// Never narrow below this many candidates — the floor that keeps
+// narrowing from ever making "legitimate programming impossible."
+// Chosen well above what any single day realistically needs (a 5-
+// section day rarely selects more than ~15-20 distinct exercises even
+// with substitution headroom) while still being a large, clear cut
+// from the ~150 program-wide pool.
+const MIN_DAY_CANDIDATES = 30;
+const MAX_PER_MUSCLE_GROUP_DAY = 10;
+const MAX_MOBILITY_CANDIDATES_DAY = 10;
+const MAX_CARDIO_CANDIDATES_DAY = 6;
+
+export function narrowCandidatesForDay(
+  candidateSet: ExerciseCandidateSet,
+  shellDay: ProgramShellDay,
+  musclePriorities: readonly MuscleGroup[],
+): ExerciseCandidate[] {
+  const targetGroups = shellDay.targetMuscleGroups?.length
+    ? shellDay.targetMuscleGroups
+    : inferMuscleGroupsFromDayText(shellDay.label, shellDay.focus);
+
+  // Unclassifiable day (no structured field on the shell, no keyword
+  // match on its label/focus) — never guess narrower; hand back the
+  // full program-wide pool exactly as whole-week generation always did.
+  if (targetGroups.length === 0) return candidateSet.candidates;
+
+  const groupSet = new Set<MuscleGroup>([...targetGroups, ...musclePriorities]);
+
+  const targeted = new Map<string, ExerciseCandidate>();
+  for (const group of groupSet) {
+    for (const c of candidateSet.candidates.filter((c) => c.primaryMuscleGroup === group).slice(0, MAX_PER_MUSCLE_GROUP_DAY)) {
+      targeted.set(c.id, c);
+    }
+  }
+
+  // Every day still needs a warmup section (see prompt.ts's shared
+  // output-contract notes) and cardio/conditioning is cross-cutting,
+  // not tied to a target muscle group — always include a baseline
+  // allowance of both regardless of what this day trains.
+  for (const c of candidateSet.candidates.filter((c) => c.isMobility).slice(0, MAX_MOBILITY_CANDIDATES_DAY)) {
+    targeted.set(c.id, c);
+  }
+  for (const c of candidateSet.candidates.filter((c) => c.isCardio).slice(0, MAX_CARDIO_CANDIDATES_DAY)) {
+    targeted.set(c.id, c);
+  }
+
+  // Floor: if narrowing left too thin a set (e.g. a target muscle group
+  // with few library matches under this brief's equipment/difficulty
+  // filters), top back up from the full pool rather than risk under-
+  // serving legitimate programming. Order matches the full pool's own
+  // sortCandidates so the "top-up" additions are the same ones a
+  // narrower cap would have included next anyway.
+  if (targeted.size < MIN_DAY_CANDIDATES) {
+    for (const c of candidateSet.candidates) {
+      if (targeted.size >= MIN_DAY_CANDIDATES) break;
+      targeted.set(c.id, c);
+    }
+  }
+
+  return Array.from(targeted.values()).sort(sortCandidates);
+}
+
+// ─────────────────────────────────────────────────────────────
 // VERIFICATION — never trust a model-returned exerciseId merely because
 // it's present and UUID-shaped. A selection is accepted only when the
 // id is IN the exact candidate set supplied for this call AND the
@@ -436,6 +559,38 @@ function verifyPrescription(
 export interface VerificationResult<T> {
   result: T;
   rejectedCount: number;
+}
+
+// Same rule as verifyWeekAgainstCandidates/verifyProgramDraftAgainstCandidates
+// below, scoped to a single day — day-level generation's verification
+// step. candidates here is the NARROWED per-day set (narrowCandidatesForDay
+// above), not the full program-wide pool — a day is only ever allowed
+// to claim an id from the exact set it was offered for that call.
+export function verifyDayAgainstCandidates(
+  day: ModelDayDraft,
+  candidates: ExerciseCandidate[],
+): VerificationResult<ModelDayDraft> {
+  const candidateById = new Map(candidates.map((c) => [c.id, c]));
+  let rejectedCount = 0;
+
+  const verifiedDay: ModelDayDraft = {
+    ...day,
+    workout: day.workout
+      ? {
+          ...day.workout,
+          sections: day.workout.sections.map((section) => ({
+            ...section,
+            prescriptions: section.prescriptions.map((p) => {
+              const { prescription, rejected } = verifyPrescription(p, candidateById);
+              if (rejected) rejectedCount++;
+              return prescription;
+            }),
+          })),
+        }
+      : null,
+  };
+
+  return { result: verifiedDay, rejectedCount };
 }
 
 export function verifyWeekAgainstCandidates(

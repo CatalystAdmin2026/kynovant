@@ -32,6 +32,7 @@ import type { ExerciseCandidate } from "./exercise-candidates";
 import {
   ModelProgramDraftSchema,
   ModelWeekDraftSchema,
+  ModelDayDraftSchema,
   type ModelProgramDraft,
   type ModelWeekDraft,
   type ModelDayDraft,
@@ -230,5 +231,33 @@ export async function buildFixtureProgramWeek(
   };
 
   const parsed = ModelWeekDraftSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
+
+// Day-level staged generation's fixture — one shell day's worth of
+// content (see staged-generation.ts's per-day loop, which replaced
+// buildFixtureProgramWeek's per-call unit above). dayIndex is 1-based,
+// into shell.days — same identity program_generation_days uses.
+// Returns null (never throws) if the seeded library can't support a
+// minimal day, or if dayIndex is out of range for this shell.
+export async function buildFixtureProgramDay(
+  shell: ProgramShell,
+  dayIndex: number,
+  candidates: ExerciseCandidate[] = [],
+): Promise<ModelDayDraft | null> {
+  const shellDay = shell.days[dayIndex - 1];
+  if (!shellDay) return null;
+
+  const active = await resolveFixtureSourceRows(candidates, 6);
+  if (active.length < MIN_EXERCISES_REQUIRED) return null;
+
+  const candidate: ModelDayDraft = {
+    id: randomUUID(),
+    dayOfWeek: shellDay.dayOfWeek,
+    label: shellDay.label,
+    workout: buildBlueprint(shellDay.label, active),
+  };
+
+  const parsed = ModelDayDraftSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
 }

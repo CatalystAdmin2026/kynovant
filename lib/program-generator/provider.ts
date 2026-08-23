@@ -45,14 +45,30 @@
 //   generateProgramShell() — one small call defining the Program's
 //     structure (title, day labels, phase/progression outline) with no
 //     workout content at all.
-//   generateProgramWeek()  — one call per week, using ModelWeekDraftSchema
-//     directly (already-existing contract — a single week is exactly a
-//     ModelWeekDraft). Bounded to a single week's output regardless of
-//     how many weeks the whole Program has.
+//   generateProgramDay()   — one call per DAY, using ModelDayDraftSchema
+//     directly (already-existing contract — one shell day is exactly a
+//     ModelDayDraft, the same element type ModelWeekDraft.days always
+//     held). This is the staged path's actual per-call unit as of the
+//     P0 day-level architecture change below — bounded to a single
+//     day's output regardless of how many days/weeks the whole Program
+//     has, and paired with a narrowed, day-relevant candidate set
+//     (exercise-candidates.ts's narrowCandidatesForDay()) rather than
+//     the full program-wide pool.
+//   generateProgramWeek()  — RETAINED but no longer called by the
+//     staged path (staged-generation.ts's per-week loop now drives
+//     generateProgramDay() once per shell day instead). See the P0
+//     note below for why: even after generateProgramWeek()'s own
+//     timeout was doubled to 90s, production draft
+//     1e39ca9a-c7d5-4e08-9f96-adefda1ba91a's Week 1 call still did not
+//     complete — proof the problem was the size/complexity of a single
+//     call, not its timeout value. Left in place (unused by production
+//     code, still covered by its own existing tests) rather than
+//     deleted as part of this already-large change; a reasonable
+//     follow-up cleanup, not required for correctness.
 // This file is provider-only: it returns unresolved model output
-// (ProgramShell / ModelWeekDraft) and never assembles, resolves
-// exercises, or persists anything — that composition happens in
-// app/hq/programs/generate/actions.ts.
+// (ProgramShell / ModelDayDraft / ModelWeekDraft) and never assembles,
+// resolves exercises, or persists anything — that composition happens
+// in lib/program-generator/staged-generation.ts and actions.ts.
 //
 // generateObject() enforces schema-conforming structured output at the
 // provider boundary — the zod schemas passed to it (ProgramShellSchema,
@@ -75,9 +91,12 @@ import type { z } from "zod";
 import {
   ProgramShellSchema,
   ModelWeekDraftSchema,
+  ModelDayDraftSchema,
   ModelProgramDraftSchema,
   type ProgramShell,
+  type ProgramShellDay,
   type ModelWeekDraft,
+  type ModelDayDraft,
   type ModelProgramDraft,
   type GeneratedProgramDraft,
   type ProgramGenerationBrief,
@@ -85,10 +104,16 @@ import {
 import {
   buildShellGenerationPrompt,
   buildWeekGenerationPrompt,
+  buildDayGenerationPrompt,
   buildDayRegenerationPrompt,
 } from "./prompt";
 import type { ClientContextSummary } from "./client-context";
-import { buildFixtureProgramDraft, buildFixtureProgramShell, buildFixtureProgramWeek } from "./fixture";
+import {
+  buildFixtureProgramDraft,
+  buildFixtureProgramShell,
+  buildFixtureProgramWeek,
+  buildFixtureProgramDay,
+} from "./fixture";
 import type { ExerciseCandidate, ExerciseCandidateSet } from "./exercise-candidates";
 
 export type GenerationErrorCode =
@@ -131,6 +156,17 @@ export interface WeekGenerationSuccess {
 }
 export type WeekGenerationOutcome = WeekGenerationSuccess | GenerationFailure;
 
+// The staged path's actual per-call unit as of the P0 day-level
+// architecture change — see this file's header comment.
+export interface DayGenerationSuccess {
+  ok: true;
+  day: ModelDayDraft;
+  provider: string;
+  model: string;
+  elapsedMs: number;
+}
+export type DayGenerationOutcome = DayGenerationSuccess | GenerationFailure;
+
 // Retained for regenerateDayDraft(), which still returns a full
 // ModelProgramDraft (see that function's own comment) — not part of the
 // staged-generation redesign this file otherwise implements.
@@ -155,16 +191,36 @@ export type GenerationOutcome = GenerationSuccess | GenerationFailure;
 //   SHELL — smallest output (SHELL_MAX_OUTPUT_TOKENS); a call still
 //     stuck at 60s is much more likely a genuine hang than legitimate
 //     slowness, so it keeps a tighter ceiling than week/day-regen.
-//   WEEK  — the call actually responsible for Maddie's incident.
-//     90s comfortably clears the observed 45s failure point while
-//     leaving real headroom under Hobby's fixed 300s function-duration
-//     ceiling for a multi-week sequential run (see staged-generation.ts).
+//   WEEK  — the call responsible for Maddie's incident. RETAINED for
+//     generateProgramWeek() (unused by the staged path — see this
+//     file's header comment) but no longer load-bearing for production
+//     correctness: doubling this to 90s did NOT resolve the incident
+//     (production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a's Week 1
+//     call still ran the full 90,007ms without completing) — proof the
+//     problem was call size/complexity, not this number.
+//   DAY   — the staged path's actual per-call unit now. No production
+//     measurement exists yet (no staging provider credentials were
+//     available when this was written — see the architecture report
+//     for this task); reasoned conservatively from the week evidence
+//     instead: a single day's requested output (DAY_MAX_OUTPUT_TOKENS)
+//     is a small fraction of WEEK_MAX_OUTPUT_TOKENS, and the week call
+//     ran a FULL 90s without completing at 8,000 output tokens against
+//     a ~150-candidate catalog — a day-sized call asks for roughly
+//     1/5-1/7 of that content against a narrowed (~30-60 candidate,
+//     see exercise-candidates.ts's narrowCandidatesForDay) catalog.
+//     45s — the SAME number that proved insufficient for a full WEEK
+//     pre-fix — should be generous for something this much smaller,
+//     but this is an estimate, not a measurement: revisit once real
+//     staged latency data exists (Phase 14/21 of the architecture
+//     report explicitly could not be run in that environment either).
 //   DAY_REGEN — largest output cap (DAY_REGEN_MAX_OUTPUT_TOKENS) and,
-//     unlike week, always exactly one call outside any sequential loop
-//     — no cumulative-duration concern, so it can afford the most
-//     generous default.
+//     unlike week/day, always exactly one call outside any sequential
+//     loop — no cumulative-duration concern, so it can afford the most
+//     generous default. Unrelated to this change (see that function's
+//     own comment) — untouched.
 export const SHELL_DEFAULT_TIMEOUT_MS = 60_000;
 export const WEEK_DEFAULT_TIMEOUT_MS = 90_000;
+export const DAY_DEFAULT_TIMEOUT_MS = 45_000;
 export const DAY_REGEN_DEFAULT_TIMEOUT_MS = 120_000;
 
 // Sized from measured output for realistic content at each scope (see
@@ -173,8 +229,16 @@ export const DAY_REGEN_DEFAULT_TIMEOUT_MS = 120_000;
 // tokens of real content; a single week (up to 7 days x up to 12
 // sections x up to 30 prescriptions, realistically far less) is bounded
 // to a small fraction of what a whole multi-week program required.
+//
+// DAY_MAX_OUTPUT_TOKENS: one day's worth of the same content (up to 12
+// sections x up to 30 prescriptions — contracts.ts's ModelBlueprintSchema
+// bounds are per-day already, unchanged) — sized at roughly 1/4 of the
+// week cap, generous headroom over what one real day realistically
+// produces (the week comment's own "realistically far less" applies
+// here too, at day scale).
 const SHELL_MAX_OUTPUT_TOKENS = 2_000;
 const WEEK_MAX_OUTPUT_TOKENS = 8_000;
+const DAY_MAX_OUTPUT_TOKENS = 2_000;
 // regenerateDayDraft() still asks the model to echo the whole draft back
 // (see that function) — unchanged scope for this redesign, but still
 // worth an explicit bound rather than an unset provider default.
@@ -324,6 +388,28 @@ async function callFixtureWeekProvider(
   return { ok: true, week, provider: "dev-fixture", model: "dev-fixture", elapsedMs: 0 };
 }
 
+async function callFixtureDayProvider(
+  shell: ProgramShell,
+  dayIndex: number,
+  candidates: ExerciseCandidate[],
+): Promise<DayGenerationOutcome> {
+  const day = await buildFixtureProgramDay(shell, dayIndex, candidates);
+  if (!day) {
+    return {
+      ok: false,
+      errorCode: "invalid_output",
+      errorMessage:
+        "Fixture provider could not build day content — fewer than the minimum required active " +
+        "exercises exist in the Exercise Library. Seed more active exercises to use the fixture.",
+      provider: "dev-fixture",
+      model: "dev-fixture",
+      elapsedMs: 0,
+      timeoutMs: 0,
+    };
+  }
+  return { ok: true, day, provider: "dev-fixture", model: "dev-fixture", elapsedMs: 0 };
+}
+
 async function callFixtureProvider(candidates: ExerciseCandidate[]): Promise<GenerationOutcome> {
   const draft = await buildFixtureProgramDraft(candidates);
   if (!draft) {
@@ -362,6 +448,44 @@ export async function generateProgramShell(
   });
   if (!result.ok) return result;
   return { ok: true, shell: result.object, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
+}
+
+// The staged path's actual per-call unit — see this file's header
+// comment for the P0 architecture change this replaced
+// generateProgramWeek() with. dayIndex is 1-based into shell.days
+// (same identity program_generation_days uses) — shellDay is that
+// exact element, already resolved by the caller (staged-generation.ts)
+// so this function stays a pure "ask for one day" primitive with no
+// index-lookup logic of its own.
+export async function generateProgramDay(params: {
+  brief: ProgramGenerationBrief;
+  clientContext: ClientContextSummary | null;
+  shell: ProgramShell;
+  weekNumber: number;
+  dayIndex: number;
+  shellDay: ProgramShellDay;
+  priorSameDaySummary: string | null;
+  candidates: ExerciseCandidate[];
+}): Promise<DayGenerationOutcome> {
+  if (isFixtureModeEnabled()) return callFixtureDayProvider(params.shell, params.dayIndex, params.candidates);
+
+  const prompt = buildDayGenerationPrompt(
+    params.brief,
+    params.clientContext,
+    params.shell,
+    params.weekNumber,
+    params.shellDay,
+    params.priorSameDaySummary,
+    params.candidates,
+  );
+  const result = await callProvider({
+    prompt,
+    schema: ModelDayDraftSchema,
+    timeoutMs: resolveTimeoutMs(DAY_DEFAULT_TIMEOUT_MS),
+    maxOutputTokens: DAY_MAX_OUTPUT_TOKENS,
+  });
+  if (!result.ok) return result;
+  return { ok: true, day: result.object, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
 }
 
 export async function generateProgramWeek(params: {

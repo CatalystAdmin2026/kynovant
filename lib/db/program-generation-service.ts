@@ -21,6 +21,7 @@ import { clientProfiles } from "./schema";
 import {
   programGenerationDrafts,
   programGenerationRuns,
+  programGenerationDays,
   programGenerationWeeks,
   programGenerationEditEvents,
   programGenerationValidationEvents,
@@ -29,6 +30,7 @@ import {
   type ProgramGenerationStatus,
   type ProgramGenerationRun,
   type ProgramGenerationRunScope,
+  type ProgramGenerationDay,
   type ProgramGenerationWeek,
   type ProgramGenerationEditAction,
 } from "./schema-program-generator";
@@ -37,6 +39,7 @@ import type {
   GeneratedProgramDraft,
   ProgramShell,
   ModelWeekDraft,
+  ModelDayDraft,
 } from "@/lib/program-generator/contracts";
 import { parseGeneratedProgramDraft, parseProgramShell } from "@/lib/program-generator/contracts";
 import type { DraftValidationResult, ValidationFinding } from "@/lib/program-generator/validation";
@@ -459,7 +462,7 @@ export async function startRun(params: {
 // page while status='running' to show "Generating Week N of M".
 export async function updateRunProgress(
   runId: string,
-  progress: { currentWeek?: number; completedWeeks?: number },
+  progress: { currentWeek?: number; completedWeeks?: number; currentDay?: number; completedDays?: number },
 ): Promise<void> {
   const db = getDb();
   await db
@@ -467,6 +470,8 @@ export async function updateRunProgress(
     .set({
       ...(progress.currentWeek !== undefined ? { currentWeek: progress.currentWeek } : {}),
       ...(progress.completedWeeks !== undefined ? { completedWeeks: progress.completedWeeks } : {}),
+      ...(progress.currentDay !== undefined ? { currentDay: progress.currentDay } : {}),
+      ...(progress.completedDays !== undefined ? { completedDays: progress.completedDays } : {}),
     })
     .where(eq(programGenerationRuns.id, runId));
 }
@@ -790,6 +795,82 @@ export async function listGenerationWeeks(draftId: string): Promise<ProgramGener
     .from(programGenerationWeeks)
     .where(eq(programGenerationWeeks.draftId, draftId))
     .orderBy(asc(programGenerationWeeks.weekNumber));
+}
+
+// ─────────────────────────────────────────────────────────────
+// STAGED GENERATION — per-day persistence
+//
+// P0 architecture change (see schema-program-generator.ts's
+// program_generation_days table comment and staged-generation.ts).
+// Same "upsert, latest attempt only" shape as saveGenerationWeek/
+// listGenerationWeeks above, one level finer: one row per
+// (draft, weekNumber, dayNumber), keyed by the unique index a retry
+// relies on to overwrite rather than duplicate a previously-failed
+// day's row.
+// ─────────────────────────────────────────────────────────────
+
+export async function saveGenerationDay(
+  draftId: string,
+  weekNumber: number,
+  dayNumber: number,
+  data:
+    | { status: "completed"; dayJson: ModelDayDraft; provider: string; model: string }
+    | { status: "failed"; errorCode: string; errorMessage: string; provider: string; model: string },
+): Promise<void> {
+  const db = getDb();
+  const values =
+    data.status === "completed"
+      ? {
+          draftId,
+          weekNumber,
+          dayNumber,
+          status: "completed" as const,
+          dayJson: data.dayJson,
+          errorCode: null,
+          errorMessage: null,
+          provider: data.provider,
+          model: data.model,
+        }
+      : {
+          draftId,
+          weekNumber,
+          dayNumber,
+          status: "failed" as const,
+          dayJson: null,
+          errorCode: data.errorCode,
+          errorMessage: data.errorMessage,
+          provider: data.provider,
+          model: data.model,
+        };
+
+  await db
+    .insert(programGenerationDays)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [programGenerationDays.draftId, programGenerationDays.weekNumber, programGenerationDays.dayNumber],
+      set: { ...values, updatedAt: new Date() },
+    });
+}
+
+export async function listGenerationDays(draftId: string): Promise<ProgramGenerationDay[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(programGenerationDays)
+    .where(eq(programGenerationDays.draftId, draftId))
+    .orderBy(asc(programGenerationDays.weekNumber), asc(programGenerationDays.dayNumber));
+}
+
+export async function listGenerationDaysForWeek(
+  draftId: string,
+  weekNumber: number,
+): Promise<ProgramGenerationDay[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(programGenerationDays)
+    .where(and(eq(programGenerationDays.draftId, draftId), eq(programGenerationDays.weekNumber, weekNumber)))
+    .orderBy(asc(programGenerationDays.dayNumber));
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -8,9 +8,16 @@
 //   program_generation_runs              — one row per generation attempt
 //                                           (initial generate, resume/retry,
 //                                           regenerate-one-day), tracks
-//                                           staged week-by-week progress
+//                                           staged week/day-by-day progress
+//   program_generation_days              — one row per (draft, week, day) —
+//                                           the durable, resumable unit of
+//                                           work day-level staged generation
+//                                           writes to; latest attempt only
 //   program_generation_weeks             — one row per week of a staged
-//                                           generation, latest attempt only
+//                                           generation, assembled from that
+//                                           week's completed day rows once
+//                                           all of them finish; latest
+//                                           attempt only
 //   program_generation_edit_events       — coach edit audit log
 //   program_generation_validation_events — Kynovant Insights run audit log
 //
@@ -110,6 +117,22 @@ export const programGenerationEditActionEnum = pgEnum("program_generation_edit_a
 // server action; "in progress" is represented by program_generation_runs.
 // current_week, not by a week row).
 export const programGenerationWeekStatusEnum = pgEnum("program_generation_week_status", [
+  "completed",
+  "failed",
+]);
+
+// Same "only terminal states are persisted" rule as weeks (above) — a
+// day row is written once its generateProgramDay() call has succeeded
+// or failed, never for an in-flight attempt. 'pending' and 'generating'
+// are part of the enum (matching this task's requested vocabulary and
+// leaving room for a future async/worker model without a schema
+// change) but are not written by the current synchronous, one-Server-
+// Action-per-attempt implementation — the absence of a row for a given
+// (draft, week, day) already means "not yet generated," which is what
+// resume logic (findFirstIncompleteDay(), staged-generation.ts) reads.
+export const programGenerationDayStatusEnum = pgEnum("program_generation_day_status", [
+  "pending",
+  "generating",
   "completed",
   "failed",
 ]);
@@ -244,6 +267,12 @@ export const programGenerationRuns = pgTable(
     totalWeeks: integer("total_weeks"),
     completedWeeks: integer("completed_weeks"),
     currentWeek: integer("current_week"),
+    // Same progress-polling role as completedWeeks/currentWeek, one
+    // level finer since the P0 day-level architecture change — see
+    // program_generation_days below. Null for single_day-scope runs
+    // (regenerate-day never had week-level granularity either).
+    currentDay: integer("current_day"),
+    completedDays: integer("completed_days"),
 
     stage: text("stage"),
     provider: text("provider"),
@@ -266,6 +295,79 @@ export const programGenerationRuns = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────
+// TABLE — program_generation_days
+//
+// P0 architecture change (production draft
+// 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a, "Maddie" — see docs on the
+// incident this replaces): a single generateObject() call asking for an
+// entire week (up to 7 days, up to 12 sections/day, up to 30
+// prescriptions/section) proved too large and too slow for reliable
+// serverless execution — confirmed in production at both a 45s and a
+// (doubled) 90s per-call timeout, both exhausted without the call
+// completing. This table is the durable, resumable unit of work for
+// asking the model for exactly ONE training day at a time instead.
+//
+// One row per (draft, weekNumber, dayNumber), upserted — same "latest
+// attempt only" rule as program_generation_weeks below, for the same
+// reason (full attempt history lives in program_generation_runs'
+// errorMessage instead). dayNumber is a 1-based index into
+// shell.days (contracts.ts's ProgramShellDaySchema array), NOT
+// dayOfWeek — shell.days is already the fixed weekly split every week
+// must honor, so "day 1 of the split" is a stable identity across every
+// week even though its dayOfWeek/label are shell-defined.
+//
+// day_json holds an unresolved ModelDayDraft (contracts.ts) — no
+// exerciseId anywhere, same resolve-once-at-final-assembly rule as
+// weeks. null when status='failed'.
+//
+// Resume reads this table to find the first (weekNumber, dayNumber) —
+// in shell.days order, within the first week that isn't fully
+// completed — with no row or a 'failed' row, and regenerates only that
+// day onward. Once every day for a week is 'completed', staged-
+// generation.ts assembles them into a ModelWeekDraft and upserts it
+// into program_generation_weeks exactly as before this change — every
+// downstream consumer of that table (final assembly, exercise
+// resolution, validation, approval) is completely unaffected by this
+// migration; only how a week's content gets produced changed, not how
+// it's stored once complete.
+//
+// No RLS — matches every other program_generation_* table except
+// quota_claims: server-only, never queried via PostgREST, only ever
+// reached through requireCoachOrAdmin()-guarded Server Actions using
+// the service-role connection (see this file's header comment).
+// ─────────────────────────────────────────────────────────────
+
+export const programGenerationDays = pgTable(
+  "program_generation_days",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => programGenerationDrafts.id, { onDelete: "cascade" }),
+    weekNumber: integer("week_number").notNull(),
+    dayNumber: integer("day_number").notNull(),
+
+    status: programGenerationDayStatusEnum("status").notNull(),
+    dayJson: jsonb("day_json"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    provider: text("provider"),
+    model: text("model"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_program_generation_days_draft_id").on(table.draftId),
+    uniqueIndex("uq_program_generation_days_draft_week_day").on(
+      table.draftId,
+      table.weekNumber,
+      table.dayNumber,
+    ),
+  ],
+);
+
+// ─────────────────────────────────────────────────────────────
 // TABLE — program_generation_weeks
 //
 // One row per (draft, weekNumber), upserted — a retry that regenerates
@@ -283,6 +385,13 @@ export const programGenerationRuns = pgTable(
 // A resume/retry queries this table for already-'completed' weeks,
 // skips regenerating them, and continues from the first weekNumber
 // (1..totalWeeks) with no row or a 'failed' row.
+//
+// Since the P0 architecture change above, a week row is written by
+// staged-generation.ts's assembly step (once every day in
+// program_generation_days for that week is 'completed'), not directly
+// by a single generateProgramWeek() call — generateProgramWeek()/that
+// call shape no longer exists in the staged path. The table's own
+// shape, meaning, and every downstream reader are unchanged.
 // ─────────────────────────────────────────────────────────────
 
 export const programGenerationWeeks = pgTable(
@@ -436,6 +545,10 @@ export type ProgramGenerationRun = typeof programGenerationRuns.$inferSelect;
 export type NewProgramGenerationRun = typeof programGenerationRuns.$inferInsert;
 export type ProgramGenerationRunStatus = ProgramGenerationRun["status"];
 export type ProgramGenerationRunScope = ProgramGenerationRun["scope"];
+
+export type ProgramGenerationDay = typeof programGenerationDays.$inferSelect;
+export type NewProgramGenerationDay = typeof programGenerationDays.$inferInsert;
+export type ProgramGenerationDayStatus = ProgramGenerationDay["status"];
 
 export type ProgramGenerationWeek = typeof programGenerationWeeks.$inferSelect;
 export type NewProgramGenerationWeek = typeof programGenerationWeeks.$inferInsert;

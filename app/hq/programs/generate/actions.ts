@@ -46,6 +46,7 @@ import {
   setDraftStatus,
   claimFailedDraftForResume,
   listGenerationWeeks,
+  listGenerationDaysForWeek,
   startRun,
   completeRun,
   failRun,
@@ -162,6 +163,7 @@ export async function generateProgramDraftAction(input: {
     existingShell: null,
     isResume: false,
     startFromWeek: 1,
+    startFromDay: 1,
     existingCompletedWeeks: new Map(),
   });
 
@@ -229,6 +231,24 @@ export async function resumeGenerationAction(draftId: string): Promise<ActionRes
     startFromWeek++;
   }
 
+  // P0 day-level architecture change: within startFromWeek (the first
+  // NOT-fully-completed week), find the first shell day without a
+  // 'completed' row — this is what lets Retry resume at the exact
+  // unfinished day rather than the whole week. A draft with no day
+  // rows for this week yet (never started under this architecture, or
+  // a pre-day-level draft) correctly falls through to day 1 — no
+  // migration/backfill needed (see drizzle/0034's own comment).
+  let startFromDay = 1;
+  if (existingShell && startFromWeek <= totalWeeks) {
+    const existingDayRows = await listGenerationDaysForWeek(draftId, startFromWeek);
+    const completedDayNumbers = new Set(
+      existingDayRows.filter((row) => row.status === "completed").map((row) => row.dayNumber),
+    );
+    while (startFromDay <= existingShell.days.length && completedDayNumbers.has(startFromDay)) {
+      startFromDay++;
+    }
+  }
+
   const clientContext = await resolveClientContext(auth.draft.clientId);
 
   const result = await runStagedGeneration({
@@ -239,6 +259,7 @@ export async function resumeGenerationAction(draftId: string): Promise<ActionRes
     existingShell,
     isResume: true,
     startFromWeek,
+    startFromDay,
     existingCompletedWeeks,
   });
 

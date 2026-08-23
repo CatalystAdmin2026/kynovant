@@ -45,7 +45,12 @@ export function sanitizeErrorMessage(raw: string): string {
     : singleLine;
 }
 
-export type GenerationStage = "shell" | "week" | "day_regeneration";
+// "day" — the P0 day-level architecture change's staged-path call
+// (staged-generation.ts's per-week, per-shell-day loop). "week" is
+// RETAINED for generateProgramWeek() (unused by the staged path as of
+// that change — see provider.ts's header comment) but should not
+// appear in production logs going forward.
+export type GenerationStage = "shell" | "week" | "day" | "day_regeneration";
 
 export interface GenerationFailureLog {
   draftId: string;
@@ -60,12 +65,20 @@ export interface GenerationFailureLog {
   elapsedMs?: number;
   timeoutMs?: number;
   isRetryOrResume: boolean;
-  // Meaningful for stage "week" (weeks completed so far in this
+  // Meaningful for stage "week"/"day" (weeks completed so far in this
   // attempt) and "shell" (always 0 by construction). Not applicable
   // to "day_regeneration", which has no week-progress concept — omit
   // rather than pass a 0 that would misleadingly read as "zero weeks
   // done" for a stage that doesn't track weeks at all.
   completedWeeks?: number;
+  // stage "day" only — days completed so far in the CURRENT
+  // (in-progress) week, not draft-wide. Not applicable to any other
+  // stage.
+  completedDays?: number;
+  // stage "day" only — size of the narrowed, day-relevant candidate
+  // set this call was offered (exercise-candidates.ts's
+  // narrowCandidatesForDay()), not the full program-wide pool.
+  candidateCount?: number;
   quotaClaimed?: boolean;
   quotaReleased?: boolean;
 }
@@ -89,6 +102,8 @@ export function logGenerationFailure(fields: GenerationFailureLog): void {
       timeoutMs: fields.timeoutMs,
       isRetryOrResume: fields.isRetryOrResume,
       completedWeeks: fields.completedWeeks,
+      completedDays: fields.completedDays,
+      candidateCount: fields.candidateCount,
       quotaClaimed: fields.quotaClaimed,
       quotaReleased: fields.quotaReleased,
     }),
@@ -103,6 +118,8 @@ export interface ProviderSuccessLog {
   provider: string;
   model: string;
   elapsedMs: number;
+  // stage "day" only — see GenerationFailureLog's own field comment.
+  candidateCount?: number;
 }
 
 // One line per provider call, not per token/exercise — see this
@@ -119,6 +136,7 @@ export function logProviderSuccess(fields: ProviderSuccessLog): void {
       provider: fields.provider,
       model: fields.model,
       elapsedMs: fields.elapsedMs,
+      candidateCount: fields.candidateCount,
     }),
   );
 }

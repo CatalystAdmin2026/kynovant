@@ -13,16 +13,35 @@
 // Next.js's request-scoped cookies()/headers(), which "use server"
 // Server Actions require and a plain vitest process cannot provide.
 //
-// Drives: one generateProgramShell() call, then one generateProgramWeek()
-// call per week (persisting each as it completes), then assembly +
-// exercise resolution + validation — see runStagedGeneration()'s own
-// comments for the per-step detail. Never asks the model for an entire
-// multi-week Program in a single generateObject() call.
+// P0 architecture change (production draft
+// 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a, "Maddie"): a single
+// generateObject() call asking for an entire multi-day week — up to 7
+// days, up to 12 sections/day, up to 30 prescriptions/section, cross-
+// referencing a ~150-item exercise catalog — proved too large and too
+// slow for reliable serverless execution. Confirmed in production:
+// doubling the per-call timeout from 45s to 90s did NOT fix it (the
+// call still ran the full 90,007ms without completing) — proof the
+// problem was call size/complexity, not the timeout number.
+//
+// Drives: one generateProgramShell() call, then — per week — one
+// generateProgramDay() call per shell day (persisting each as it
+// completes, resumable at the exact unfinished day), then once every
+// day in a week is complete, a deterministic in-process assembly into
+// the SAME ModelWeekDraft shape (and the SAME program_generation_weeks
+// table) generateProgramWeek() used to write directly — every
+// downstream consumer of that table (final assembly, exercise
+// resolution, validation, approval) is unaffected by this change; only
+// how a week's content gets produced changed, not how it's stored once
+// complete. See runStagedGeneration()'s own comments for the per-step
+// detail.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
+import { randomUUID } from "crypto";
 import {
   saveProgramShell,
+  saveGenerationDay,
+  listGenerationDaysForWeek,
   saveGenerationWeek,
   saveDraftContent,
   saveValidationResult,
@@ -36,17 +55,23 @@ import {
   releaseGenerationQuotaClaim,
   GENERATION_QUOTA_LIMIT,
 } from "@/lib/db/program-generation-service";
-import { generateProgramShell, generateProgramWeek, resolveTimeoutMs, WEEK_DEFAULT_TIMEOUT_MS } from "./provider";
+import { generateProgramShell, generateProgramDay, resolveTimeoutMs, DAY_DEFAULT_TIMEOUT_MS } from "./provider";
 import { logGenerationFailure, logProviderSuccess, logQuotaRelease } from "./observability";
-import { summarizeWeekForPrompt } from "./prompt";
+import { summarizeDayForPrompt } from "./prompt";
 import { resolveProgramDraftExercises } from "./exercise-resolution";
 import { validateGeneratedDraft, catalogGapFindings, type ValidationFinding } from "./validation";
-import { buildExerciseCandidateSet, verifyWeekAgainstCandidates } from "./exercise-candidates";
+import {
+  buildExerciseCandidateSet,
+  narrowCandidatesForDay,
+  verifyDayAgainstCandidates,
+} from "./exercise-candidates";
 import {
   parseGeneratedProgramDraft,
+  ModelWeekDraftSchema,
   type ProgramGenerationBrief,
   type GeneratedProgramDraft,
   type ProgramShell,
+  type ModelDayDraft,
   type ModelWeekDraft,
   type ModelProgramDraft,
 } from "./contracts";
@@ -56,7 +81,7 @@ import type { ClientContextSummary } from "./client-context";
 // content and persist the result, without letting an unexpected
 // validation-layer exception surface as an unhandled action failure."
 // extraWarnings is how catalog coverage gaps (computed once per
-// generation attempt, before any shell/week call) ride along into the
+// generation attempt, before any shell/day call) ride along into the
 // same findings the coach already sees and acknowledges — see
 // runStagedGeneration()'s finalization step.
 export async function runAndSaveValidation(
@@ -93,7 +118,17 @@ export interface StagedGenerationParams {
   // 1 for fresh generation; the first weekNumber without a 'completed'
   // row for a resume.
   startFromWeek: number;
+  // 1 for fresh generation, or for any week strictly after startFromWeek
+  // (a week is only ever partially attempted if a prior invocation
+  // stopped mid-week — that can only be true of the FIRST week this
+  // invocation touches). The first 1-based day index, into
+  // existingShell.days, without a 'completed' row for startFromWeek.
+  startFromDay: number;
   // Already-'completed' weeks, keyed by weekNumber — never regenerated.
+  // Pre-day-level drafts (any week finished before this architecture
+  // change) still satisfy resume purely from this map, exactly as
+  // before — day-level resume only matters for a week that was
+  // started, but not finished, under the day-level path.
   existingCompletedWeeks: Map<number, ModelWeekDraft>;
   // Explicit, not inferred from existingShell/existingCompletedWeeks
   // being empty — a resume whose very first attempt failed during the
@@ -107,34 +142,32 @@ export interface StagedGenerationParams {
 export type StagedGenerationResult = { ok: true } | { ok: false; error: string };
 
 // P0 incident (production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a,
-// "Maddie"): fixing the PER-CALL timeout (see provider.ts's
-// WEEK_DEFAULT_TIMEOUT_MS) is necessary but not sufficient on its own.
-// This function makes ONE generateProgramShell()/generateProgramWeek()
-// call per remaining week, sequentially, inside a SINGLE Server Action
-// invocation (generateProgramDraftAction / resumeGenerationAction) —
-// i.e. a single Vercel Function invocation. Vercel Hobby's function
+// "Maddie"): even after the day-level architecture change above, this
+// function still makes ONE generateProgramShell()/generateProgramDay()
+// call per remaining unit of work, sequentially, inside a SINGLE Server
+// Action invocation (generateProgramDraftAction / resumeGenerationAction)
+// — i.e. a single Vercel Function invocation. Vercel Hobby's function
 // duration is a HARD 300s ceiling: default and maximum are the same
 // number on this plan (verified against Vercel's own docs, not
 // assumed) — there is no code-level maxDuration change that raises it.
-// An 8-week program (the GenerateBriefForm.tsx default) is 1 shell +
-// 8 week calls = 9 sequential provider calls; even at realistic
-// (non-worst-case) per-call latency, that cumulative total can
-// approach or exceed 300s regardless of how generously any single
-// call is timed. Left unbounded, the platform would eventually just
-// kill the function mid-week with NO chance for this code's own
-// failRun()/setDraftStatus() cleanup to run — a silently stuck
+// A day-sized call is much smaller than a week-sized one, but an 8-week
+// x 5-day program is still 1 shell + 40 day calls; left unbounded, a
+// long enough program could still approach the ceiling. The platform
+// killing the function mid-call would leave NO chance for this code's
+// own failRun()/setDraftStatus() cleanup to run — a silently stuck
 // "running" draft and a claimed quota unit for zero progress, a worse
-// failure mode than today's explicit, catchable timeout error.
+// failure mode than an explicit, catchable timeout error.
 //
-// Fix: budget the whole invocation's wall-clock time and stop
-// BEFORE starting a week call that risks blowing the ceiling, leaving
-// a clean, resumable "failed" state (identical shape to a genuine
-// failure — resumeGenerationAction's existing atomic-claim, skip-
-// completed-weeks resume logic handles this for free, no new state
-// machine). 240s leaves ~60s margin under Hobby's 300s ceiling for
-// the quota claim, exercise-candidate-set build, per-week DB writes,
-// and finalization (assembly + exercise resolution + validation)
-// that all still need to run after the last week call returns.
+// Fix: budget the whole invocation's wall-clock time and stop BEFORE
+// starting a day call that risks blowing the ceiling, leaving a clean,
+// resumable "failed" state (identical shape to a genuine failure —
+// resumeGenerationAction's existing atomic-claim, skip-completed-work
+// resume logic handles this for free, no new state machine, now
+// resuming at the exact unfinished day rather than the whole week).
+// 240s leaves ~60s margin under Hobby's 300s ceiling for the quota
+// claim, exercise-candidate-set build, per-day DB writes, and
+// finalization (assembly + exercise resolution + validation) that all
+// still need to run after the last day call returns.
 //
 // PROGRAM_GENERATOR_TIME_BUDGET_MS overrides this default — same
 // ops-escape-hatch pattern as PROGRAM_GENERATOR_TIMEOUT_MS (provider.ts),
@@ -148,7 +181,7 @@ export function resolveGenerationTimeBudgetMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GENERATION_TIME_BUDGET_MS;
 }
 
-// Shared by the shell- and week-failure branches below. Never lets a
+// Shared by the shell- and day-failure branches below. Never lets a
 // release-path DB error crash the actual failure-handling flow it's
 // called from — logs its own outcome and returns whether release
 // actually fired, for the failure log's quotaReleased field.
@@ -171,7 +204,7 @@ async function releaseQuotaOnTimeout(
 
 export async function runStagedGeneration(params: StagedGenerationParams): Promise<StagedGenerationResult> {
   const runStartedAt = Date.now();
-  const weekTimeoutMs = resolveTimeoutMs(WEEK_DEFAULT_TIMEOUT_MS);
+  const dayTimeoutMs = resolveTimeoutMs(DAY_DEFAULT_TIMEOUT_MS);
   const timeBudgetMs = resolveGenerationTimeBudgetMs();
 
   const run = await startRun({
@@ -185,7 +218,8 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   // Computed once per attempt (fresh or resume — deterministic given
   // the same brief/coach/library state, so recomputing it on a resume
   // is safe and never itself a reason to regenerate an already-
-  // completed week) and reused across shell planning, every week call,
+  // completed day/week) and reused across shell planning, every day
+  // call (narrowed further per day — see narrowCandidatesForDay below),
   // and — separately, in actions.ts — regenerate-day. See
   // exercise-candidates.ts for the selection algorithm and its bounds.
   const candidateSet = await buildExerciseCandidateSet(params.brief, params.coachId);
@@ -195,7 +229,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   // every muscle group and warmup/cardio category (this brief's
   // equipment/experience-level combination excludes the entire visible
   // library). Continuing would still spend a shell call plus one call
-  // per week only to produce a draft where every single prescription is
+  // per day only to produce a draft where every single prescription is
   // an unresolved/rejected blocker — wasted latency and provider cost
   // for a result that was never going to be usable. The per-category
   // gaps (candidateSet.gaps) already handle the common "some categories
@@ -211,18 +245,25 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
 
   // ── Rate-limit gate — only consulted when this attempt will actually
   // reach the model. A fresh generation always will (no existingShell).
-  // A resume only will if there's still a shell to generate, or at least
-  // one week from startFromWeek through totalWeeks left uncompleted —
-  // a resume whose shell and every week already completed (only
-  // finalization failed last time) makes zero provider calls below and
-  // must not consume the coach's quota for retrying it. See
+  // A resume only will if there's still a shell to generate, or at
+  // least one (week, day) pair from (startFromWeek, startFromDay)
+  // through the end of the program left uncompleted — a resume whose
+  // shell and every day already completed (only finalization failed
+  // last time) makes zero provider calls below and must not consume
+  // the coach's quota for retrying it. One claim per top-level action
+  // regardless of how many internal day calls it makes — see
   // claimGenerationQuota's own doc comment in program-generation-
-  // service.ts for the full reasoning and chosen limit.
+  // service.ts for the full reasoning and chosen limit. Internal day
+  // calls are an implementation detail; the commercial unit is "one
+  // program-generation action."
   const totalWeeksForRun = params.existingShell?.totalWeeks ?? params.brief.weeks;
-  const willInvokeModel = !params.existingShell || params.startFromWeek <= totalWeeksForRun;
+  const willInvokeModel =
+    !params.existingShell ||
+    params.startFromWeek < totalWeeksForRun ||
+    (params.startFromWeek === totalWeeksForRun && params.startFromDay <= params.existingShell.days.length);
 
   // claimId is undefined when this attempt makes zero model calls
-  // (the "resume whose shell + every week already completed" case) —
+  // (the "resume whose shell + every day already completed" case) —
   // there is nothing to release in that case, by construction.
   let claimId: string | undefined;
   if (willInvokeModel) {
@@ -294,103 +335,217 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     await saveProgramShell(params.draftId, shell);
   }
 
-  // ── Step 2: one generateProgramWeek() call per remaining week ──
+  // ── Step 2: per week, one generateProgramDay() call per remaining
+  // shell day, then a deterministic assembly of that week from its
+  // now-complete day rows. ──
   const allWeeks = new Map(params.existingCompletedWeeks);
+  // Previous week's day rows, keyed by dayNumber — recomputed once per
+  // week (not once per day) purely as a latency/query-count
+  // optimization; semantically this is "read fresh every time," same
+  // as candidateSet and every other resume-safety-relevant read here.
+  let priorWeekDaysByIndex = new Map<number, ModelDayDraft>();
 
   for (let weekNumber = params.startFromWeek; weekNumber <= shell.totalWeeks; weekNumber++) {
-    // Time-budget guard (see GENERATION_TIME_BUDGET_MS's comment above):
-    // stop BEFORE starting a week call that risks running past Vercel
-    // Hobby's hard 300s function-duration ceiling, rather than letting
-    // the platform kill this invocation mid-call with no chance to
-    // persist a clean, resumable state. Completed weeks so far are
-    // already saved; this is a deliberate, safe pause, not an error —
-    // it reuses the exact same failed+resumable shape a real failure
-    // would, so resumeGenerationAction's existing skip-completed-weeks
-    // logic picks up exactly here with zero new state machinery.
-    if (Date.now() - runStartedAt + weekTimeoutMs > timeBudgetMs) {
-      const failureReason =
-        weekNumber === params.startFromWeek
-          ? "Generation paused to stay within safe processing limits before starting. Click Retry to continue."
-          : `Generation paused after completing Week ${weekNumber - 1} of ${shell.totalWeeks} to stay within safe processing limits. Completed weeks were saved — click Retry to continue.`;
-      await failRun(run.id, "Time budget reached before starting the next week — safe to resume.");
-      await setDraftStatus(params.draftId, "failed", { failureReason });
-      return { ok: false, error: failureReason };
+    // Only the FIRST week this invocation touches can have partial
+    // day progress from an earlier attempt — every week after that
+    // always starts at day 1, by construction (a week is only ever
+    // left partially done if a prior invocation stopped mid-week, and
+    // only one week can be "in progress" at any stopping point).
+    const dayStartIndex = weekNumber === params.startFromWeek ? params.startFromDay : 1;
+
+    const completedDaysThisWeek = new Map<number, ModelDayDraft>();
+    if (dayStartIndex > 1) {
+      const existingDayRows = await listGenerationDaysForWeek(params.draftId, weekNumber);
+      for (const row of existingDayRows) {
+        if (row.status === "completed" && row.dayJson) {
+          completedDaysThisWeek.set(row.dayNumber, row.dayJson as ModelDayDraft);
+        }
+      }
     }
 
-    await updateRunProgress(run.id, { currentWeek: weekNumber });
+    // Continuity source for every day in THIS week: the same day-slot
+    // in the immediately preceding week (shell.days is a fixed weekly
+    // split reused every week — see contracts.ts's ProgramShellSchema —
+    // so day index N always means the same training emphasis across
+    // weeks). Read once per week, not once per day.
+    if (weekNumber > 1) {
+      const priorWeekRows = await listGenerationDaysForWeek(params.draftId, weekNumber - 1);
+      priorWeekDaysByIndex = new Map(
+        priorWeekRows
+          .filter((row) => row.status === "completed" && row.dayJson)
+          .map((row) => [row.dayNumber, row.dayJson as ModelDayDraft]),
+      );
+    }
 
-    const priorWeek = allWeeks.get(weekNumber - 1);
-    const priorWeekSummary = priorWeek ? summarizeWeekForPrompt(priorWeek) : null;
+    for (let dayIndex = dayStartIndex; dayIndex <= shell.days.length; dayIndex++) {
+      const shellDay = shell.days[dayIndex - 1];
 
-    const weekOutcome = await generateProgramWeek({
-      brief: params.brief,
-      clientContext: params.clientContext,
-      shell,
-      weekNumber,
-      priorWeekSummary,
-      candidates: candidateSet.candidates,
-    });
+      // Time-budget guard (see GENERATION_TIME_BUDGET_MS's comment
+      // above): stop BEFORE starting a day call that risks running
+      // past Vercel Hobby's hard 300s function-duration ceiling,
+      // rather than letting the platform kill this invocation mid-call
+      // with no chance to persist a clean, resumable state. Completed
+      // days so far are already saved; this is a deliberate, safe
+      // pause, not an error — it reuses the exact same failed+
+      // resumable shape a real failure would, so resumeGenerationAction's
+      // existing skip-completed-work resume logic picks up exactly
+      // here with zero new state machinery. Phase 13's UI framing
+      // ("Progress saved. Continue generation to resume from...") is
+      // deliberately reflected in this wording, not "Generation Failed."
+      if (Date.now() - runStartedAt + dayTimeoutMs > timeBudgetMs) {
+        const failureReason = `Progress saved. Continue generation to resume from Week ${weekNumber}, Day ${dayIndex} ("${shellDay.label}").`;
+        await failRun(run.id, "Time budget reached before starting the next day — safe to resume.");
+        await setDraftStatus(params.draftId, "failed", { failureReason });
+        return { ok: false, error: failureReason };
+      }
 
-    if (!weekOutcome.ok) {
-      const quotaReleased = await releaseQuotaOnTimeout(weekOutcome.errorCode, claimId, params.draftId, run.id);
-      logGenerationFailure({
-        draftId: params.draftId,
-        runId: run.id,
-        stage: "week",
+      await updateRunProgress(run.id, { currentWeek: weekNumber, currentDay: dayIndex });
+
+      const priorSameDay = priorWeekDaysByIndex.get(dayIndex);
+      const priorSameDaySummary = priorSameDay ? summarizeDayForPrompt(priorSameDay) : null;
+
+      // Never let the model choose which muscles matter for a day —
+      // see exercise-candidates.ts's narrowCandidatesForDay() header
+      // comment. Computed fresh per day (pure, in-memory, no DB call).
+      const dayCandidates = narrowCandidatesForDay(candidateSet, shellDay, params.brief.musclePriorities);
+
+      const dayOutcome = await generateProgramDay({
+        brief: params.brief,
+        clientContext: params.clientContext,
+        shell,
         weekNumber,
-        errorCode: weekOutcome.errorCode,
-        errorMessage: weekOutcome.errorMessage,
-        provider: weekOutcome.provider,
-        model: weekOutcome.model,
-        elapsedMs: weekOutcome.elapsedMs,
-        timeoutMs: weekOutcome.timeoutMs,
-        isRetryOrResume: params.isResume,
-        completedWeeks: allWeeks.size,
-        quotaClaimed: !!claimId,
-        quotaReleased,
+        dayIndex,
+        shellDay,
+        priorSameDaySummary,
+        candidates: dayCandidates,
       });
-      await saveGenerationWeek(params.draftId, weekNumber, { status: "failed", errorMessage: weekOutcome.errorMessage });
-      await failRun(run.id, weekOutcome.errorMessage, { provider: weekOutcome.provider, model: weekOutcome.model });
-      const failureReason = `Generation failed while creating Week ${weekNumber} of ${shell.totalWeeks}. Completed weeks were saved — you can retry to continue from here.`;
+
+      if (!dayOutcome.ok) {
+        const quotaReleased = await releaseQuotaOnTimeout(dayOutcome.errorCode, claimId, params.draftId, run.id);
+        logGenerationFailure({
+          draftId: params.draftId,
+          runId: run.id,
+          stage: "day",
+          weekNumber,
+          dayNumber: dayIndex,
+          errorCode: dayOutcome.errorCode,
+          errorMessage: dayOutcome.errorMessage,
+          provider: dayOutcome.provider,
+          model: dayOutcome.model,
+          elapsedMs: dayOutcome.elapsedMs,
+          timeoutMs: dayOutcome.timeoutMs,
+          isRetryOrResume: params.isResume,
+          completedDays: completedDaysThisWeek.size,
+          completedWeeks: allWeeks.size,
+          candidateCount: dayCandidates.length,
+          quotaClaimed: !!claimId,
+          quotaReleased,
+        });
+        await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
+          status: "failed",
+          errorCode: dayOutcome.errorCode,
+          errorMessage: dayOutcome.errorMessage,
+          provider: dayOutcome.provider,
+          model: dayOutcome.model,
+        });
+        await failRun(run.id, dayOutcome.errorMessage, { provider: dayOutcome.provider, model: dayOutcome.model });
+        const failureReason = `Generation failed while creating Week ${weekNumber}, Day ${dayIndex} ("${shellDay.label}"). Completed days were saved — you can retry to continue from here.`;
+        await setDraftStatus(params.draftId, "failed", { failureReason });
+        return { ok: false, error: failureReason };
+      }
+      logProviderSuccess({
+        draftId: params.draftId,
+        stage: "day",
+        weekNumber,
+        dayNumber: dayIndex,
+        provider: dayOutcome.provider,
+        model: dayOutcome.model,
+        elapsedMs: dayOutcome.elapsedMs,
+        candidateCount: dayCandidates.length,
+      });
+
+      // Never trust a returned exerciseId merely because the model
+      // supplied one — verify every prescription's id against the
+      // EXACT (narrowed) candidate set offered for this call before
+      // persisting. Anything that doesn't verify has its id stripped
+      // back to name-only, which exercise-resolution.ts's fallback
+      // resolver covers at final assembly time.
+      const { result: verifiedDay } = verifyDayAgainstCandidates(dayOutcome.day, dayCandidates);
+
+      await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
+        status: "completed",
+        dayJson: verifiedDay,
+        provider: dayOutcome.provider,
+        model: dayOutcome.model,
+      });
+      completedDaysThisWeek.set(dayIndex, verifiedDay);
+      lastProvider = dayOutcome.provider;
+      lastModel = dayOutcome.model;
+
+      await updateRunProgress(run.id, { completedDays: completedDaysThisWeek.size });
+    }
+
+    // ── Week assembly — deterministic, no model call. Every downstream
+    // consumer (final assembly below, exercise resolution, validation,
+    // approval) reads program_generation_weeks exactly as it always
+    // has; only how this row gets produced changed. ──
+    const weekDays: ModelDayDraft[] = shell.days.map((_, idx) => {
+      const day = completedDaysThisWeek.get(idx + 1);
+      if (!day) {
+        // Unreachable given the loop above always persists every day
+        // from dayStartIndex through shell.days.length, and rows before
+        // dayStartIndex were already loaded into completedDaysThisWeek
+        // — kept as an explicit, named failure rather than a silent
+        // gap if that invariant is ever violated.
+        throw new Error(`Missing content for week ${weekNumber} day ${idx + 1} during week assembly.`);
+      }
+      return day;
+    });
+
+    let assembledWeek: ModelWeekDraft;
+    try {
+      assembledWeek = { id: randomUUID(), weekNumber, label: `Week ${weekNumber}`, days: weekDays };
+      // Deterministic week-level validation — the day-level schema
+      // already validated each day individually (generateObject()'s
+      // own schema enforcement); this re-checks the cross-day
+      // refinements (e.g. unique dayOfWeek per week) that only exist
+      // once days are assembled together. Should always pass given
+      // each day's dayOfWeek comes from the shell's own already-unique
+      // days array, but verified rather than assumed.
+      const parsed = ModelWeekDraftSchema.safeParse(assembledWeek);
+      if (!parsed.success) {
+        throw new Error(`Assembled week ${weekNumber} failed schema validation: ${parsed.error.message}`);
+      }
+      assembledWeek = parsed.data;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Week assembly failed unexpectedly.";
+      await failRun(run.id, message, { provider: lastProvider, model: lastModel });
+      const failureReason = "Generation could not be assembled. Please retry.";
       await setDraftStatus(params.draftId, "failed", { failureReason });
       return { ok: false, error: failureReason };
     }
-    logProviderSuccess({
-      draftId: params.draftId,
-      stage: "week",
-      weekNumber,
-      provider: weekOutcome.provider,
-      model: weekOutcome.model,
-      elapsedMs: weekOutcome.elapsedMs,
-    });
 
-    // Never trust a returned exerciseId merely because the model
-    // supplied one — verify every prescription's id against the exact
-    // candidate set offered for this call before persisting. Anything
-    // that doesn't verify has its id stripped back to name-only, which
-    // exercise-resolution.ts's fallback resolver covers at assembly time.
-    const { result: verifiedWeek } = verifyWeekAgainstCandidates(weekOutcome.week, candidateSet.candidates);
-
-    await saveGenerationWeek(params.draftId, weekNumber, { status: "completed", weekJson: verifiedWeek });
-    allWeeks.set(weekNumber, verifiedWeek);
-    lastProvider = weekOutcome.provider;
-    lastModel = weekOutcome.model;
-
+    await saveGenerationWeek(params.draftId, weekNumber, { status: "completed", weekJson: assembledWeek });
+    allWeeks.set(weekNumber, assembledWeek);
     await updateRunProgress(run.id, { completedWeeks: allWeeks.size });
   }
 
   // ── Step 3: finalization — assemble, resolve, validate, then (only
-  // now) transition to ready_for_review. ──
+  // now) transition to ready_for_review. Unchanged by the day-level
+  // architecture change: allWeeks is fully populated (either from a
+  // prior attempt's already-completed weeks, or freshly assembled
+  // above) exactly as it always was. ──
   const weeksInOrder: ModelWeekDraft[] = [];
   for (let weekNumber = 1; weekNumber <= shell.totalWeeks; weekNumber++) {
     const week = allWeeks.get(weekNumber);
     if (!week) {
-      // Unreachable given the loop above always persists every week from
-      // startFromWeek through shell.totalWeeks, and existingCompletedWeeks
-      // covers 1..startFromWeek-1 by construction (callers only set
-      // startFromWeek past a contiguous completed prefix) — kept as an
-      // explicit, named failure rather than a silent gap if that
-      // invariant is ever violated.
+      // Unreachable given the loop above always persists every week
+      // from startFromWeek through shell.totalWeeks, and
+      // existingCompletedWeeks covers 1..startFromWeek-1 by
+      // construction (callers only set startFromWeek past a
+      // contiguous completed prefix) — kept as an explicit, named
+      // failure rather than a silent gap if that invariant is ever
+      // violated.
       await failRun(run.id, `Missing content for week ${weekNumber} during assembly.`);
       const failureReason = "Generation could not be assembled. Please retry.";
       await setDraftStatus(params.draftId, "failed", { failureReason });

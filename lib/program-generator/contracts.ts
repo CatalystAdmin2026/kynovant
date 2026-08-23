@@ -349,6 +349,15 @@ export const ProgramShellDaySchema = z.object({
   dayOfWeek: z.number().int().min(0).max(6),
   label: z.string().min(1).max(100),
   focus: z.string().max(200).optional(),
+  // Day-level generation's candidate-narrowing input (see
+  // exercise-candidates.ts's narrowCandidatesForDay()) — structured, not
+  // parsed out of `label`/`focus` freeform text. Optional for backward
+  // compatibility: a shell generated before this field existed (e.g. any
+  // already-saved draft) simply omits it, and narrowing falls back to a
+  // keyword heuristic over label/focus, then to the full candidate set —
+  // never a hard requirement, never a reason to fail or regenerate an
+  // existing shell.
+  targetMuscleGroups: z.array(MuscleGroupSchema).max(6).optional(),
 });
 
 export const ProgramShellPhaseSchema = z.object({

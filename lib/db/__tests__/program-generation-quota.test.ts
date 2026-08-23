@@ -347,6 +347,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       existingShell: null,
       isResume: false,
       startFromWeek: 1,
+      startFromDay: 1,
       existingCompletedWeeks: new Map(),
     });
     expect(result.ok).toBe(true);
@@ -370,6 +371,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       existingShell: shell,
       isResume: true,
       startFromWeek: 1,
+      startFromDay: 1,
       existingCompletedWeeks: new Map(),
     });
     expect(result.ok).toBe(true);
@@ -396,6 +398,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       existingShell: shell,
       isResume: true,
       startFromWeek: 2, // > shell.totalWeeks (1) — nothing left to generate
+      startFromDay: 1,
       existingCompletedWeeks: new Map([[1, week1]]),
     });
     expect(result.ok).toBe(true);
