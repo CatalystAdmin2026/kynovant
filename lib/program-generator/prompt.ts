@@ -161,6 +161,23 @@ function formatPhase(phase: ProgramShellPhase | null, weekNumber: number): strin
 // across weeks (e.g. slot 1 = "Push" every week); progressing that
 // slot's own history is what keeps week 6's Push day building on week
 // 5's Push day rather than week 6's own Pull day.
+// Phase D (blueprint-guided canonical-week concurrency): the ONE piece
+// of context a canonical day generated CONCURRENTLY with its siblings
+// can safely receive that weekSoFarSummary cannot — weekSoFarSummary
+// is "what other days already produced," which by definition doesn't
+// exist yet when every day in a batch starts at the same time. This is
+// deterministic, pre-computed intent (blueprint.ts), never another
+// day's actual generated output — see blueprint.ts's own header for
+// why that's what makes concurrency safe at all. Optional/nullable
+// throughout: entirely absent for the legacy_day path and for a
+// Phase C (pre-blueprint) block draft, so this function's existing
+// callers are unaffected.
+export interface DayBlueprintIntent {
+  primaryPatternEmphasis: string | null;
+  techniqueEligibility: string | null;
+  siblingAllocationSummary: string | null;
+}
+
 export function buildDayGenerationPrompt(
   brief: ProgramGenerationBrief,
   clientContext: ClientContextSummary | null,
@@ -170,6 +187,7 @@ export function buildDayGenerationPrompt(
   priorSameDaySummary: string | null,
   weekSoFarSummary: string | null,
   candidates: ExerciseCandidate[],
+  blueprintIntent: DayBlueprintIntent | null = null,
 ): string {
   const phase = findPhaseForWeek(shell, weekNumber);
 
@@ -208,6 +226,27 @@ export function buildDayGenerationPrompt(
           weekSoFarSummary,
           "",
         ]
+      : []),
+    // This day is generating CONCURRENTLY with its siblings this week —
+    // there is no "already generated this week" content to see (that's
+    // the whole reason this section exists instead). What it DOES have
+    // is deterministic, pre-computed allocation intent — a soft nudge,
+    // never a hard mandate, and never a claim about what a sibling day
+    // actually ended up producing.
+    ...(blueprintIntent
+      ? [
+          "## Week Coordination Plan (siblings are generating concurrently — this is planned intent, not their actual output)",
+          blueprintIntent.primaryPatternEmphasis
+            ? `For this day's primary compound/main lift, prefer a "${blueprintIntent.primaryPatternEmphasis.replace(/_/g, " ")}" movement pattern where a sensible option exists in the catalog above — this keeps it distinct from a sibling day that shares an overlapping muscle group and was assigned a different pattern to emphasize. Use your own judgment if no good option in that pattern fits.`
+            : null,
+          blueprintIntent.techniqueEligibility
+            ? `This day is eligible to use "${blueprintIntent.techniqueEligibility.replace(/_/g, " ")}" on at most ONE exercise, if there's a genuinely appropriate candidate (e.g. a final accessory set) — do not force it onto every set, and do not use any OTHER intensity technique.`
+            : "This day is not eligible for any high-fatigue intensity technique (drop set, rest-pause, myo-reps, etc.) this week — use straight sets, or the technique bounds already stated in the brief above.",
+          blueprintIntent.siblingAllocationSummary
+            ? `Other days planned for this same week (for context on what NOT to duplicate — none of this has been generated yet):\n${blueprintIntent.siblingAllocationSummary}`
+            : null,
+          "",
+        ].filter((line): line is string => line !== null)
       : []),
     "## Continuity With This Same Day In Prior Weeks",
     priorSameDaySummary

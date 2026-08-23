@@ -799,6 +799,7 @@ describe("staged generation orchestration", () => {
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
 
@@ -894,6 +895,7 @@ describe("staged generation orchestration", () => {
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1003,6 +1005,7 @@ describe("staged generation orchestration", () => {
       startFromDay: 1,
       existingCompletedWeeks,
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1059,6 +1062,7 @@ describe("staged generation orchestration", () => {
         startFromDay: 1,
         existingCompletedWeeks: new Map(),
         existingGenerationArchitecture: null,
+        existingGenerationArchitectureVersion: null,
       });
 
       // A deliberate, safe pause — not a crash, not silently stuck
@@ -1108,6 +1112,7 @@ describe("staged generation orchestration", () => {
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1178,6 +1183,7 @@ describe("staged generation orchestration", () => {
       startFromDay: 3, // the exact unfinished day — not 1, not "whole week 1"
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1314,6 +1320,7 @@ describe("staged generation orchestration", () => {
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
 
     expect(result.ok).toBe(false);
@@ -1402,6 +1409,7 @@ describe("Phase C — block-based generation orchestration", () => {
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1467,6 +1475,7 @@ describe("Phase C — block-based generation orchestration", () => {
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(referenceResult.ok).toBe(true);
     const [referenceDraftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, referenceRow.id));
@@ -1501,11 +1510,12 @@ describe("Phase C — block-based generation orchestration", () => {
       existingCompletedWeeks: partialExistingCompletedWeeks,
       // This test's whole point is proving block architecture SURVIVES
       // a resume — so this deliberately supplies the SAME architecture
-      // the reference run's first call would have derived and persisted
-      // (drizzle/0036), rather than null, which would otherwise route
-      // this resume to legacy_day purely because existingShell is
-      // non-null (see resolveGenerationArchitecture's own header).
+      // (and, Phase D: the same VERSION) the reference run's first call
+      // actually derived and persisted, read back from its own row
+      // rather than hardcoded, so this stays correct regardless of
+      // which version a fresh draft currently defaults to.
       existingGenerationArchitecture: "block",
+      existingGenerationArchitectureVersion: referenceDraftRow.generationArchitectureVersion as 1 | 2,
     });
     expect(resumeResult.ok).toBe(true);
 
@@ -1637,6 +1647,7 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("legacy_day");
@@ -1660,6 +1671,7 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("legacy_day");
@@ -1684,6 +1696,7 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("legacy_day");
@@ -1710,6 +1723,7 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 1,
       existingCompletedWeeks: new Map([[1, week1]]),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("legacy_day");
@@ -1737,6 +1751,7 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 2,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("legacy_day");
@@ -1757,6 +1772,7 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("block");
@@ -1778,6 +1794,7 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("legacy_day");
@@ -1800,6 +1817,12 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: "block",
+      // NULL here on purpose — mirrors a Phase-C-era block draft that
+      // predates drizzle/0038 (marked "block" via saveGenerationArchitecture
+      // with no version argument above). The app must treat this as
+      // version 1 (Phase C serial), never reinterpret it as version 2 —
+      // see test "H2" below for that exact behavior proven explicitly.
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("block");
@@ -1822,6 +1845,7 @@ describe("Phase C — historical NULL-architecture resume routing (regression, c
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: "legacy_day",
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
     expect(await finalArchitecture(row.id)).toBe("legacy_day");
@@ -1876,6 +1900,7 @@ describe("Phase C — prior-block continuity fallback (regression, candidate 5bf
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1937,6 +1962,7 @@ describe("Phase C — prior-block continuity fallback (regression, candidate 5bf
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
       existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1957,5 +1983,191 @@ describe("Phase C — prior-block continuity fallback (regression, candidate 5bf
     // from the canonical week's own row, not a re-read of it.
     expect(fallbackFirstPrescription?.exerciseName).toBe(canonicalFirstPrescription?.exerciseName);
     expect(expandedWeek.id).not.toBe(canonicalWeek.id);
+  }, 30_000);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Phase D — blueprint-guided canonical-week concurrency (real DB,
+// fixture provider — no real AI cost; the fixture ignores prompt
+// content entirely, so these tests verify STRUCTURAL/orchestration
+// correctness — persistence, versioning, resume, quota — never
+// content quality, which the real-provider staging benchmark covers
+// separately).
+// ─────────────────────────────────────────────────────────────
+describe("Phase D — blueprint-guided canonical-week concurrency", () => {
+  const originalModel = process.env.PROGRAM_GENERATOR_MODEL;
+  const originalFixture = process.env.PROGRAM_GENERATOR_USE_FIXTURE;
+  // Dedicated coach — this block alone makes several runStagedGeneration()
+  // calls; sharing coachA/routingCoach risks exhausting a 10/hour quota
+  // shared with the rest of this large file (see the routing describe
+  // block's own comment for the same reasoning).
+  const blueprintCoach = { id: "" };
+
+  beforeAll(async () => {
+    process.env.PROGRAM_GENERATOR_USE_FIXTURE = "true";
+    delete process.env.PROGRAM_GENERATOR_MODEL;
+    blueprintCoach.id = await createAuthUser("phase-d-blueprint");
+    await db.update(users).set({ role: "coach", status: "active" }).where(eq(users.id, blueprintCoach.id));
+  });
+
+  afterAll(async () => {
+    if (originalModel === undefined) delete process.env.PROGRAM_GENERATOR_MODEL;
+    else process.env.PROGRAM_GENERATOR_MODEL = originalModel;
+    if (originalFixture === undefined) delete process.env.PROGRAM_GENERATOR_USE_FIXTURE;
+    else process.env.PROGRAM_GENERATOR_USE_FIXTURE = originalFixture;
+    if (blueprintCoach.id) {
+      try {
+        await createAdminClient().auth.admin.deleteUser(blueprintCoach.id);
+      } catch (err) {
+        console.error("[blueprintCoach cleanup] failed:", err instanceof Error ? err.message : err);
+      }
+    }
+  });
+
+  it("[A/E/F] a fresh block draft's canonical week generates all 5 days successfully via the blueprint+concurrent path, with unique day rows and version persisted as 2", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 3, daysPerWeek: 5 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      isResume: false,
+      startFromWeek: 1,
+      startFromDay: 1,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
+    });
+    expect(result.ok).toBe(true);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.generationArchitecture).toBe("block");
+    expect(draftRow.generationArchitectureVersion).toBe(2);
+    expect(draftRow.status).toBe("ready_for_review");
+
+    const dayRows = await listGenerationDaysForWeek(row.id, 1);
+    expect(dayRows).toHaveLength(5);
+    expect(dayRows.every((d) => d.status === "completed")).toBe(true);
+    expect(new Set(dayRows.map((d) => d.dayJson && (d.dayJson as ModelDayDraft).id)).size).toBe(5);
+  }, 30_000);
+
+  it("[K] retry after partial completion calls the provider ONLY for the missing day — the already-completed siblings are untouched, not regenerated", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 1, daysPerWeek: 5 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    // Seed the SAME shape a real "4 of 5 succeeded, 1 failed" batch
+    // outcome would leave behind, directly at the DB layer — the
+    // fixture provider has no deterministic per-day failure trigger,
+    // so this proves the RESUME-side guarantee (never re-call the
+    // provider for an already-completed day) exactly like this file's
+    // own pre-existing "completed weeks persist" test proves the
+    // analogous week-level guarantee the same way.
+    const shell = buildFixtureProgramShell(brief);
+    await saveProgramShell(row.id, shell);
+    const candidateSet = await buildExerciseCandidateSet(brief, blueprintCoach.id);
+    const seededDays: Record<number, ModelDayDraft> = {};
+    for (const dayIndex of [1, 2, 4, 5]) {
+      const day = await buildFixtureProgramDay(shell, dayIndex, candidateSet.candidates);
+      if (!day) throw new Error("fixture setup failed — not enough active exercises seeded.");
+      seededDays[dayIndex] = day;
+      await saveGenerationDay(row.id, 1, dayIndex, { status: "completed", dayJson: day, provider: "dev-fixture", model: "dev-fixture" });
+    }
+    await saveGenerationDay(row.id, 1, 3, { status: "failed", errorCode: "timeout", errorMessage: "simulated", provider: "dev-fixture", model: "dev-fixture" });
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated: day 3 of 5 failed" });
+    await db
+      .update(programGenerationDrafts)
+      .set({ generationArchitecture: "block", generationArchitectureVersion: 2 })
+      .where(eq(programGenerationDrafts.id, row.id));
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: shell,
+      isResume: true,
+      startFromWeek: 1,
+      startFromDay: 3,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: "block",
+      existingGenerationArchitectureVersion: 2,
+    });
+    expect(result.ok).toBe(true);
+
+    const dayRows = await listGenerationDaysForWeek(row.id, 1);
+    expect(dayRows).toHaveLength(5);
+    expect(dayRows.every((d) => d.status === "completed")).toBe(true);
+    // The 4 pre-seeded days are BYTE-FOR-BYTE unchanged — proof they
+    // were never re-sent to the provider on this resume.
+    for (const dayIndex of [1, 2, 4, 5]) {
+      const row2 = dayRows.find((d) => d.dayNumber === dayIndex)!;
+      expect(row2.dayJson).toEqual(seededDays[dayIndex]);
+    }
+    // Day 3 — the only one actually missing — now has real content.
+    expect(dayRows.find((d) => d.dayNumber === 3)?.dayJson).toBeTruthy();
+  }, 30_000);
+
+  it("[H2] a Phase-C-era block draft (version 1, predates blueprint persistence) NEVER silently upgrades to version 2 on resume", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "intermediate", weeks: 3, daysPerWeek: 1 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+    // Marked "block" with NO version — exactly what a real Phase C
+    // draft (created before drizzle/0038 existed) looks like today.
+    await saveGenerationArchitecture(row.id, "block");
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated: historical Phase C block draft, nothing generated yet" });
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      isResume: true,
+      startFromWeek: 1,
+      startFromDay: 1,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: "block",
+      existingGenerationArchitectureVersion: null, // read back exactly as a real pre-0038 row would parse
+    });
+    expect(result.ok).toBe(true);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.generationArchitecture).toBe("block");
+    // Still NULL — never silently written as 2. A null version is
+    // application-interpreted as "Phase C serial" (version 1) every
+    // time it's read, but this proves the STORED value itself is
+    // never mutated into 2 by a resume alone.
+    expect(draftRow.generationArchitectureVersion).toBeNull();
+  }, 30_000);
+
+  it("a historical NULL-architecture draft resuming into a supported goal never picks up a version either (stays fully legacy_day)", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "intermediate", weeks: 1, daysPerWeek: 1 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated: historical draft, no architecture decision ever made" });
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      isResume: true,
+      startFromWeek: 1,
+      startFromDay: 1,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
+    });
+    expect(result.ok).toBe(true);
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.generationArchitecture).toBe("legacy_day");
+    expect(draftRow.generationArchitectureVersion).toBeNull();
   }, 30_000);
 });

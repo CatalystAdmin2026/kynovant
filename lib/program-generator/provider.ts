@@ -106,6 +106,7 @@ import {
   buildWeekGenerationPrompt,
   buildDayGenerationPrompt,
   buildDayRegenerationPrompt,
+  type DayBlueprintIntent,
 } from "./prompt";
 import type { ClientContextSummary } from "./client-context";
 import {
@@ -481,6 +482,11 @@ export async function generateProgramDay(params: {
   priorSameDaySummary: string | null;
   weekSoFarSummary: string | null;
   candidates: ExerciseCandidate[];
+  // Phase D — see prompt.ts's DayBlueprintIntent for the full rationale.
+  // Absent for every caller except the new blueprint-guided canonical-
+  // week path; the fixture provider ignores it entirely (same as every
+  // other prompt-only field), so this is a no-op for existing callers.
+  blueprintIntent?: DayBlueprintIntent | null;
 }): Promise<DayGenerationOutcome> {
   if (isFixtureModeEnabled()) return callFixtureDayProvider(params.shell, params.dayIndex, params.candidates);
 
@@ -493,6 +499,7 @@ export async function generateProgramDay(params: {
     params.priorSameDaySummary,
     params.weekSoFarSummary,
     params.candidates,
+    params.blueprintIntent ?? null,
   );
   const result = await callProvider({
     prompt,

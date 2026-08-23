@@ -142,6 +142,24 @@ function parseGenerationArchitecture(value: string | null): GenerationArchitectu
   return null;
 }
 
+// drizzle/0038's generation_architecture_version column, same
+// malformed-vs-null distinction as parseGenerationArchitecture above.
+// A pre-Phase-D "block" draft (version NULL) correctly parses to null
+// here too — runStagedGeneration's own version-resolution then treats
+// a null version exactly like a null architecture on a resume: never
+// re-derived as "the current default," always read back as-is once
+// non-null, and this function's job is only to reject a value that
+// couldn't have come from this application's own writer.
+function parseGenerationArchitectureVersion(value: number | null): 1 | 2 | null {
+  if (value === null) return null;
+  if (value === 1 || value === 2) return value;
+  console.error(
+    `[program-generator] draft has a malformed generation_architecture_version value (${value}) — ` +
+      "this should be impossible under drizzle/0038's CHECK constraint. Treating as unset.",
+  );
+  return null;
+}
+
 function revalidateDraft(draftId: string) {
   revalidatePath(`/hq/programs/generate/${draftId}`);
   revalidatePath("/hq/programs/generate");
@@ -200,6 +218,7 @@ export async function generateProgramDraftAction(input: {
     // Genuinely fresh draft, just created above — has never made this
     // decision. runStagedGeneration derives and persists it now.
     existingGenerationArchitecture: null,
+    existingGenerationArchitectureVersion: null,
   });
 
   if (result.ok) {
@@ -297,6 +316,7 @@ export async function resumeGenerationAction(draftId: string): Promise<ActionRes
     startFromDay,
     existingCompletedWeeks,
     existingGenerationArchitecture: parseGenerationArchitecture(auth.draft.generationArchitecture),
+    existingGenerationArchitectureVersion: parseGenerationArchitectureVersion(auth.draft.generationArchitectureVersion),
   });
 
   if (result.ok) {

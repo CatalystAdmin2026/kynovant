@@ -195,6 +195,25 @@ export const programGenerationDrafts = pgTable(
     // migration's own header for why.
     generationArchitecture: text("generation_architecture"),
 
+    // Phase D (blueprint-guided canonical-week concurrency, drizzle/
+    // 0038): set exactly once, at the SAME moment generationArchitecture
+    // itself is first decided, and ONLY when that decision is "block"
+    // (always NULL for legacy_day — there is only ever one legacy_day
+    // behavior, so a version number would be meaningless for it).
+    //   1 = Phase C: canonical week generated serially, no blueprint.
+    //   2 = Phase D: canonical week generated via a deterministic
+    //       blueprint (lib/program-generator/blueprint.ts) + bounded
+    //       concurrent day calls.
+    // Review requirement (Phase D task, "Architecture Versioning"): a
+    // Phase C block draft already in progress when Phase D ships must
+    // NEVER silently switch to blueprint+concurrent generation mid-
+    // block — that would let a NEW day (generated with sibling-
+    // coordination intent) sit next to an OLDER day generated with none,
+    // changing sibling responsibilities the coach never saw change.
+    // Read on every later call exactly like generationArchitecture
+    // itself — never re-derived, never inferred from progress state.
+    generationArchitectureVersion: integer("generation_architecture_version"),
+
     draftJson: jsonb("draft_json"),
     draftVersion: integer("draft_version").notNull().default(0),
 
@@ -253,6 +272,20 @@ export const programGenerationDrafts = pgTable(
     check(
       "chk_program_generation_drafts_generation_architecture",
       sql`${table.generationArchitecture} IS NULL OR ${table.generationArchitecture} IN ('legacy_day', 'block')`,
+    ),
+    // Mirrors drizzle/0038_generation_architecture_version_check.sql.
+    // Only 1 or 2 are meaningful today (Phase C serial / Phase D
+    // blueprint+concurrent); NULL covers legacy_day drafts and every
+    // draft that predates this column.
+    check(
+      "chk_program_generation_drafts_generation_architecture_version",
+      sql`${table.generationArchitectureVersion} IS NULL OR ${table.generationArchitectureVersion} IN (1, 2)`,
+    ),
+    // A version is only ever meaningful alongside architecture='block' —
+    // legacy_day never has one (see the column's own comment).
+    check(
+      "chk_program_generation_drafts_architecture_version_pairing",
+      sql`${table.generationArchitectureVersion} IS NULL OR ${table.generationArchitecture} = 'block'`,
     ),
   ],
 );

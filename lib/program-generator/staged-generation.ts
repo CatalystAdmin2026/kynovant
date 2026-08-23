@@ -99,6 +99,7 @@ import {
 import { findDayUnique, replaceDayContent } from "./edit-ops";
 import { deriveBlockPlans, findBlockForWeek, resolveGenerationArchitecture, type BlockPlan, type GenerationArchitecture } from "./block-plan";
 import { expandCanonicalWeek } from "./progression";
+import { deriveCanonicalWeekBlueprint, validateCanonicalWeekBlueprint, summarizeSiblingAllocationsForPrompt } from "./blueprint";
 import {
   parseGeneratedProgramDraft,
   ModelWeekDraftSchema,
@@ -423,6 +424,14 @@ export interface StagedGenerationParams {
   // re-derivation can't reliably tell a block-architecture canonical
   // week from an ordinary legacy week once either is persisted.
   existingGenerationArchitecture: GenerationArchitecture | null;
+  // Phase D: the draft's OWN persisted generation_architecture_version
+  // column (drizzle/0038), read by the caller exactly like
+  // existingGenerationArchitecture — null for a draft that hasn't made
+  // this decision yet (including every "block" draft that predates
+  // this column — see the column's own comment for why that MUST be
+  // treated as version 1, never re-derived as version 2) or for any
+  // legacy_day draft (a version is only ever meaningful for "block").
+  existingGenerationArchitectureVersion: 1 | 2 | null;
 }
 
 export type StagedGenerationResult = { ok: true } | { ok: false; error: string };
@@ -505,17 +514,90 @@ function hasRemainingCanonicalWeek(blocks: BlockPlan[], startFromWeek: number, t
   return false;
 }
 
+// Phase D: what a genuinely NEW block draft gets today. A resumed
+// draft with an already-persisted version always uses THAT value
+// instead — see runStagedGeneration's own version-resolution comment.
+const CURRENT_BLOCK_GENERATION_VERSION = 2 as const;
+
+// Phase D bounded day-concurrency primitive — adapted from the
+// intra-week concurrency prototype (commit 0e1936f). Reused nearly
+// verbatim: the primitive itself was sound (order-preserving, strictly
+// bounded, empty/limit-exceeds-count/limit=1 edge cases all correct —
+// see its own unit tests) and was never the source of that prototype's
+// quality regression (duplicate-main-lift warnings 6->24). That
+// regression came from applying concurrency with NO shared sibling
+// intent at all (each day saw only "whatever completed in an EARLIER
+// batch," nothing about days running in the SAME batch) — Phase D's
+// actual fix is blueprint.ts providing that intent before any day
+// call starts, not a different concurrency mechanism. `fn` is expected
+// to internally catch/represent failure as data (every provider call
+// in this codebase already returns a discriminated result, never
+// throws) — a real thrown exception still propagates, by design (see
+// the prototype's own test: "callers are expected to catch inside fn,
+// not rely on this").
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+// Default kept identical to the prototype's own already-staging-
+// validated default (5) — see this function's own header for why: a
+// <=5-day/week program (the common case) dispatches its whole
+// canonical week in ONE batch. PROGRAM_GENERATOR_DAY_CONCURRENCY
+// overrides it — same ops-escape-hatch pattern as PROGRAM_GENERATOR_
+// TIMEOUT_MS/PROGRAM_GENERATOR_TIME_BUDGET_MS; set to 1 to force fully
+// serial canonical-day generation without a code change.
+const DEFAULT_DAY_CONCURRENCY = 5;
+
+export function resolveDayConcurrency(): number {
+  const raw = process.env.PROGRAM_GENERATOR_DAY_CONCURRENCY;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : DEFAULT_DAY_CONCURRENCY;
+}
+
 // Shared by the shell- and day-failure branches below. Never lets a
 // release-path DB error crash the actual failure-handling flow it's
 // called from — logs its own outcome and returns whether release
 // actually fired, for the failure log's quotaReleased field.
-async function releaseQuotaOnTimeout(
+// Phase D economic-semantics review finding: with concurrent day
+// batches, a single timing-out call no longer means "this invocation
+// produced zero usable output" — four siblings in the same batch may
+// have succeeded and already been persisted. Refunding unconditionally
+// on any timeout (the original rule) would give the coach the quota
+// unit back for free after the invocation did real, kept work.
+// hasMadeProgressThisInvocation (true the moment ANY day, in either
+// the legacy serial loop or the Phase D concurrent batch loop,
+// succeeds THIS invocation) makes the refund rule "zero net progress,"
+// not "this one call happened to time out" — the same underlying
+// principle the original rule already used (only refund when the
+// invocation produced truly nothing), now scoped correctly for a batch
+// that can partially succeed. Applied uniformly to both the day loops
+// AND the shell-failure branch (shell failing is always the very first
+// thing an invocation attempts, so hasMadeProgressThisInvocation is
+// always false there regardless — this doesn't change shell-failure
+// refund behavior at all, only day-failure behavior).
+export async function releaseQuotaOnTimeout(
   errorCode: string,
   claimId: string | undefined,
   draftId: string,
   runId: string,
+  hasMadeProgressThisInvocation: boolean,
 ): Promise<boolean> {
-  if (errorCode !== "timeout" || !claimId) return false;
+  if (errorCode !== "timeout" || !claimId || hasMadeProgressThisInvocation) return false;
   try {
     await releaseGenerationQuotaClaim(claimId);
     logQuotaRelease({ draftId, runId, reason: "provider_timeout", success: true });
@@ -632,11 +714,22 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     }
   }
 
+  // Phase D: version only ever matters for "block" — mirrors
+  // architecture's own case-1/case-3 resolution exactly (case 2,
+  // isResume with null architecture, forces legacy_day above and never
+  // reaches here with architecture==="block", so there is no
+  // "isResume forces version 1" branch to write here at all — it's
+  // structurally unreachable, not omitted).
+  let blockGenerationVersion: 1 | 2 | null = null;
+  if (architecture === "block") {
+    blockGenerationVersion = params.existingGenerationArchitectureVersion ?? CURRENT_BLOCK_GENERATION_VERSION;
+  }
+
   if (!params.existingGenerationArchitecture) {
     // First time this draft has ever made this decision — persist the
     // FINAL value (post block-plan-derivation-failure fallback, if any)
     // so it is honored, not re-derived, on every later call.
-    await saveGenerationArchitecture(params.draftId, architecture);
+    await saveGenerationArchitecture(params.draftId, architecture, blockGenerationVersion ?? undefined);
   }
 
   // ── Rate-limit gate — only consulted when this attempt will actually
@@ -682,6 +775,13 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
 
   let lastProvider = "vercel-ai-gateway";
   let lastModel = "unknown";
+  // Phase D quota-refund rule — see releaseQuotaOnTimeout's own
+  // comment. Incremented on every day that succeeds THIS invocation,
+  // in either the legacy serial loop or the Phase D concurrent batch
+  // loop — never reset mid-invocation, never counts a day that was
+  // already completed by an EARLIER invocation (those are read from
+  // completedDaysThisWeek/existingCompletedWeeks, not this counter).
+  let daysCompletedThisInvocation = 0;
 
   // ── Step 1: shell (skipped on a resume that already has one) ──
   let shell = params.existingShell;
@@ -693,7 +793,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
       // a definitive timeout produced zero usable output — the coach's
       // quota shouldn't be charged for infrastructure aborting its own
       // call. Every other errorCode still counts.
-      const quotaReleased = await releaseQuotaOnTimeout(shellOutcome.errorCode, claimId, params.draftId, run.id);
+      const quotaReleased = await releaseQuotaOnTimeout(shellOutcome.errorCode, claimId, params.draftId, run.id, daysCompletedThisInvocation > 0);
       logGenerationFailure({
         draftId: params.draftId,
         runId: run.id,
@@ -916,123 +1016,318 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
       }
     }
 
-    for (let dayIndex = dayStartIndex; dayIndex <= shell.days.length; dayIndex++) {
-      const shellDay = shell.days[dayIndex - 1];
-
-      // Time-budget guard (see GENERATION_TIME_BUDGET_MS's comment
-      // above): stop BEFORE starting a day call that risks running
-      // past Vercel Hobby's hard 300s function-duration ceiling,
-      // rather than letting the platform kill this invocation mid-call
-      // with no chance to persist a clean, resumable state. Completed
-      // days so far are already saved; this is a deliberate, safe
-      // pause, not an error — it reuses the exact same failed+
-      // resumable shape a real failure would, so resumeGenerationAction's
-      // existing skip-completed-work resume logic picks up exactly
-      // here with zero new state machinery. Phase 13's UI framing
-      // ("Progress saved. Continue generation to resume from...") is
-      // deliberately reflected in this wording, not "Generation Failed."
-      if (Date.now() - runStartedAt + dayTimeoutMs > timeBudgetMs) {
-        const failureReason = `Progress saved. Continue generation to resume from Week ${weekNumber}, Day ${dayIndex} ("${shellDay.label}").`;
-        await failRun(run.id, "Time budget reached before starting the next day — safe to resume.");
-        await setDraftStatus(params.draftId, "failed", { failureReason });
-        return { ok: false, error: failureReason };
-      }
-
-      await updateRunProgress(run.id, { currentWeek: weekNumber, currentDay: dayIndex });
-
-      const priorSameDay = priorWeekDaysByIndex.get(dayIndex);
-      const priorSameDaySummary = priorSameDay ? summarizeDayForPrompt(priorSameDay) : null;
-      // P1 review finding: give this day visibility into what OTHER
-      // days already generated earlier in the SAME week — without it,
-      // five individually-reasonable days can combine into an
-      // uncoordinated week (week-cross-day-validation.ts catches what
-      // still gets through after this).
-      const weekSoFarSummary = summarizeWeekSoFarForPrompt(completedDaysThisWeek, candidatesById);
-
-      // Never let the model choose which muscles matter for a day —
-      // see exercise-candidates.ts's narrowCandidatesForDay() header
-      // comment. Computed fresh per day (pure, in-memory, no DB call).
-      const dayCandidates = narrowCandidatesForDay(candidateSet, shellDay, params.brief.musclePriorities);
-
-      const dayOutcome = await generateProgramDay({
-        brief: params.brief,
-        clientContext: params.clientContext,
-        shell,
-        weekNumber,
-        dayIndex,
-        shellDay,
-        priorSameDaySummary,
-        weekSoFarSummary,
-        candidates: dayCandidates,
-      });
-
-      if (!dayOutcome.ok) {
-        const quotaReleased = await releaseQuotaOnTimeout(dayOutcome.errorCode, claimId, params.draftId, run.id);
+    if (architecture === "block" && blockGenerationVersion === 2) {
+      // ── Phase D: blueprint-guided, bounded-concurrency canonical
+      // week. blockLookup is guaranteed non-null here: architecture
+      // === "block" and this week is NOT the expansion branch above
+      // (that always `continue`s), so this is necessarily a canonical
+      // week within a real block. ──
+      const blueprint = deriveCanonicalWeekBlueprint(blockLookup!.block, shell.days, params.brief.experienceLevel);
+      const blueprintValidation = validateCanonicalWeekBlueprint(blueprint, shell.days, params.brief.experienceLevel);
+      if (!blueprintValidation.ok) {
         logGenerationFailure({
           draftId: params.draftId,
           runId: run.id,
-          stage: "day",
+          stage: "week_assembly",
           weekNumber,
-          dayNumber: dayIndex,
-          errorCode: dayOutcome.errorCode,
-          errorMessage: dayOutcome.errorMessage,
-          provider: dayOutcome.provider,
-          model: dayOutcome.model,
-          elapsedMs: dayOutcome.elapsedMs,
-          timeoutMs: dayOutcome.timeoutMs,
+          errorCode: "invalid_output",
+          errorMessage: blueprintValidation.error,
+          provider: lastProvider,
+          model: lastModel,
           isRetryOrResume: params.isResume,
-          completedDays: completedDaysThisWeek.size,
           completedWeeks: allWeeks.size,
-          candidateCount: dayCandidates.length,
-          quotaClaimed: !!claimId,
-          quotaReleased,
         });
-        await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
-          status: "failed",
-          errorCode: dayOutcome.errorCode,
-          errorMessage: dayOutcome.errorMessage,
-          provider: dayOutcome.provider,
-          model: dayOutcome.model,
-        });
-        await failRun(run.id, dayOutcome.errorMessage, { provider: dayOutcome.provider, model: dayOutcome.model });
-        const failureReason = `Generation failed while creating Week ${weekNumber}, Day ${dayIndex} ("${shellDay.label}"). Completed days were saved — you can retry to continue from here.`;
+        await failRun(run.id, blueprintValidation.error, { provider: lastProvider, model: lastModel });
+        const failureReason = "Generation could not be assembled. Please retry.";
         await setDraftStatus(params.draftId, "failed", { failureReason });
         return { ok: false, error: failureReason };
       }
-      logProviderSuccess({
-        draftId: params.draftId,
-        stage: "day",
-        weekNumber,
-        dayNumber: dayIndex,
-        provider: dayOutcome.provider,
-        model: dayOutcome.model,
-        elapsedMs: dayOutcome.elapsedMs,
-        candidateCount: dayCandidates.length,
-      });
 
-      // Never trust a returned exerciseId merely because the model
-      // supplied one — verify every prescription's id against the
-      // EXACT (narrowed) candidate set offered for this call before
-      // persisting. Anything that doesn't verify has its id stripped
-      // back to name-only, which exercise-resolution.ts's fallback
-      // resolver covers at final assembly time.
-      const { result: verifiedDay } = verifyDayAgainstCandidates(dayOutcome.day, dayCandidates);
-      const alignedDay = alignDayToShellDay(verifiedDay, shellDay);
-      // See assignCanonicalDayId's own comment — this is the one call
-      // site, the one moment a day is first persisted as "completed".
-      const canonicalDay = assignCanonicalDayId(alignedDay);
+      const dayConcurrency = resolveDayConcurrency();
+      // Review finding (caught by real staging testing, not by unit
+      // tests): under CONCURRENT batching, a batch's outcomes can be
+      // non-contiguous — e.g. days 3/4/5 dispatched together, day 3
+      // times out, days 4/5 succeed — unlike the legacy serial loop,
+      // where a failure always stops at a contiguous prefix by
+      // construction (nothing after a failure is ever attempted in the
+      // same invocation). A resume's dayStartIndex is only the FIRST
+      // missing day, never a guarantee that every later index is ALSO
+      // missing — completedDaysThisWeek (already populated above from
+      // real persisted rows) is the source of truth for "is this day
+      // actually done," and every index already in it must be excluded
+      // here or it gets sent to the provider again, silently repeating
+      // already-successful expensive work.
+      const remainingDayIndexes: number[] = [];
+      for (let d = dayStartIndex; d <= shell.days.length; d++) {
+        if (!completedDaysThisWeek.has(d)) remainingDayIndexes.push(d);
+      }
 
-      await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
-        status: "completed",
-        dayJson: canonicalDay,
-        provider: dayOutcome.provider,
-        model: dayOutcome.model,
-      });
-      completedDaysThisWeek.set(dayIndex, canonicalDay);
-      lastProvider = dayOutcome.provider;
-      lastModel = dayOutcome.model;
+      for (let batchStart = 0; batchStart < remainingDayIndexes.length; batchStart += dayConcurrency) {
+        const batchIndexes = remainingDayIndexes.slice(batchStart, batchStart + dayConcurrency);
 
-      await updateRunProgress(run.id, { completedDays: completedDaysThisWeek.size });
+        // Time-budget guard, batch-scoped: every call in a batch runs
+        // CONCURRENTLY, so the batch's worst-case wall-clock is still
+        // just one day's timeout, never the sum — same principle as
+        // the legacy per-day guard below, applied once per batch
+        // instead of once per call. See DEFAULT_GENERATION_TIME_BUDGET_MS's
+        // own comment for the ceiling this budgets against.
+        if (Date.now() - runStartedAt + dayTimeoutMs > timeBudgetMs) {
+          const firstDay = batchIndexes[0];
+          const firstShellDay = shell.days[firstDay - 1];
+          const failureReason = `Progress saved. Continue generation to resume from Week ${weekNumber}, Day ${firstDay} ("${firstShellDay.label}").`;
+          await failRun(run.id, "Time budget reached before starting the next canonical-day batch — safe to resume.");
+          await setDraftStatus(params.draftId, "failed", { failureReason });
+          return { ok: false, error: failureReason };
+        }
+
+        await updateRunProgress(run.id, { currentWeek: weekNumber, currentDay: batchIndexes[0] });
+
+        // Computed once per batch — days within the SAME batch run
+        // concurrently and cannot see each other's in-flight output
+        // (there is nothing sound to give them here; that's exactly
+        // why blueprint.ts's pre-computed sibling-allocation intent
+        // exists — see generateProgramDay's blueprintIntent argument
+        // below). This still reflects everything completed in EARLIER
+        // batches/invocations this week, unaffected.
+        const weekSoFarSummary = summarizeWeekSoFarForPrompt(completedDaysThisWeek, candidatesById);
+
+        const batchResults = await mapWithConcurrency(batchIndexes, dayConcurrency, async (dayIndex) => {
+          const shellDay = shell.days[dayIndex - 1];
+          const daySlot = blueprint.days.find((d) => d.dayOfWeek === shellDay.dayOfWeek) ?? null;
+          const priorSameDay = priorWeekDaysByIndex.get(dayIndex);
+          const priorSameDaySummary = priorSameDay ? summarizeDayForPrompt(priorSameDay) : null;
+          const dayCandidates = narrowCandidatesForDay(candidateSet, shellDay, params.brief.musclePriorities);
+          const dayOutcome = await generateProgramDay({
+            brief: params.brief,
+            clientContext: params.clientContext,
+            shell,
+            weekNumber,
+            dayIndex,
+            shellDay,
+            priorSameDaySummary,
+            weekSoFarSummary,
+            candidates: dayCandidates,
+            blueprintIntent: daySlot
+              ? {
+                  primaryPatternEmphasis: daySlot.primaryPatternEmphasis,
+                  techniqueEligibility: daySlot.techniqueEligibility,
+                  siblingAllocationSummary: summarizeSiblingAllocationsForPrompt(blueprint, shellDay.dayOfWeek),
+                }
+              : null,
+          });
+          return { dayIndex, shellDay, dayCandidates, dayOutcome };
+        });
+
+        // Persist EVERY result in the batch — success or failure —
+        // before deciding whether to stop. A sibling call failing must
+        // never cost the coach a provider call that already succeeded:
+        // every completed day in this batch is saved exactly like a
+        // serial success would be, regardless of what else in the same
+        // batch failed (see mapWithConcurrency's own header for why
+        // this is safe: generateProgramDay never throws for an
+        // ordinary provider failure, it returns one).
+        let batchFailure: { dayIndex: number; shellDay: ProgramShellDay; errorMessage: string } | null = null;
+        for (const { dayIndex, shellDay, dayCandidates, dayOutcome } of batchResults) {
+          if (!dayOutcome.ok) {
+            const quotaReleased = await releaseQuotaOnTimeout(
+              dayOutcome.errorCode,
+              claimId,
+              params.draftId,
+              run.id,
+              daysCompletedThisInvocation > 0,
+            );
+            logGenerationFailure({
+              draftId: params.draftId,
+              runId: run.id,
+              stage: "day",
+              weekNumber,
+              dayNumber: dayIndex,
+              errorCode: dayOutcome.errorCode,
+              errorMessage: dayOutcome.errorMessage,
+              provider: dayOutcome.provider,
+              model: dayOutcome.model,
+              elapsedMs: dayOutcome.elapsedMs,
+              timeoutMs: dayOutcome.timeoutMs,
+              isRetryOrResume: params.isResume,
+              completedDays: completedDaysThisWeek.size,
+              completedWeeks: allWeeks.size,
+              candidateCount: dayCandidates.length,
+              quotaClaimed: !!claimId,
+              quotaReleased,
+            });
+            await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
+              status: "failed",
+              errorCode: dayOutcome.errorCode,
+              errorMessage: dayOutcome.errorMessage,
+              provider: dayOutcome.provider,
+              model: dayOutcome.model,
+            });
+            // First failure encountered wins (deterministic — batchResults
+            // preserves batchIndexes' order, not completion order); every
+            // OTHER result in the batch still gets persisted by this
+            // same loop before the function returns below.
+            if (!batchFailure) batchFailure = { dayIndex, shellDay, errorMessage: dayOutcome.errorMessage };
+            continue;
+          }
+          logProviderSuccess({
+            draftId: params.draftId,
+            stage: "day",
+            weekNumber,
+            dayNumber: dayIndex,
+            provider: dayOutcome.provider,
+            model: dayOutcome.model,
+            elapsedMs: dayOutcome.elapsedMs,
+            candidateCount: dayCandidates.length,
+          });
+
+          const { result: verifiedDay } = verifyDayAgainstCandidates(dayOutcome.day, dayCandidates);
+          const alignedDay = alignDayToShellDay(verifiedDay, shellDay);
+          const canonicalDay = assignCanonicalDayId(alignedDay);
+
+          await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
+            status: "completed",
+            dayJson: canonicalDay,
+            provider: dayOutcome.provider,
+            model: dayOutcome.model,
+          });
+          completedDaysThisWeek.set(dayIndex, canonicalDay);
+          lastProvider = dayOutcome.provider;
+          lastModel = dayOutcome.model;
+          daysCompletedThisInvocation++;
+        }
+
+        await updateRunProgress(run.id, { completedDays: completedDaysThisWeek.size });
+
+        if (batchFailure) {
+          await failRun(run.id, batchFailure.errorMessage, { provider: lastProvider, model: lastModel });
+          const failureReason = `Generation failed while creating Week ${weekNumber}, Day ${batchFailure.dayIndex} ("${batchFailure.shellDay.label}"). Completed days were saved — you can retry to continue from here.`;
+          await setDraftStatus(params.draftId, "failed", { failureReason });
+          return { ok: false, error: failureReason };
+        }
+      }
+    } else {
+      // ── legacy_day architecture, AND a Phase C (version 1) block
+      // draft's canonical week — fully serial, byte-for-byte the
+      // original day-by-day mechanism. Never touched by Phase D. ──
+      for (let dayIndex = dayStartIndex; dayIndex <= shell.days.length; dayIndex++) {
+        const shellDay = shell.days[dayIndex - 1];
+
+        // Time-budget guard (see GENERATION_TIME_BUDGET_MS's comment
+        // above): stop BEFORE starting a day call that risks running
+        // past Vercel Hobby's hard 300s function-duration ceiling,
+        // rather than letting the platform kill this invocation mid-call
+        // with no chance to persist a clean, resumable state. Completed
+        // days so far are already saved; this is a deliberate, safe
+        // pause, not an error — it reuses the exact same failed+
+        // resumable shape a real failure would, so resumeGenerationAction's
+        // existing skip-completed-work resume logic picks up exactly
+        // here with zero new state machinery. Phase 13's UI framing
+        // ("Progress saved. Continue generation to resume from...") is
+        // deliberately reflected in this wording, not "Generation Failed."
+        if (Date.now() - runStartedAt + dayTimeoutMs > timeBudgetMs) {
+          const failureReason = `Progress saved. Continue generation to resume from Week ${weekNumber}, Day ${dayIndex} ("${shellDay.label}").`;
+          await failRun(run.id, "Time budget reached before starting the next day — safe to resume.");
+          await setDraftStatus(params.draftId, "failed", { failureReason });
+          return { ok: false, error: failureReason };
+        }
+
+        await updateRunProgress(run.id, { currentWeek: weekNumber, currentDay: dayIndex });
+
+        const priorSameDay = priorWeekDaysByIndex.get(dayIndex);
+        const priorSameDaySummary = priorSameDay ? summarizeDayForPrompt(priorSameDay) : null;
+        // P1 review finding: give this day visibility into what OTHER
+        // days already generated earlier in the SAME week — without it,
+        // five individually-reasonable days can combine into an
+        // uncoordinated week (week-cross-day-validation.ts catches what
+        // still gets through after this).
+        const weekSoFarSummary = summarizeWeekSoFarForPrompt(completedDaysThisWeek, candidatesById);
+
+        // Never let the model choose which muscles matter for a day —
+        // see exercise-candidates.ts's narrowCandidatesForDay() header
+        // comment. Computed fresh per day (pure, in-memory, no DB call).
+        const dayCandidates = narrowCandidatesForDay(candidateSet, shellDay, params.brief.musclePriorities);
+
+        const dayOutcome = await generateProgramDay({
+          brief: params.brief,
+          clientContext: params.clientContext,
+          shell,
+          weekNumber,
+          dayIndex,
+          shellDay,
+          priorSameDaySummary,
+          weekSoFarSummary,
+          candidates: dayCandidates,
+        });
+
+        if (!dayOutcome.ok) {
+          const quotaReleased = await releaseQuotaOnTimeout(dayOutcome.errorCode, claimId, params.draftId, run.id, daysCompletedThisInvocation > 0);
+          logGenerationFailure({
+            draftId: params.draftId,
+            runId: run.id,
+            stage: "day",
+            weekNumber,
+            dayNumber: dayIndex,
+            errorCode: dayOutcome.errorCode,
+            errorMessage: dayOutcome.errorMessage,
+            provider: dayOutcome.provider,
+            model: dayOutcome.model,
+            elapsedMs: dayOutcome.elapsedMs,
+            timeoutMs: dayOutcome.timeoutMs,
+            isRetryOrResume: params.isResume,
+            completedDays: completedDaysThisWeek.size,
+            completedWeeks: allWeeks.size,
+            candidateCount: dayCandidates.length,
+            quotaClaimed: !!claimId,
+            quotaReleased,
+          });
+          await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
+            status: "failed",
+            errorCode: dayOutcome.errorCode,
+            errorMessage: dayOutcome.errorMessage,
+            provider: dayOutcome.provider,
+            model: dayOutcome.model,
+          });
+          await failRun(run.id, dayOutcome.errorMessage, { provider: dayOutcome.provider, model: dayOutcome.model });
+          const failureReason = `Generation failed while creating Week ${weekNumber}, Day ${dayIndex} ("${shellDay.label}"). Completed days were saved — you can retry to continue from here.`;
+          await setDraftStatus(params.draftId, "failed", { failureReason });
+          return { ok: false, error: failureReason };
+        }
+        logProviderSuccess({
+          draftId: params.draftId,
+          stage: "day",
+          weekNumber,
+          dayNumber: dayIndex,
+          provider: dayOutcome.provider,
+          model: dayOutcome.model,
+          elapsedMs: dayOutcome.elapsedMs,
+          candidateCount: dayCandidates.length,
+        });
+
+        // Never trust a returned exerciseId merely because the model
+        // supplied one — verify every prescription's id against the
+        // EXACT (narrowed) candidate set offered for this call before
+        // persisting. Anything that doesn't verify has its id stripped
+        // back to name-only, which exercise-resolution.ts's fallback
+        // resolver covers at final assembly time.
+        const { result: verifiedDay } = verifyDayAgainstCandidates(dayOutcome.day, dayCandidates);
+        const alignedDay = alignDayToShellDay(verifiedDay, shellDay);
+        // See assignCanonicalDayId's own comment — this is the one call
+        // site, the one moment a day is first persisted as "completed".
+        const canonicalDay = assignCanonicalDayId(alignedDay);
+
+        await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
+          status: "completed",
+          dayJson: canonicalDay,
+          provider: dayOutcome.provider,
+          model: dayOutcome.model,
+        });
+        completedDaysThisWeek.set(dayIndex, canonicalDay);
+        lastProvider = dayOutcome.provider;
+        lastModel = dayOutcome.model;
+        daysCompletedThisInvocation++;
+
+        await updateRunProgress(run.id, { completedDays: completedDaysThisWeek.size });
+      }
     }
 
     // ── Week assembly — deterministic, no model call. Every downstream

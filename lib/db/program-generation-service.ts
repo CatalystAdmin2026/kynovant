@@ -243,11 +243,20 @@ export async function saveProgramShell(draftId: string, shell: ProgramShell): Pr
 // the migration's own header for why a re-derivation can't reliably
 // tell a block-architecture canonical week from an ordinary legacy
 // week once either is persisted.
-export async function saveGenerationArchitecture(draftId: string, architecture: "block" | "legacy_day"): Promise<void> {
+// Phase D: `version` is only ever meaningful alongside architecture
+// "block" (1 = Phase C serial canonical, 2 = Phase D blueprint+
+// concurrent canonical) — see drizzle/0038's own header and the DB
+// CHECK constraint mirrored in schema-program-generator.ts, which
+// rejects a non-null version paired with "legacy_day" outright.
+export async function saveGenerationArchitecture(
+  draftId: string,
+  architecture: "block" | "legacy_day",
+  version?: 1 | 2,
+): Promise<void> {
   const db = getDb();
   await db
     .update(programGenerationDrafts)
-    .set({ generationArchitecture: architecture, updatedAt: new Date() })
+    .set({ generationArchitecture: architecture, generationArchitectureVersion: version ?? null, updatedAt: new Date() })
     .where(eq(programGenerationDrafts.id, draftId));
 }
 
