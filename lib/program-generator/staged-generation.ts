@@ -34,12 +34,40 @@
 // how a week's content gets produced changed, not how it's stored once
 // complete. See runStagedGeneration()'s own comments for the per-step
 // detail.
+//
+// Phase C (Programming Intelligence block-based generation): for the
+// six Phase A/B-supported goals (see strategy.ts's
+// isPhaseBlockSupportedGoal — athletic_performance stays on this file's
+// original day-by-day path unconditionally, no partial application),
+// a genuinely FRESH draft (no persisted shell, no completed weeks yet
+// — see resolveGenerationArchitecture in block-plan.ts) derives a
+// BlockPlan[] once from the brief alone and generates ONLY each
+// block's CANONICAL (first) week via the exact same AI day-by-day
+// mechanism above; every other week in that block is produced by a
+// single, synchronous, zero-provider-call expandCanonicalWeek() call
+// (lib/program-generator/progression.ts, Phase B) instead of a day
+// loop. No new persistence exists for any of this: a BlockPlan[] is
+// 100% deterministically re-derivable from the brief on every resume,
+// and which weeks are already complete is read from the SAME
+// program_generation_weeks rows this file has always used — resume
+// naturally never re-expands an already-persisted deterministic week
+// for exactly the same reason it's never re-generated an already-
+// persisted AI week: both are gated by the same existingCompletedWeeks
+// map. A draft with ANY existing progress (a persisted shell, or any
+// completed week, from before this integration existed or from any
+// earlier attempt) unconditionally stays on the original day-by-day
+// path forever, regardless of goal — see resolveGenerationArchitecture's
+// own header for why this is what protects a draft like production
+// draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a ("Maddie": shell exists,
+// weeks 1-2 completed) with zero goal-based branching and zero new
+// persisted "architecture" flag.
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
 import { randomUUID } from "crypto";
 import {
   saveProgramShell,
+  saveGenerationArchitecture,
   saveGenerationDay,
   listGenerationDaysForWeek,
   saveGenerationWeek,
@@ -69,6 +97,8 @@ import {
   type ExerciseCandidateSet,
 } from "./exercise-candidates";
 import { findDayUnique, replaceDayContent } from "./edit-ops";
+import { deriveBlockPlans, findBlockForWeek, resolveGenerationArchitecture, type BlockPlan, type GenerationArchitecture } from "./block-plan";
+import { expandCanonicalWeek } from "./progression";
 import {
   parseGeneratedProgramDraft,
   ModelWeekDraftSchema,
@@ -384,6 +414,15 @@ export interface StagedGenerationParams {
   // Observability-only (isRetryOrResume on the structured failure log)
   // — never affects generation behavior itself.
   isResume: boolean;
+  // Phase C: the draft's OWN persisted generationArchitecture column
+  // (drizzle/0036), read by the caller from the draft row exactly like
+  // existingShell/existingCompletedWeeks — null for a genuinely fresh
+  // draft that has never made this decision yet. Once non-null, this
+  // function ALWAYS honors it rather than re-deriving from existing
+  // progress — see resolveGenerationArchitecture's own header for why a
+  // re-derivation can't reliably tell a block-architecture canonical
+  // week from an ordinary legacy week once either is persisted.
+  existingGenerationArchitecture: GenerationArchitecture | null;
 }
 
 export type StagedGenerationResult = { ok: true } | { ok: false; error: string };
@@ -426,6 +465,17 @@ export function resolveGenerationTimeBudgetMs(): number {
   const raw = process.env.PROGRAM_GENERATOR_TIME_BUDGET_MS;
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GENERATION_TIME_BUDGET_MS;
+}
+
+// Phase C quota-gate helper: true if ANY week in [startFromWeek,
+// totalWeeks] is a block's canonical week — the only kind of week that
+// ever invokes the model under block architecture. Pure, no DB/network.
+function hasRemainingCanonicalWeek(blocks: BlockPlan[], startFromWeek: number, totalWeeks: number): boolean {
+  for (let weekNumber = startFromWeek; weekNumber <= totalWeeks; weekNumber++) {
+    const lookup = findBlockForWeek(blocks, weekNumber);
+    if (lookup?.isCanonicalWeek) return true;
+  }
+  return false;
 }
 
 // Shared by the shell- and day-failure branches below. Never lets a
@@ -494,14 +544,67 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     return { ok: false, error: failureReason };
   }
 
+  // ── Phase C: legacy-vs-block architecture routing.
+  //
+  // If this draft already has a persisted decision (drizzle/0036's
+  // generationArchitecture column, read by the caller and passed in),
+  // it is ALWAYS honored as-is — never re-derived. A block-architecture
+  // canonical week and an ordinary legacy week are produced by the
+  // identical AI day-by-day mechanism and are byte-for-byte
+  // indistinguishable once persisted, so re-deriving from "does this
+  // draft have any existing progress" on a resume would incorrectly
+  // kick an in-progress BLOCK draft back to legacy_day the moment it
+  // has completed even one week — exactly the review finding this
+  // column exists to fix.
+  //
+  // Only a genuinely fresh draft (existingGenerationArchitecture still
+  // null) makes this decision now, via resolveGenerationArchitecture's
+  // "any existing progress -> legacy_day, unconditionally" rule — see
+  // its own header (block-plan.ts) — and persists it immediately below
+  // so every later call for this SAME draft reads it back instead.
+  let architecture: GenerationArchitecture;
+  let blocks: BlockPlan[] = [];
+  if (params.existingGenerationArchitecture) {
+    architecture = params.existingGenerationArchitecture;
+  } else {
+    const hasAnyExistingProgress = params.existingShell !== null || params.existingCompletedWeeks.size > 0;
+    architecture = resolveGenerationArchitecture({ goal: params.brief.goal, hasAnyExistingProgress });
+  }
+
+  if (architecture === "block") {
+    const blockPlanResult = deriveBlockPlans(params.brief.goal, params.brief.experienceLevel, params.brief.weeks);
+    if (blockPlanResult.ok) {
+      blocks = blockPlanResult.blocks;
+    } else {
+      // Never let an internal block-plan derivation error break
+      // generation for a goal that would otherwise work fine on the
+      // original path — fall back rather than fail the whole attempt.
+      // Not expected to ever actually trigger (see deriveBlockPlans's
+      // own closing invariant check), but this keeps a defensive bug
+      // there from becoming a customer-facing generation failure here.
+      architecture = "legacy_day";
+    }
+  }
+
+  if (!params.existingGenerationArchitecture) {
+    // First time this draft has ever made this decision — persist the
+    // FINAL value (post block-plan-derivation-failure fallback, if any)
+    // so it is honored, not re-derived, on every later call.
+    await saveGenerationArchitecture(params.draftId, architecture);
+  }
+
   // ── Rate-limit gate — only consulted when this attempt will actually
   // reach the model. A fresh generation always will (no existingShell).
-  // A resume only will if there's still a shell to generate, or at
-  // least one (week, day) pair from (startFromWeek, startFromDay)
-  // through the end of the program left uncompleted — a resume whose
-  // shell and every day already completed (only finalization failed
-  // last time) makes zero provider calls below and must not consume
-  // the coach's quota for retrying it. One claim per top-level action
+  // A resume only will if there's still a shell to generate, or —
+  // legacy_day: at least one (week, day) pair from (startFromWeek,
+  // startFromDay) through the end of the program left uncompleted;
+  // block: at least one remaining week in that same range is a block's
+  // CANONICAL week (an expanded week never itself invokes the model,
+  // so a resume with only expanded weeks left must not claim quota) —
+  // a resume whose shell and every AI-authored week already completed
+  // (only finalization, or only deterministic expansion, failed last
+  // time) makes zero provider calls below and must not consume the
+  // coach's quota for retrying it. One claim per top-level action
   // regardless of how many internal day calls it makes — see
   // claimGenerationQuota's own doc comment in program-generation-
   // service.ts for the full reasoning and chosen limit. Internal day
@@ -510,8 +613,10 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   const totalWeeksForRun = params.existingShell?.totalWeeks ?? params.brief.weeks;
   const willInvokeModel =
     !params.existingShell ||
-    params.startFromWeek < totalWeeksForRun ||
-    (params.startFromWeek === totalWeeksForRun && params.startFromDay <= params.existingShell.days.length);
+    (architecture === "legacy_day"
+      ? params.startFromWeek < totalWeeksForRun ||
+        (params.startFromWeek === totalWeeksForRun && params.startFromDay <= params.existingShell.days.length)
+      : hasRemainingCanonicalWeek(blocks, params.startFromWeek, totalWeeksForRun));
 
   // claimId is undefined when this attempt makes zero model calls
   // (the "resume whose shell + every day already completed" case) —
@@ -601,6 +706,118 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   const crossDayFindings: ValidationFinding[] = [];
 
   for (let weekNumber = params.startFromWeek; weekNumber <= shell.totalWeeks; weekNumber++) {
+    // ── Phase C: deterministic block expansion — no provider call, no
+    // day loop. Only reachable under block architecture, and only for
+    // a week that is NOT its block's canonical (first) week. A block's
+    // canonical week always falls through to the exact same AI
+    // day-by-day path every legacy_day week uses (see the `if` below
+    // simply not matching for it) — this branch exists purely to skip
+    // that path for the weeks Phase B is responsible for instead. ──
+    const blockLookup = architecture === "block" ? findBlockForWeek(blocks, weekNumber) : null;
+    if (architecture === "block" && blockLookup && !blockLookup.isCanonicalWeek) {
+      // Lightweight time-budget guard: expansion is CPU-only (no
+      // network I/O), but this still bounds unbounded DB-write latency
+      // accumulating across many expanded weeks in one invocation,
+      // leaving a clean, resumable state rather than risking Vercel's
+      // hard function-duration ceiling (see DEFAULT_GENERATION_TIME_BUDGET_MS's
+      // own comment above for the ceiling this budgets against).
+      if (Date.now() - runStartedAt > timeBudgetMs) {
+        const failureReason = `Progress saved. Continue generation to resume from Week ${weekNumber}.`;
+        await failRun(run.id, "Time budget reached before starting the next deterministic week expansion — safe to resume.");
+        await setDraftStatus(params.draftId, "failed", { failureReason });
+        return { ok: false, error: failureReason };
+      }
+
+      await updateRunProgress(run.id, { currentWeek: weekNumber });
+
+      // Guaranteed present by construction: a block's canonical week
+      // (the smallest weekNumber in the block) is always processed —
+      // fresh this run, or already persisted from an earlier attempt
+      // and supplied via params.existingCompletedWeeks — before any of
+      // that SAME block's later weeks are ever reached, since this
+      // loop only ever moves forward in weekNumber order. Kept as an
+      // explicit, named failure rather than a non-null assertion in
+      // case that invariant is ever violated by a future change.
+      const canonicalWeekContent = allWeeks.get(blockLookup.block.canonicalWeekNumber);
+      if (!canonicalWeekContent) {
+        const errorMessage =
+          `Missing canonical week ${blockLookup.block.canonicalWeekNumber} content for block ` +
+          `${blockLookup.block.blockNumber} — cannot deterministically expand week ${weekNumber}.`;
+        logGenerationFailure({
+          draftId: params.draftId,
+          runId: run.id,
+          stage: "week_assembly",
+          weekNumber,
+          errorCode: "invalid_output",
+          errorMessage,
+          provider: lastProvider,
+          model: lastModel,
+          isRetryOrResume: params.isResume,
+          completedWeeks: allWeeks.size,
+        });
+        await failRun(run.id, errorMessage, { provider: lastProvider, model: lastModel });
+        const failureReason = "Generation could not be assembled. Please retry.";
+        await setDraftStatus(params.draftId, "failed", { failureReason });
+        return { ok: false, error: failureReason };
+      }
+
+      const expansion = expandCanonicalWeek({
+        canonicalWeek: canonicalWeekContent,
+        progressionStrategy: blockLookup.block.progressionStrategy,
+        phaseType: blockLookup.block.phaseType,
+        experienceLevel: params.brief.experienceLevel,
+        blockWeekIndex: weekNumber - blockLookup.block.weekStart + 1,
+        blockLength: blockLookup.block.blockLength,
+      });
+      if (!expansion.ok) {
+        logGenerationFailure({
+          draftId: params.draftId,
+          runId: run.id,
+          stage: "week_assembly",
+          weekNumber,
+          errorCode: "invalid_output",
+          errorMessage: expansion.error,
+          provider: lastProvider,
+          model: lastModel,
+          isRetryOrResume: params.isResume,
+          completedWeeks: allWeeks.size,
+        });
+        await failRun(run.id, expansion.error, { provider: lastProvider, model: lastModel });
+        const failureReason = "Generation could not be assembled. Please retry.";
+        await setDraftStatus(params.draftId, "failed", { failureReason });
+        return { ok: false, error: failureReason };
+      }
+
+      // Never trust Phase B's output shape merely because it compiled —
+      // validate through the SAME real ModelWeekDraftSchema every
+      // AI-authored week is already checked against before persistence.
+      const parsedExpandedWeek = ModelWeekDraftSchema.safeParse(expansion.week);
+      if (!parsedExpandedWeek.success) {
+        const errorMessage = `Deterministically expanded week ${weekNumber} failed schema validation: ${parsedExpandedWeek.error.message}`;
+        logGenerationFailure({
+          draftId: params.draftId,
+          runId: run.id,
+          stage: "week_assembly",
+          weekNumber,
+          errorCode: "invalid_output",
+          errorMessage,
+          provider: lastProvider,
+          model: lastModel,
+          isRetryOrResume: params.isResume,
+          completedWeeks: allWeeks.size,
+        });
+        await failRun(run.id, errorMessage, { provider: lastProvider, model: lastModel });
+        const failureReason = "Generation could not be assembled. Please retry.";
+        await setDraftStatus(params.draftId, "failed", { failureReason });
+        return { ok: false, error: failureReason };
+      }
+
+      await saveGenerationWeek(params.draftId, weekNumber, { status: "completed", weekJson: parsedExpandedWeek.data });
+      allWeeks.set(weekNumber, parsedExpandedWeek.data);
+      await updateRunProgress(run.id, { completedWeeks: allWeeks.size });
+      continue;
+    }
+
     // Only the FIRST week this invocation touches can have partial
     // day progress from an earlier attempt — every week after that
     // always starts at day 1, by construction (a week is only ever

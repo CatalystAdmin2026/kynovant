@@ -179,6 +179,22 @@ export const programGenerationDrafts = pgTable(
     // same program as week 1. Null until the shell call completes.
     shellJson: jsonb("shell_json"),
 
+    // Phase C (Programming Intelligence block-based generation, drizzle/
+    // 0036): set exactly once — the first time runStagedGeneration()
+    // runs for this draft, while it's still genuinely fresh (no shell,
+    // no completed weeks) — to "block" or "legacy_day"
+    // (lib/program-generator/block-plan.ts's GenerationArchitecture).
+    // Read on every later call (fresh or resume) so the routing
+    // decision never has to be re-derived from existing progress, which
+    // cannot reliably distinguish a block-architecture canonical week
+    // from an ordinary legacy week (both are produced by the identical
+    // AI day-by-day mechanism). NULL on every draft that predates this
+    // migration — those fall back to the original "any existing
+    // progress -> legacy_day" derivation, unconditionally and forever.
+    // App-layer-validated (not a new Postgres enum) — see this
+    // migration's own header for why.
+    generationArchitecture: text("generation_architecture"),
+
     draftJson: jsonb("draft_json"),
     draftVersion: integer("draft_version").notNull().default(0),
 

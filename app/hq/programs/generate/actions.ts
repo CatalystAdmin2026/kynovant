@@ -86,6 +86,7 @@ import {
 } from "@/lib/program-generator/edit-ops";
 import { approveDraft } from "@/lib/program-generator/approval";
 import { runStagedGeneration, runAndSaveValidation, regenerateDaySurgically } from "@/lib/program-generator/staged-generation";
+import { GENERATION_ARCHITECTURES, type GenerationArchitecture } from "@/lib/program-generator/block-plan";
 import { notifyProgramDraftReady, notifyProgramDraftFailed } from "@/lib/db/coach-notification-service";
 import type { DraftValidationResult } from "@/lib/program-generator/validation";
 
@@ -113,6 +114,16 @@ async function requireOwnedDraft(draftId: string) {
   const access = await getOwnedDraft(draftId, actor.scope);
   if (!access.ok) return { ok: false as const, error: access.error === "not_found" ? "Draft not found." : "You do not have access to this draft." };
   return { ok: true as const, coachId: actor.coachId, scope: actor.scope, draft: access.draft };
+}
+
+// drizzle/0036's generation_architecture column is a plain nullable
+// text column (app-layer-validated, not a Postgres enum — see that
+// migration's own header) — narrows the raw DB value to the real
+// GenerationArchitecture union, or null for anything else (every
+// existing row today, and defensively any value this app didn't itself
+// write, rather than trusting the column blindly).
+function parseGenerationArchitecture(value: string | null): GenerationArchitecture | null {
+  return (GENERATION_ARCHITECTURES as readonly string[]).includes(value ?? "") ? (value as GenerationArchitecture) : null;
 }
 
 function revalidateDraft(draftId: string) {
@@ -170,6 +181,9 @@ export async function generateProgramDraftAction(input: {
     startFromWeek: 1,
     startFromDay: 1,
     existingCompletedWeeks: new Map(),
+    // Genuinely fresh draft, just created above — has never made this
+    // decision. runStagedGeneration derives and persists it now.
+    existingGenerationArchitecture: null,
   });
 
   if (result.ok) {
@@ -266,6 +280,7 @@ export async function resumeGenerationAction(draftId: string): Promise<ActionRes
     startFromWeek,
     startFromDay,
     existingCompletedWeeks,
+    existingGenerationArchitecture: parseGenerationArchitecture(auth.draft.generationArchitecture),
   });
 
   if (result.ok) {

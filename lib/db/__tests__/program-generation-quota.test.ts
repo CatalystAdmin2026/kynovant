@@ -349,6 +349,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       startFromWeek: 1,
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
     });
     expect(result.ok).toBe(true);
     expect(await countClaims(coachResume.id)).toBe(before + 1);
@@ -373,6 +374,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       startFromWeek: 1,
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
     });
     expect(result.ok).toBe(true);
     expect(await countClaims(coachResume.id)).toBe(before + 1);
@@ -400,6 +402,7 @@ describe("runStagedGeneration — resume/retry quota accounting", () => {
       startFromWeek: 2, // > shell.totalWeeks (1) — nothing left to generate
       startFromDay: 1,
       existingCompletedWeeks: new Map([[1, week1]]),
+      existingGenerationArchitecture: null,
     });
     expect(result.ok).toBe(true);
     expect(await countClaims(coachResume.id)).toBe(before);

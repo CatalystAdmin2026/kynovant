@@ -1,0 +1,40 @@
+-- ─────────────────────────────────────────────────────────────
+-- Migration 0036 — Persisted generation architecture marker
+--
+-- Programming Intelligence Phase C (block-based generation) review
+-- finding, discovered via real staging integration testing: a fresh
+-- draft's legacy_day-vs-block routing decision was designed to be
+-- 100% re-derivable at resume time from existing state alone ("any
+-- existing progress -> legacy_day, unconditionally" — see
+-- lib/program-generator/block-plan.ts's resolveGenerationArchitecture).
+-- That correctly protects a PRE-Phase-C draft (e.g. production draft
+-- 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a, "Maddie": shell exists, weeks
+-- 1-2 completed) — but it ALSO incorrectly kicks a draft that started
+-- under BLOCK architecture back to legacy_day on its very first
+-- resume, because a block's canonical week is generated via the exact
+-- same AI day-by-day mechanism as a legacy week and is therefore
+-- byte-for-byte indistinguishable from one once persisted. There is no
+-- way to tell "this existing progress came from block architecture's
+-- canonical-week step" from "this existing progress came from legacy_
+-- day architecture" by inspecting week/day content alone.
+--
+-- Fix: one nullable column, set exactly once — the FIRST time
+-- runStagedGeneration() runs for a draft (fresh: no shell, no
+-- completed weeks yet) — and read on every subsequent call (fresh or
+-- resume) to bypass the "any existing progress" heuristic entirely
+-- once a real decision is on record. NULL (every row that predates
+-- this migration, including every currently-in-flight or completed
+-- draft) falls through to the exact same conservative derivation as
+-- before — zero backfill, zero behavior change for any existing draft.
+--
+-- Additive only: nullable, no default beyond the implicit NULL, no
+-- backfill, no constraint tightening on any existing row. Values are
+-- validated at the application layer (block-plan.ts's
+-- GENERATION_ARCHITECTURES) rather than a new Postgres enum type, to
+-- keep this migration to a single, minimal, reversible ALTER TABLE —
+-- consistent with 0035's own "purely additive ALTER TABLE... never by
+-- rewriting an already-shipped migration" precedent.
+-- ─────────────────────────────────────────────────────────────
+
+ALTER TABLE "program_generation_drafts"
+  ADD COLUMN "generation_architecture" text;

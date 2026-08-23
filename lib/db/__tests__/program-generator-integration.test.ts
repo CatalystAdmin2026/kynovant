@@ -45,6 +45,7 @@ import { generateProgramShell, regenerateDayDraft } from "@/lib/program-generato
 import { buildFixtureProgramShell, buildFixtureProgramWeek, buildFixtureProgramDay } from "@/lib/program-generator/fixture";
 import { runStagedGeneration } from "@/lib/program-generator/staged-generation";
 import { buildExerciseCandidateSet } from "@/lib/program-generator/exercise-candidates";
+import { deriveBlockPlans, findBlockForWeek } from "@/lib/program-generator/block-plan";
 import { summarizeWeekForPrompt, buildWeekGenerationPrompt } from "@/lib/program-generator/prompt";
 import type {
   GeneratedProgramDraft,
@@ -81,8 +82,26 @@ async function createAuthUser(label: string): Promise<string> {
   return data.user.id;
 }
 
+// Phase C (Programming Intelligence block-based generation) review
+// finding: this suite creates genuinely FRESH drafts (existingShell:
+// null, existingCompletedWeeks: empty) for every multi-week
+// runStagedGeneration() call below, and this file's whole point is
+// verifying the DAY-LEVEL generation architecture itself (the P0
+// Maddie-incident fix) — shell + N week calls decomposed into
+// per-day calls, resumability, timeout handling — never anything
+// specific to a particular goal. muscle_growth (this file's original
+// choice) is one of the six goals Phase C's block architecture now
+// applies to for a fresh draft; athletic_performance is the one goal
+// that ALWAYS stays on this exact day-level path forever, regardless
+// of draft state (see block-plan.ts's resolveGenerationArchitecture).
+// Using it here keeps every assertion below (allDays.length === weeks
+// * daysPerWeek, one program_generation_days row per day, etc.)
+// testing exactly what it always tested — pure day-level architecture
+// mechanics — AND doubles as this repo's regression test proving
+// athletic_performance is never partially or accidentally routed into
+// block architecture (Phase C task's own explicit requirement).
 const VALID_BRIEF: ProgramGenerationBrief = {
-  goal: "muscle_growth",
+  goal: "athletic_performance",
   weeks: 1,
   daysPerWeek: 1,
   preferredSplit: "coach_decides",
@@ -100,7 +119,7 @@ const VALID_BRIEF: ProgramGenerationBrief = {
 function buildDraft(exerciseId: string, overrides?: Partial<GeneratedProgramDraft>): GeneratedProgramDraft {
   return {
     name: `Integration Test Program ${randomUUID().slice(0, 8)}`,
-    category: "muscle_growth",
+    category: "athletic_performance",
     experienceLevel: "intermediate",
     defaultDurationWeeks: 1,
     recommendedDaysPerWeek: 1,
@@ -149,7 +168,7 @@ function buildDraft(exerciseId: string, overrides?: Partial<GeneratedProgramDraf
 function buildModelDraft(exerciseName: string): ModelProgramDraft {
   return {
     name: `Resolution Integration Test ${randomUUID().slice(0, 8)}`,
-    category: "muscle_growth",
+    category: "athletic_performance",
     experienceLevel: "intermediate",
     defaultDurationWeeks: 1,
     recommendedDaysPerWeek: 1,
@@ -777,6 +796,7 @@ describe("staged generation orchestration", () => {
       startFromWeek: 1,
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
     });
     expect(result.ok).toBe(true);
 
@@ -871,6 +891,7 @@ describe("staged generation orchestration", () => {
       startFromWeek: 1,
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
     });
     expect(result.ok).toBe(true);
 
@@ -979,6 +1000,7 @@ describe("staged generation orchestration", () => {
       startFromWeek: 3,
       startFromDay: 1,
       existingCompletedWeeks,
+      existingGenerationArchitecture: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1034,6 +1056,7 @@ describe("staged generation orchestration", () => {
         startFromWeek: 1,
         startFromDay: 1,
         existingCompletedWeeks: new Map(),
+        existingGenerationArchitecture: null,
       });
 
       // A deliberate, safe pause — not a crash, not silently stuck
@@ -1082,6 +1105,7 @@ describe("staged generation orchestration", () => {
       startFromWeek: 1,
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1151,6 +1175,7 @@ describe("staged generation orchestration", () => {
       startFromWeek: 1,
       startFromDay: 3, // the exact unfinished day — not 1, not "whole week 1"
       existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
     });
     expect(result.ok).toBe(true);
 
@@ -1286,6 +1311,7 @@ describe("staged generation orchestration", () => {
       startFromWeek: 1,
       startFromDay: 1,
       existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
     });
 
     expect(result.ok).toBe(false);
@@ -1320,4 +1346,198 @@ describe("staged generation orchestration", () => {
     expect(prompt).toContain(`[id:${firstPrescriptionId}]`);
     expect(prompt).toContain("This is NOT the first week");
   });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Phase C — block-based generation integration (real DB, fixture
+// provider — see this describe block's own PROGRAM_GENERATOR_USE_FIXTURE
+// setup a few tests up; no real AI provider call, no API cost). Proves
+// what lib/program-generator/staged-generation.ts's own Phase C header
+// comment claims: a fresh draft for a supported goal generates ONLY
+// each block's canonical week via the day-level path (real day rows),
+// while every other week in that block is produced by a single,
+// zero-provider-call deterministic expansion with NO day rows at all.
+// ─────────────────────────────────────────────────────────────
+describe("Phase C — block-based generation orchestration", () => {
+  const originalModel = process.env.PROGRAM_GENERATOR_MODEL;
+  const originalFixture = process.env.PROGRAM_GENERATOR_USE_FIXTURE;
+
+  beforeAll(() => {
+    process.env.PROGRAM_GENERATOR_USE_FIXTURE = "true";
+    delete process.env.PROGRAM_GENERATOR_MODEL;
+  });
+
+  afterAll(() => {
+    if (originalModel === undefined) delete process.env.PROGRAM_GENERATOR_MODEL;
+    else process.env.PROGRAM_GENERATOR_MODEL = originalModel;
+    if (originalFixture === undefined) delete process.env.PROGRAM_GENERATOR_USE_FIXTURE;
+    else process.env.PROGRAM_GENERATOR_USE_FIXTURE = originalFixture;
+  });
+
+  it("a fresh muscle_growth draft routes to block architecture: canonical weeks get real day rows, expanded weeks get zero — and the assembled draft still resolves and validates", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 12, daysPerWeek: 3 };
+    const blockPlan = deriveBlockPlans(brief.goal, brief.experienceLevel, brief.weeks);
+    expect(blockPlan.ok).toBe(true);
+    if (!blockPlan.ok) return;
+    // This fixture must actually exercise BOTH kinds of week for the
+    // assertions below to mean anything — fail loudly, not silently,
+    // if a future strategy.ts change ever made every block exactly 1
+    // week long for this goal/experience/length combination.
+    const hasExpandedWeek = blockPlan.blocks.some((b) => b.blockLength > 1);
+    expect(hasExpandedWeek).toBe(true);
+
+    const row = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: coachA.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      isResume: false,
+      startFromWeek: 1,
+      startFromDay: 1,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
+    });
+    expect(result.ok).toBe(true);
+
+    const weekRows = await listGenerationWeeks(row.id);
+    expect(weekRows).toHaveLength(12);
+    expect(weekRows.every((w) => w.status === "completed")).toBe(true);
+
+    for (let weekNumber = 1; weekNumber <= 12; weekNumber++) {
+      const lookup = findBlockForWeek(blockPlan.blocks, weekNumber);
+      expect(lookup).not.toBeNull();
+      if (!lookup) continue;
+      const dayRows = await listGenerationDaysForWeek(row.id, weekNumber);
+      if (lookup.isCanonicalWeek) {
+        expect(dayRows, `week ${weekNumber} (canonical)`).toHaveLength(3);
+        expect(dayRows.every((d) => d.status === "completed")).toBe(true);
+      } else {
+        expect(dayRows, `week ${weekNumber} (expanded) must have ZERO day rows — no provider call`).toHaveLength(0);
+      }
+    }
+
+    const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
+    expect(draftRow.status).toBe("ready_for_review");
+    const parsedDraft = draftRow.draftJson as GeneratedProgramDraft;
+    expect(parsedDraft.weeks).toHaveLength(12);
+    expect(draftRow.validationStatus).not.toBe("failed");
+
+    // Exercise identity stable within a block: the first block with an
+    // expanded week must show the SAME exerciseId, in the SAME
+    // day/section/prescription position, on both its canonical week and
+    // that expanded week — Phase B never rotates exercises on a block
+    // transition (the "block transition != exercise rotation" invariant,
+    // proven here against real persisted, resolved content rather than
+    // just Phase B's own synthetic-fixture unit tests).
+    const multiWeekBlock = blockPlan.blocks.find((b) => b.blockLength > 1)!;
+    const canonicalWeek = parsedDraft.weeks.find((w) => w.weekNumber === multiWeekBlock.canonicalWeekNumber)!;
+    const expandedWeek = parsedDraft.weeks.find((w) => w.weekNumber === multiWeekBlock.canonicalWeekNumber + 1)!;
+    const canonicalExerciseId = canonicalWeek.days[0].workout?.sections[0].prescriptions[0].exerciseId;
+    const expandedExerciseId = expandedWeek.days[0].workout?.sections[0].prescriptions[0].exerciseId;
+    expect(expandedExerciseId).toBe(canonicalExerciseId);
+  }, 60_000);
+
+  it("resuming mid-block (canonical week already persisted, nothing past it) fills in the block's expanded weeks with zero new day rows", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 12, daysPerWeek: 2 };
+    const blockPlan = deriveBlockPlans(brief.goal, brief.experienceLevel, brief.weeks);
+    expect(blockPlan.ok).toBe(true);
+    if (!blockPlan.ok) return;
+    const multiWeekBlock = blockPlan.blocks.find((b) => b.blockLength > 1)!;
+
+    // A real, fully-completed reference run for the SAME brief — its
+    // persisted shell and canonical-week content are genuine, schema-
+    // valid fixture output, reused below as the "existing progress" a
+    // resume would have found, rather than a hand-built fake.
+    const referenceRow = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(referenceRow.id);
+    const referenceResult = await runStagedGeneration({
+      draftId: referenceRow.id,
+      coachId: coachA.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      isResume: false,
+      startFromWeek: 1,
+      startFromDay: 1,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
+    });
+    expect(referenceResult.ok).toBe(true);
+    const [referenceDraftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, referenceRow.id));
+    const referenceShell = referenceDraftRow.shellJson as unknown as NonNullable<Parameters<typeof runStagedGeneration>[0]["existingShell"]>;
+    const referenceWeekRows = await listGenerationWeeks(referenceRow.id);
+    const referenceWeeksByNumber = new Map(
+      referenceWeekRows.filter((w) => w.status === "completed" && w.weekJson).map((w) => [w.weekNumber, w.weekJson as ModelWeekDraft]),
+    );
+
+    // A SEPARATE, brand-new draft — simulating "an earlier invocation
+    // completed exactly through this block's canonical week and
+    // nothing past it": only weeks 1..canonicalWeekNumber are supplied
+    // as existingCompletedWeeks, using the SAME real shell/content the
+    // reference run actually produced (deriveBlockPlans and the
+    // fixture provider are both deterministic for the same brief, so
+    // this is a faithful, not fabricated, partial-progress snapshot).
+    const partialRow = await createDraft({ coachId: coachA.id, clientId: null, brief });
+    draftIds.push(partialRow.id);
+    const partialExistingCompletedWeeks = new Map(
+      [...referenceWeeksByNumber.entries()].filter(([weekNumber]) => weekNumber <= multiWeekBlock.canonicalWeekNumber),
+    );
+
+    const resumeResult = await runStagedGeneration({
+      draftId: partialRow.id,
+      coachId: coachA.id,
+      brief,
+      clientContext: null,
+      existingShell: referenceShell,
+      isResume: true,
+      startFromWeek: multiWeekBlock.canonicalWeekNumber + 1,
+      startFromDay: 1,
+      existingCompletedWeeks: partialExistingCompletedWeeks,
+      // This test's whole point is proving block architecture SURVIVES
+      // a resume — so this deliberately supplies the SAME architecture
+      // the reference run's first call would have derived and persisted
+      // (drizzle/0036), rather than null, which would otherwise route
+      // this resume to legacy_day purely because existingShell is
+      // non-null (see resolveGenerationArchitecture's own header).
+      existingGenerationArchitecture: "block",
+    });
+    expect(resumeResult.ok).toBe(true);
+
+    // Only the CANONICAL weeks still remaining after the resumed
+    // starting point (week 2 onward here covers the rest of block 1,
+    // then every later block's own canonical week) ever get real day
+    // rows — every purely-expanded week in between gets none. Computed
+    // from the same BlockPlan[] rather than hardcoded, so this stays
+    // correct if strategy.ts's own block-length rules ever change.
+    let expectedCanonicalWeeksTouched = 0;
+    for (let weekNumber = multiWeekBlock.canonicalWeekNumber + 1; weekNumber <= brief.weeks; weekNumber++) {
+      if (findBlockForWeek(blockPlan.blocks, weekNumber)?.isCanonicalWeek) expectedCanonicalWeeksTouched++;
+    }
+    expect(expectedCanonicalWeeksTouched).toBeGreaterThan(0); // the fixture must actually exercise this
+
+    const dayRowsOnPartialDraft = await listGenerationDays(partialRow.id);
+    expect(dayRowsOnPartialDraft).toHaveLength(expectedCanonicalWeeksTouched * brief.daysPerWeek);
+    expect(dayRowsOnPartialDraft.every((d) => d.status === "completed")).toBe(true);
+
+    // The two purely-expanded weeks immediately after the resumed
+    // canonical week (weeks 2 and 3, inside block 1) specifically must
+    // have zero day rows — the direct proof that resuming into a block
+    // never re-runs AI generation for a deterministic week.
+    for (const weekNumber of [multiWeekBlock.canonicalWeekNumber + 1, multiWeekBlock.weekEnd]) {
+      if (findBlockForWeek(blockPlan.blocks, weekNumber)?.isCanonicalWeek) continue;
+      const dayRowsForWeek = await listGenerationDaysForWeek(partialRow.id, weekNumber);
+      expect(dayRowsForWeek, `week ${weekNumber} (expanded)`).toHaveLength(0);
+    }
+
+    const weekRowsOnPartialDraft = await listGenerationWeeks(partialRow.id);
+    expect(weekRowsOnPartialDraft).toHaveLength(12 - multiWeekBlock.canonicalWeekNumber);
+    expect(weekRowsOnPartialDraft.every((w) => w.status === "completed")).toBe(true);
+
+    const [partialDraftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, partialRow.id));
+    expect(partialDraftRow.status).toBe("ready_for_review");
+  }, 60_000);
 });

@@ -235,6 +235,22 @@ export async function saveProgramShell(draftId: string, shell: ProgramShell): Pr
     .where(eq(programGenerationDrafts.id, draftId));
 }
 
+// Phase C (Programming Intelligence block-based generation, drizzle/
+// 0036) — set exactly once, by runStagedGeneration(), the first time it
+// runs for a genuinely fresh draft (no shell, no completed weeks yet).
+// Never called again for that draft afterward — every subsequent call
+// reads the already-persisted value back instead of re-deriving it. See
+// the migration's own header for why a re-derivation can't reliably
+// tell a block-architecture canonical week from an ordinary legacy
+// week once either is persisted.
+export async function saveGenerationArchitecture(draftId: string, architecture: "block" | "legacy_day"): Promise<void> {
+  const db = getDb();
+  await db
+    .update(programGenerationDrafts)
+    .set({ generationArchitecture: architecture, updatedAt: new Date() })
+    .where(eq(programGenerationDrafts.id, draftId));
+}
+
 // Replaces draftJson wholesale and bumps draftVersion. Every edit
 // operation (regenerate day, edit prescription, replace exercise,
 // reorder, move day) goes through this — draftJson is never patched
