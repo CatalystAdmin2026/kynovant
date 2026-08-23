@@ -232,13 +232,27 @@ export const DAY_REGEN_DEFAULT_TIMEOUT_MS = 120_000;
 //
 // DAY_MAX_OUTPUT_TOKENS: one day's worth of the same content (up to 12
 // sections x up to 30 prescriptions — contracts.ts's ModelBlueprintSchema
-// bounds are per-day already, unchanged) — sized at roughly 1/4 of the
-// week cap, generous headroom over what one real day realistically
-// produces (the week comment's own "realistically far less" applies
-// here too, at day scale).
+// bounds are per-day already, unchanged).
+//
+// Real staging benchmark (real Claude Sonnet 4 calls via the AI Gateway,
+// against the seeded staging exercise library — see the day-level
+// generator review-remediation report for the full 7-case table) found
+// the original 2,000 ("reasoned conservatively," never measured — see
+// git history) genuinely too tight: an intensity-technique day
+// (supersets/drop-sets/rest-pause, 48 candidates) hit finishReason:
+// "length" at exactly 2,000 output tokens and failed schema validation
+// with a truncated, incomplete object — NoObjectGeneratedError,
+// "provider_unavailable" — reproduced twice, consistently, ~20s wasted
+// per attempt, zero output. The same prompt with maxOutputTokens raised
+// to 3,500 succeeded using only 2,284 output tokens (finishReason:
+// "stop"). Every one of the 5 non-intensity-technique benchmark cases
+// (simple/standard/full-body/restrictive-equipment/candidate-heavy, up
+// to 150 candidates) completed well inside 2,000. 3,500 covers the
+// measured need with ~35% headroom, without moving anywhere near
+// WEEK_MAX_OUTPUT_TOKENS scale.
 const SHELL_MAX_OUTPUT_TOKENS = 2_000;
 const WEEK_MAX_OUTPUT_TOKENS = 8_000;
-const DAY_MAX_OUTPUT_TOKENS = 2_000;
+const DAY_MAX_OUTPUT_TOKENS = 3_500;
 // regenerateDayDraft() still asks the model to echo the whole draft back
 // (see that function) — unchanged scope for this redesign, but still
 // worth an explicit bound rather than an unset provider default.

@@ -55,12 +55,27 @@ API key — only the project ref, which is not a secret.
 
 ## Baseline
 
-Staging was brought to migrations `0000`–`0030` (current production
-schema) via the existing `scripts/migrate.ts` runner, applied in
-order. `0031_client_check_in_schedule.sql` and
-`0032_check_in_occurrence_model.sql` are **not applied** — staging
-sits deliberately one step behind production, ready for those two
-migrations to be tested there before anywhere else.
+Verified current as of the day-level AI Program Generator review
+(2026-08): all migrations through `0035` are applied, confirmed by
+direct introspection (`information_schema`/`pg_constraint`), not
+assumed from this doc. Apply new migrations here the same way as
+always — `scripts/migrate.ts`, one file at a time, dry-run first.
+
+Exercise library: seeded via the repo's canonical seed system
+(`scripts/seeds/001-upper-push.ts` through `011-reviewed-library-
+expansion.ts`, run in order) — **652 active, system-scope exercises**
+covering all 26 muscle-group enum values, 37 mobility-flagged and 28
+cardio-flagged exercises, 70 equipment items, 14 resistance types.
+This is meant to persist as ongoing infrastructure, not a throwaway
+test fixture — don't delete it when cleaning up a test run's own
+synthetic coach/draft/day rows.
+
+AI Gateway: an `AI_GATEWAY_API_KEY` (see `.env.staging.local.example`)
+has been provisioned for real-provider generator work from this
+environment — confirmed working against `anthropic/claude-sonnet-4`.
+Production authenticates via Vercel's OIDC federation instead (works
+only inside an actual Vercel runtime); a plain local process needs the
+explicit key.
 
 ## What's intentionally NOT set up yet
 
@@ -75,9 +90,24 @@ migrations to be tested there before anywhere else.
   real deployment-behavior change affecting any active preview
   branch, not a side effect of this setup — it needs its own
   deliberate pass.
-- No production secrets (Stripe, Resend, AI Gateway, Calendly,
-  Sheets) were copied into `.env.staging.local`. It only carries what
-  DB-backed migration/test work needs.
+- No production secrets other than the AI Gateway key above (Stripe,
+  Resend, Calendly, Sheets, DocuSign) belong in `.env.staging.local`.
+  DB-backed migration/test work never needs them.
+
+## Known operational quirk — run DB-backed suites sequentially
+
+This project's Free/Nano compute tier's connection pooler
+(Supavisor, port 6543) has been observed to return a spurious
+`password authentication failed` error under concurrent connection
+bursts (multiple test files opening pooled connections at once) —
+confirmed NOT a credentials problem (the same connection string
+succeeds every time run alone, and via a raw non-pooled query). Pass
+`--no-file-parallelism` to `npm run test:staging` when running more
+than one DB-backed suite together:
+
+```bash
+npm run test:staging -- --no-file-parallelism <file1> <file2> ...
+```
 
 ## Fixture policy
 

@@ -1038,9 +1038,16 @@ describe("staged generation orchestration", () => {
 
       // A deliberate, safe pause — not a crash, not silently stuck
       // "running" forever, and never a raw exception escaping the call.
+      // Day-level generation (see staged-generation.ts's time-budget
+      // guard) deliberately frames this as "Progress saved. Continue
+      // generation…", not "retry" — Phase 13's UI wording for a resumable
+      // pause, distinct from a genuine failure. This assertion previously
+      // checked for /retry/i, the whole-week architecture's old wording;
+      // updated to match the current, intentional message instead of the
+      // superseded one.
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error).toMatch(/retry/i);
+      expect(result.error).toMatch(/progress saved.*continue generation/i);
 
       const [draftRow] = await db.select().from(programGenerationDrafts).where(eq(programGenerationDrafts.id, row.id));
       // Resumable: identical shape to a genuine failure, so
