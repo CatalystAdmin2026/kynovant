@@ -168,6 +168,7 @@ export function buildDayGenerationPrompt(
   weekNumber: number,
   shellDay: ProgramShellDay,
   priorSameDaySummary: string | null,
+  weekSoFarSummary: string | null,
   candidates: ExerciseCandidate[],
 ): string {
   const phase = findPhaseForWeek(shell, weekNumber);
@@ -194,6 +195,20 @@ export function buildDayGenerationPrompt(
     `Week ${weekNumber} of ${shell.totalWeeks} — dayOfWeek ${shellDay.dayOfWeek}, label "${shellDay.label}"${shellDay.focus ? `, focus: ${shellDay.focus}` : ""}. Your output's dayOfWeek and label MUST match these exactly.`,
     formatPhase(phase, weekNumber),
     "",
+    // P1 review finding: each day used to see only cross-WEEK context
+    // (the same day-slot in a prior week) with no visibility into what
+    // OTHER days already generated earlier in the SAME week — the exact
+    // gap that lets five individually-reasonable days combine into an
+    // uncoordinated week (see week-cross-day-validation.ts, which
+    // catches what still gets through after this).
+    ...(weekSoFarSummary
+      ? [
+          "## Already Generated This Week",
+          "Other days already built for this same week — avoid duplicating their main lifts and cover what they haven't, unless the split intentionally repeats (e.g. a full-body plan):",
+          weekSoFarSummary,
+          "",
+        ]
+      : []),
     "## Continuity With This Same Day In Prior Weeks",
     priorSameDaySummary
       ? [
@@ -206,6 +221,49 @@ export function buildDayGenerationPrompt(
     "## Output Contract",
     OUTPUT_CONTRACT_NOTES,
   ].join("\n");
+}
+
+// Compact "what's already in this week" context — P1 review finding
+// (day-level architecture v1): each day only ever saw cross-WEEK
+// continuity, never what OTHER days earlier in the SAME week already
+// covered, which is exactly the gap that lets individually-reasonable
+// days combine into an uncoordinated week. Deliberately NOT full JSON
+// per day (same "compact, not a token dump" principle as every other
+// continuity summary here) — one line per completed day (exercise
+// names + ids, so the model can avoid or intentionally reuse a
+// specific id) plus one aggregate muscle-volume tally line.
+export function summarizeWeekSoFarForPrompt(
+  completedDaysThisWeek: ReadonlyMap<number, ModelDayDraft>,
+  candidatesById: ReadonlyMap<string, ExerciseCandidate>,
+): string | null {
+  if (completedDaysThisWeek.size === 0) return null;
+
+  const lines: string[] = [];
+  const muscleSets = new Map<string, number>();
+
+  const orderedDays = Array.from(completedDaysThisWeek.entries()).sort(([a], [b]) => a - b);
+  for (const [, day] of orderedDays) {
+    lines.push(summarizeDayForPrompt(day));
+    if (!day.workout) continue;
+    for (const section of day.workout.sections) {
+      for (const p of section.prescriptions) {
+        const c = p.exerciseId ? candidatesById.get(p.exerciseId) : undefined;
+        if (!c?.primaryMuscleGroup) continue;
+        const sets = p.sets ?? 1;
+        muscleSets.set(c.primaryMuscleGroup, (muscleSets.get(c.primaryMuscleGroup) ?? 0) + sets);
+      }
+    }
+  }
+
+  if (muscleSets.size > 0) {
+    const tally = Array.from(muscleSets.entries())
+      .sort(([, a], [, b]) => b - a)
+      .map(([mg, sets]) => `${mg.replace(/_/g, " ")} ~${sets} sets`)
+      .join(", ");
+    lines.push(`Approximate volume so far this week (by primary muscle): ${tally}.`);
+  }
+
+  return lines.join("\n");
 }
 
 // Compact, human-readable summary of a single completed day — used as

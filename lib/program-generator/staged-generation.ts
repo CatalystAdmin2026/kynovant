@@ -57,13 +57,15 @@ import {
 } from "@/lib/db/program-generation-service";
 import { generateProgramShell, generateProgramDay, resolveTimeoutMs, DAY_DEFAULT_TIMEOUT_MS } from "./provider";
 import { logGenerationFailure, logProviderSuccess, logQuotaRelease } from "./observability";
-import { summarizeDayForPrompt } from "./prompt";
+import { summarizeDayForPrompt, summarizeWeekSoFarForPrompt } from "./prompt";
 import { resolveProgramDraftExercises } from "./exercise-resolution";
 import { validateGeneratedDraft, catalogGapFindings, type ValidationFinding } from "./validation";
+import { validateWeekCrossDay } from "./week-cross-day-validation";
 import {
   buildExerciseCandidateSet,
   narrowCandidatesForDay,
   verifyDayAgainstCandidates,
+  type ExerciseCandidate,
 } from "./exercise-candidates";
 import {
   parseGeneratedProgramDraft,
@@ -71,11 +73,59 @@ import {
   type ProgramGenerationBrief,
   type GeneratedProgramDraft,
   type ProgramShell,
+  type ProgramShellDay,
   type ModelDayDraft,
   type ModelWeekDraft,
   type ModelProgramDraft,
 } from "./contracts";
 import type { ClientContextSummary } from "./client-context";
+
+// P1 review finding on the day-level architecture: a single
+// generateObject() call per WEEK let the model implicitly coordinate an
+// entire week; day-level calls can each look individually reasonable
+// and still combine into a bad week. Runs once per week, right after
+// its days are assembled — see week-cross-day-validation.ts for the
+// full design (deterministic, context-aware, always warnings, never a
+// blocker, never an auto-regeneration).
+export function assembleWeekFromDays(
+  weekNumber: number,
+  shellDays: ProgramShellDay[],
+  completedDays: Map<number, ModelDayDraft>,
+): { ok: true; week: ModelWeekDraft } | { ok: false; error: string } {
+  const days: ModelDayDraft[] = [];
+  for (let idx = 0; idx < shellDays.length; idx++) {
+    const day = completedDays.get(idx + 1);
+    if (!day) {
+      // Was previously an uncached throw here, escaping BEFORE the
+      // caller's own try/catch could ever run — a review finding on
+      // the first version of this file: an unreachable-in-practice but
+      // real escape hatch that, if ever hit, would crash the whole
+      // Server Action invocation with no chance for failRun()/
+      // setDraftStatus() to run, leaving the draft stuck "running"
+      // forever. Returning a discriminated result instead means every
+      // caller MUST handle this through the exact same normal failure
+      // path as any other generation failure — there is no way to
+      // reach this function's result without deciding what to do with
+      // both branches.
+      return { ok: false, error: `Missing content for week ${weekNumber} day ${idx + 1} during week assembly.` };
+    }
+    days.push(day);
+  }
+
+  const candidate: ModelWeekDraft = { id: randomUUID(), weekNumber, label: `Week ${weekNumber}`, days };
+  // Deterministic week-level validation — the day-level schema already
+  // validated each day individually (generateObject()'s own schema
+  // enforcement); this re-checks the cross-day refinements (e.g. unique
+  // dayOfWeek per week) that only exist once days are assembled
+  // together. Should always pass given each day's dayOfWeek comes from
+  // the shell's own already-unique days array, but verified rather than
+  // assumed.
+  const parsed = ModelWeekDraftSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return { ok: false, error: `Assembled week ${weekNumber} failed schema validation: ${parsed.error.message}` };
+  }
+  return { ok: true, week: parsed.data };
+}
 
 // Shared by every code path that needs "validate the current draft
 // content and persist the result, without letting an unexpected
@@ -223,6 +273,10 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   // and — separately, in actions.ts — regenerate-day. See
   // exercise-candidates.ts for the selection algorithm and its bounds.
   const candidateSet = await buildExerciseCandidateSet(params.brief, params.coachId);
+  // Lookup for week-cross-day-validation.ts — the SAME candidate rows
+  // every day call was narrowed from, so muscle/pattern/equipment
+  // metadata is exact, never re-queried or guessed from a name.
+  const candidatesById = new Map<string, ExerciseCandidate>(candidateSet.candidates.map((c) => [c.id, c]));
 
   // Fail fast on total candidate exhaustion — an empty candidate set
   // means the model has literally nothing valid to select from for
@@ -344,6 +398,10 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
   // optimization; semantically this is "read fresh every time," same
   // as candidateSet and every other resume-safety-relevant read here.
   let priorWeekDaysByIndex = new Map<number, ModelDayDraft>();
+  // Accumulated across every week this invocation assembles — folded
+  // into runAndSaveValidation's extraWarnings at finalization below,
+  // alongside catalogGapFindings(candidateSet.gaps).
+  const crossDayFindings: ValidationFinding[] = [];
 
   for (let weekNumber = params.startFromWeek; weekNumber <= shell.totalWeeks; weekNumber++) {
     // Only the FIRST week this invocation touches can have partial
@@ -403,6 +461,12 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
 
       const priorSameDay = priorWeekDaysByIndex.get(dayIndex);
       const priorSameDaySummary = priorSameDay ? summarizeDayForPrompt(priorSameDay) : null;
+      // P1 review finding: give this day visibility into what OTHER
+      // days already generated earlier in the SAME week — without it,
+      // five individually-reasonable days can combine into an
+      // uncoordinated week (week-cross-day-validation.ts catches what
+      // still gets through after this).
+      const weekSoFarSummary = summarizeWeekSoFarForPrompt(completedDaysThisWeek, candidatesById);
 
       // Never let the model choose which muscles matter for a day —
       // see exercise-candidates.ts's narrowCandidatesForDay() header
@@ -417,6 +481,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
         dayIndex,
         shellDay,
         priorSameDaySummary,
+        weekSoFarSummary,
         candidates: dayCandidates,
       });
 
@@ -488,45 +553,49 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     // ── Week assembly — deterministic, no model call. Every downstream
     // consumer (final assembly below, exercise resolution, validation,
     // approval) reads program_generation_weeks exactly as it always
-    // has; only how this row gets produced changed. ──
-    const weekDays: ModelDayDraft[] = shell.days.map((_, idx) => {
-      const day = completedDaysThisWeek.get(idx + 1);
-      if (!day) {
-        // Unreachable given the loop above always persists every day
-        // from dayStartIndex through shell.days.length, and rows before
-        // dayStartIndex were already loaded into completedDaysThisWeek
-        // — kept as an explicit, named failure rather than a silent
-        // gap if that invariant is ever violated.
-        throw new Error(`Missing content for week ${weekNumber} day ${idx + 1} during week assembly.`);
-      }
-      return day;
-    });
-
-    let assembledWeek: ModelWeekDraft;
-    try {
-      assembledWeek = { id: randomUUID(), weekNumber, label: `Week ${weekNumber}`, days: weekDays };
-      // Deterministic week-level validation — the day-level schema
-      // already validated each day individually (generateObject()'s
-      // own schema enforcement); this re-checks the cross-day
-      // refinements (e.g. unique dayOfWeek per week) that only exist
-      // once days are assembled together. Should always pass given
-      // each day's dayOfWeek comes from the shell's own already-unique
-      // days array, but verified rather than assumed.
-      const parsed = ModelWeekDraftSchema.safeParse(assembledWeek);
-      if (!parsed.success) {
-        throw new Error(`Assembled week ${weekNumber} failed schema validation: ${parsed.error.message}`);
-      }
-      assembledWeek = parsed.data;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Week assembly failed unexpectedly.";
-      await failRun(run.id, message, { provider: lastProvider, model: lastModel });
+    // has; only how this row gets produced changed. Review finding
+    // (day-level architecture v1): a missing-day invariant violation
+    // used to throw here, BEFORE any surrounding try/catch could run —
+    // an escape hatch that would leave the draft stuck "running"
+    // forever with no failRun()/setDraftStatus() cleanup. Fixed by
+    // routing this through the same discriminated-result shape every
+    // other failure in this function already uses — there is no way to
+    // call assembleWeekFromDays() and forget to handle its failure
+    // branch through the normal path. ──
+    const assembly = assembleWeekFromDays(weekNumber, shell.days, completedDaysThisWeek);
+    if (!assembly.ok) {
+      logGenerationFailure({
+        draftId: params.draftId,
+        runId: run.id,
+        stage: "week_assembly",
+        weekNumber,
+        errorCode: "invalid_output",
+        errorMessage: assembly.error,
+        provider: lastProvider,
+        model: lastModel,
+        isRetryOrResume: params.isResume,
+        completedWeeks: allWeeks.size,
+      });
+      await failRun(run.id, assembly.error, { provider: lastProvider, model: lastModel });
       const failureReason = "Generation could not be assembled. Please retry.";
       await setDraftStatus(params.draftId, "failed", { failureReason });
       return { ok: false, error: failureReason };
     }
 
-    await saveGenerationWeek(params.draftId, weekNumber, { status: "completed", weekJson: assembledWeek });
-    allWeeks.set(weekNumber, assembledWeek);
+    // P1 review finding: whole-week generation let the model implicitly
+    // coordinate an entire week; day-level calls can each look
+    // individually reasonable and still combine into a bad week.
+    // Deterministic, context-aware, always warnings (never a blocker,
+    // never an auto-regeneration) — see week-cross-day-validation.ts's
+    // own header comment for the full design and what's deliberately
+    // NOT checked here. Accumulated across every week and folded into
+    // the same extraWarnings mechanism catalogGapFindings() already
+    // uses at finalization — the SAME coach review/acknowledgement UI,
+    // no new findings pipeline.
+    crossDayFindings.push(...validateWeekCrossDay(assembly.week, params.brief, candidatesById));
+
+    await saveGenerationWeek(params.draftId, weekNumber, { status: "completed", weekJson: assembly.week });
+    allWeeks.set(weekNumber, assembly.week);
     await updateRunProgress(run.id, { completedWeeks: allWeeks.size });
   }
 
@@ -583,7 +652,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     reparsed.data,
     params.brief,
     params.coachId,
-    catalogGapFindings(candidateSet.gaps),
+    [...catalogGapFindings(candidateSet.gaps), ...crossDayFindings],
   );
 
   return { ok: true };

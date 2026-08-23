@@ -113,10 +113,34 @@ describe("narrowCandidatesForDay — structured targetMuscleGroups (new shells)"
     expect(narrowed.some((c) => c.isCardio)).toBe(true);
   });
 
-  it("unions in musclePriorities even when not part of the day's own target groups", () => {
+  // Review finding on the day-level architecture v1: musclePriorities
+  // used to be unioned into EVERY day regardless of relevance. Fixed —
+  // a priority muscle now only widens the cap on a day that's already
+  // one of that muscle's own target groups; it's no longer injected
+  // into an unrelated day. See exercise-candidates.ts's own comment.
+  it("does NOT leak an unrelated priority muscle into a day that doesn't target it", () => {
     const pool = buildPool();
     const narrowed = narrowCandidatesForDay(pool, PUSH_DAY, ["quadriceps"]);
-    expect(narrowed.some((c) => c.primaryMuscleGroup === "quadriceps")).toBe(true);
+    expect(narrowed.some((c) => c.primaryMuscleGroup === "quadriceps")).toBe(false);
+  });
+
+  it("widens the cap (not the group set) for a priority muscle that IS one of this day's own targets", () => {
+    // buildPool()'s default 8-per-group is under the 10-candidate
+    // default cap — needs a deeper chest pool to observe the cap
+    // actually binding (and widening) in the first place.
+    const base = buildPool();
+    const deepChestPool: typeof base = {
+      ...base,
+      candidates: [
+        ...base.candidates.filter((c) => c.primaryMuscleGroup !== "chest"),
+        ...Array.from({ length: 20 }, (_, i) => candidate({ id: `chest-deep-${i}`, primaryMuscleGroup: "chest" })),
+      ],
+    };
+    const withoutPriority = narrowCandidatesForDay(deepChestPool, PUSH_DAY, []);
+    const withPriority = narrowCandidatesForDay(deepChestPool, PUSH_DAY, ["chest"]);
+    const chestCountWithout = withoutPriority.filter((c) => c.primaryMuscleGroup === "chest").length;
+    const chestCountWith = withPriority.filter((c) => c.primaryMuscleGroup === "chest").length;
+    expect(chestCountWith).toBeGreaterThan(chestCountWithout);
   });
 
   it("is deterministic — same inputs produce the same output every time", () => {
@@ -182,5 +206,70 @@ describe("inferMuscleGroupsFromDayText", () => {
     expect(inferMuscleGroupsFromDayText("Day 3", "core and abs")).toEqual(
       expect.arrayContaining(["rectus_abdominis", "obliques"]),
     );
+  });
+});
+
+// Review finding on the day-level architecture v1: primary-muscle-only
+// filtering made a legitimate secondary-muscle exercise (e.g. an RDL —
+// primary hamstrings, secondary glutes) invisible to a day whose focus
+// is the SECONDARY muscle. Fixed — see exercise-candidates.ts's comment.
+describe("narrowCandidatesForDay — secondary-muscle relevance", () => {
+  const GLUTE_DAY: ProgramShellDay = { dayOfWeek: 1, label: "Glutes", targetMuscleGroups: ["glutes"] };
+
+  it("includes an exercise whose SECONDARY (not primary) muscle matches the day's target", () => {
+    const rdl = candidate({ id: "rdl-1", name: "Romanian Deadlift", primaryMuscleGroup: "hamstrings", secondaryMuscleGroups: ["glutes"] });
+    const pool: ExerciseCandidateSet = { candidates: [rdl], gaps: [] };
+    const narrowed = narrowCandidatesForDay(pool, GLUTE_DAY, []);
+    expect(narrowed.some((c) => c.id === "rdl-1")).toBe(true);
+  });
+
+  it("still excludes an exercise with no primary or secondary relevance to the day", () => {
+    // Enough genuinely relevant candidates to clear the safety floor on
+    // their own, so an irrelevant exercise isn't pulled in by top-up —
+    // that's the floor's job (tested separately), not this check's.
+    const relevant = Array.from({ length: 35 }, (_, i) => candidate({ id: `glute-${i}`, primaryMuscleGroup: "glutes" }));
+    const curl = candidate({ id: "curl-1", name: "Bicep Curl", primaryMuscleGroup: "biceps", secondaryMuscleGroups: [] });
+    const pool: ExerciseCandidateSet = { candidates: [...relevant, curl], gaps: [] };
+    const narrowed = narrowCandidatesForDay(pool, GLUTE_DAY, []);
+    expect(narrowed.some((c) => c.id === "curl-1")).toBe(false);
+  });
+});
+
+// Review finding: a "Mobility"/"Conditioning" day isn't served by
+// muscle-group narrowing at all (isMobility/isCardio are a different
+// axis) — it used to fall through to the "unclassifiable -> full pool"
+// branch. Fixed with explicit day-type detection.
+describe("narrowCandidatesForDay — mobility/conditioning day type", () => {
+  function typedPool(): ExerciseCandidateSet {
+    const candidates: ExerciseCandidate[] = [
+      ...Array.from({ length: 20 }, (_, i) => candidate({ id: `mob-${i}`, isMobility: true })),
+      ...Array.from({ length: 20 }, (_, i) => candidate({ id: `car-${i}`, isCardio: true })),
+      ...Array.from({ length: 20 }, (_, i) => candidate({ id: `chest-${i}`, primaryMuscleGroup: "chest" })),
+    ];
+    return { candidates, gaps: [] };
+  }
+
+  it("a Mobility day is narrowed to mostly mobility candidates, not the full pool", () => {
+    const day: ProgramShellDay = { dayOfWeek: 1, label: "Mobility & Recovery" };
+    const narrowed = narrowCandidatesForDay(typedPool(), day, []);
+    const mobilityShare = narrowed.filter((c) => c.isMobility).length / narrowed.length;
+    expect(mobilityShare).toBeGreaterThan(0.5);
+    expect(narrowed.length).toBeLessThan(typedPool().candidates.length);
+  });
+
+  it("a Conditioning day is narrowed to mostly cardio candidates", () => {
+    const day: ProgramShellDay = { dayOfWeek: 1, label: "Conditioning" };
+    const narrowed = narrowCandidatesForDay(typedPool(), day, []);
+    const cardioShare = narrowed.filter((c) => c.isCardio).length / narrowed.length;
+    expect(cardioShare).toBeGreaterThan(0.5);
+  });
+
+  it("day-type detection takes priority over muscle-keyword detection when both could match", () => {
+    // "Recovery" alone isn't a muscle keyword, so this also proves the
+    // day-type path is reached rather than falling through to
+    // "unclassifiable -> full pool".
+    const day: ProgramShellDay = { dayOfWeek: 1, label: "Recovery" };
+    const narrowed = narrowCandidatesForDay(typedPool(), day, []);
+    expect(narrowed.length).toBeLessThan(typedPool().candidates.length);
   });
 });

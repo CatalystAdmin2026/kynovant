@@ -50,7 +50,14 @@ export function sanitizeErrorMessage(raw: string): string {
 // RETAINED for generateProgramWeek() (unused by the staged path as of
 // that change — see provider.ts's header comment) but should not
 // appear in production logs going forward.
-export type GenerationStage = "shell" | "week" | "day" | "day_regeneration";
+// "week_assembly" — the deterministic, no-model-call step that combines
+// a week's completed day rows (staged-generation.ts's
+// assembleWeekFromDays()). Distinguishes an assembly-invariant failure
+// (a review finding on the day-level architecture v1 — see that
+// function's own comment) from a genuine provider failure at any other
+// stage; errorCode is always "invalid_output" here, never a real
+// provider errorCode.
+export type GenerationStage = "shell" | "week" | "day" | "day_regeneration" | "week_assembly";
 
 export interface GenerationFailureLog {
   draftId: string;

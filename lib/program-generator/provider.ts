@@ -465,6 +465,7 @@ export async function generateProgramDay(params: {
   dayIndex: number;
   shellDay: ProgramShellDay;
   priorSameDaySummary: string | null;
+  weekSoFarSummary: string | null;
   candidates: ExerciseCandidate[];
 }): Promise<DayGenerationOutcome> {
   if (isFixtureModeEnabled()) return callFixtureDayProvider(params.shell, params.dayIndex, params.candidates);
@@ -476,6 +477,7 @@ export async function generateProgramDay(params: {
     params.weekNumber,
     params.shellDay,
     params.priorSameDaySummary,
+    params.weekSoFarSummary,
     params.candidates,
   );
   const result = await callProvider({

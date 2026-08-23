@@ -60,7 +60,9 @@ import {
   timestamp,
   index,
   uniqueIndex,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { users, programTemplates } from "./schema";
 
 // ─────────────────────────────────────────────────────────────
@@ -364,6 +366,25 @@ export const programGenerationDays = pgTable(
       table.weekNumber,
       table.dayNumber,
     ),
+    // Mirrors drizzle/0035_program_generation_integrity_constraints.sql —
+    // ranges match ProgramGenerationBriefSchema/ProgramShellSchema's own
+    // validated bounds in contracts.ts, never a separately invented limit.
+    check(
+      "chk_program_generation_days_week_number",
+      sql`${table.weekNumber} >= 1 AND ${table.weekNumber} <= 16`,
+    ),
+    check(
+      "chk_program_generation_days_day_number",
+      sql`${table.dayNumber} >= 1 AND ${table.dayNumber} <= 7`,
+    ),
+    check(
+      "chk_program_generation_days_completed_has_json",
+      sql`${table.status} <> 'completed' OR ${table.dayJson} IS NOT NULL`,
+    ),
+    check(
+      "chk_program_generation_days_failed_has_no_json",
+      sql`${table.status} <> 'failed' OR ${table.dayJson} IS NULL`,
+    ),
   ],
 );
 
@@ -413,6 +434,21 @@ export const programGenerationWeeks = pgTable(
   (table) => [
     index("idx_program_generation_weeks_draft_id").on(table.draftId),
     uniqueIndex("uq_program_generation_weeks_draft_week").on(table.draftId, table.weekNumber),
+    // Mirrors drizzle/0035_program_generation_integrity_constraints.sql —
+    // same week_number bound as program_generation_days, from
+    // ProgramGenerationBriefSchema in contracts.ts.
+    check(
+      "chk_program_generation_weeks_week_number",
+      sql`${table.weekNumber} >= 1 AND ${table.weekNumber} <= 16`,
+    ),
+    check(
+      "chk_program_generation_weeks_completed_has_json",
+      sql`${table.status} <> 'completed' OR ${table.weekJson} IS NOT NULL`,
+    ),
+    check(
+      "chk_program_generation_weeks_failed_has_no_json",
+      sql`${table.status} <> 'failed' OR ${table.weekJson} IS NULL`,
+    ),
   ],
 );
 

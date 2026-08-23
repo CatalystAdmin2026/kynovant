@@ -78,7 +78,10 @@ export const EQUIPMENT_ACCESS_ALLOWED_RESISTANCE: Partial<Record<ProgramGenerati
 // week-generation-time scheduling decision, not a candidate-availability
 // one. brief.musclePriorities are unioned in and given a larger per-
 // group cap, not treated as the only groups that matter.
-const CORE_MUSCLE_GROUPS: MuscleGroup[] = [
+// Exported for week-cross-day-validation.ts's coverage check — same
+// "every split still needs a program-wide muscle profile" set, reused
+// rather than redefined so the two never drift apart.
+export const CORE_MUSCLE_GROUPS: MuscleGroup[] = [
   "chest",
   "lats",
   "upper_back",
@@ -418,10 +421,37 @@ export function formatCandidatesForPrompt(candidates: ExerciseCandidate[]): stri
 // the shell day's freeform label/focus text.
 //
 // Movement-pattern/unilateral-bilateral/substitution-aware narrowing
-// within a muscle group is a reasonable follow-up refinement, not
-// implemented in this pass — muscle-group narrowing alone already
-// reduces the pool by the target order of magnitude (see this file's
-// test suite for actual before/after counts on realistic fixtures).
+// WITHIN a matched muscle group is a reasonable follow-up refinement,
+// not implemented in this pass — nothing here excludes an exercise for
+// being unilateral/bilateral, a specific pattern, or a substitution
+// variant; muscle-group narrowing alone already reduces the pool by the
+// target order of magnitude (see this file's test suite for actual
+// before/after counts on realistic fixtures) without needing to
+// additionally discriminate on pattern.
+//
+// Review findings addressed here (day-level architecture v1):
+//   - primary-muscle-only filtering  -> now also includes SECONDARY-
+//     muscle matches (a smaller cap) — an exercise whose secondary
+//     target is the day's focus (e.g. Romanian Deadlift: primary
+//     hamstrings, secondary glutes) used to be invisible to a "Glutes"
+//     day even though it's a legitimate, common choice for one.
+//   - poor mobility/conditioning fallback -> DAY_TYPE_KEYWORDS below
+//     recognizes a day whose own label/focus IS "Mobility"/"Recovery"/
+//     "Conditioning"/"Cardio" and gives it a much larger allowance of
+//     exactly that category instead of the same flat baseline every
+//     other day gets.
+//   - global musclePriorities leaking into every day -> a priority
+//     muscle now only gets the WIDER cap when it's already one of this
+//     day's own target groups; a day the shell never associated with
+//     that muscle no longer has it silently injected. Ensuring every
+//     priority muscle gets ENOUGH dedicated days at all is the shell's
+//     job (targetMuscleGroups at shell-generation time), not narrowing's.
+//   - the floor masking weak filtering -> the floor still exists (never
+//     narrow below MIN_DAY_CANDIDATES), but top-up now prefers
+//     candidates already excluded only by a CAP (secondary-muscle
+//     overflow, mobility/cardio overflow) before falling back to the
+//     fully generic full-pool order, so hitting the floor reflects
+//     genuine scarcity in the library, not just a low per-bucket cap.
 // ─────────────────────────────────────────────────────────────
 
 const DAY_FOCUS_MUSCLE_KEYWORDS: { pattern: RegExp; groups: MuscleGroup[] }[] = [
@@ -439,9 +469,31 @@ const DAY_FOCUS_MUSCLE_KEYWORDS: { pattern: RegExp; groups: MuscleGroup[] }[] = 
   { pattern: /\bglutes?\b/i, groups: ["glutes", "hamstrings"] },
   { pattern: /\bquads?\b/i, groups: ["quadriceps"] },
   { pattern: /\bhamstrings?\b/i, groups: ["hamstrings"] },
+  { pattern: /\bcalves?\b/i, groups: ["calves"] },
   { pattern: /\bcore\b|\babs?\b/i, groups: ["rectus_abdominis", "obliques"] },
   { pattern: /\bfull.?body\b/i, groups: CORE_MUSCLE_GROUPS },
 ];
+
+// Day TYPES, as opposed to muscle groups — a "Mobility" or "Conditioning"
+// day isn't under-served by muscle-group narrowing, it's a different
+// AXIS entirely (isMobility/isCardio flags, not primaryMuscleGroup).
+// Detected the same way (structured field first, keyword fallback) so
+// a day like this gets a deliberately mobility/cardio-heavy pool
+// instead of either the generic baseline allowance or (if it happened
+// to match zero muscle keywords) the full unnarrowed pool.
+type DayType = "mobility" | "cardio";
+const DAY_TYPE_KEYWORDS: { pattern: RegExp; type: DayType }[] = [
+  { pattern: /\bmobility\b|\brecovery\b|\bstretch(ing)?\b|\byoga\b/i, type: "mobility" },
+  { pattern: /\bcardio\b|\bconditioning\b|\bmetcon\b|\bhiit\b/i, type: "cardio" },
+];
+
+function inferDayType(label: string, focus: string | undefined): DayType | null {
+  const text = [label, focus].filter(Boolean).join(" ");
+  for (const { pattern, type } of DAY_TYPE_KEYWORDS) {
+    if (pattern.test(text)) return type;
+  }
+  return null;
+}
 
 // Exported for direct unit testing without needing a full ProgramShellDay.
 export function inferMuscleGroupsFromDayText(label: string, focus: string | undefined): MuscleGroup[] {
@@ -461,14 +513,36 @@ export function inferMuscleGroupsFromDayText(label: string, focus: string | unde
 // from the ~150 program-wide pool.
 const MIN_DAY_CANDIDATES = 30;
 const MAX_PER_MUSCLE_GROUP_DAY = 10;
+// Priority muscles that ARE also one of this day's own targets get this
+// wider cap instead — an intentional emphasis day, not a leak.
+const MAX_PER_MUSCLE_GROUP_DAY_PRIORITY = 14;
+// Secondary-muscle matches get a smaller cap than primary — relevant,
+// but not the day's main event.
+const MAX_PER_MUSCLE_GROUP_DAY_SECONDARY = 4;
 const MAX_MOBILITY_CANDIDATES_DAY = 10;
 const MAX_CARDIO_CANDIDATES_DAY = 6;
+// A day whose own TYPE is mobility/cardio (not muscle-group-based) gets
+// a much larger allowance of exactly that category.
+const MAX_CANDIDATES_FOR_OWN_DAY_TYPE = 60;
 
 export function narrowCandidatesForDay(
   candidateSet: ExerciseCandidateSet,
   shellDay: ProgramShellDay,
   musclePriorities: readonly MuscleGroup[],
 ): ExerciseCandidate[] {
+  const dayType = inferDayType(shellDay.label, shellDay.focus);
+  if (dayType) {
+    const primary = candidateSet.candidates
+      .filter((c) => (dayType === "mobility" ? c.isMobility : c.isCardio))
+      .slice(0, MAX_CANDIDATES_FOR_OWN_DAY_TYPE);
+    // Still needs a small general allowance (a mobility day still
+    // includes core/activation work drawn from ordinary muscle groups,
+    // not exclusively isMobility rows) — floor logic below handles it.
+    const targeted = new Map(primary.map((c) => [c.id, c]));
+    topUpToFloor(targeted, candidateSet.candidates);
+    return Array.from(targeted.values()).sort(sortCandidates);
+  }
+
   const targetGroups = shellDay.targetMuscleGroups?.length
     ? shellDay.targetMuscleGroups
     : inferMuscleGroupsFromDayText(shellDay.label, shellDay.focus);
@@ -478,13 +552,37 @@ export function narrowCandidatesForDay(
   // full program-wide pool exactly as whole-week generation always did.
   if (targetGroups.length === 0) return candidateSet.candidates;
 
-  const groupSet = new Set<MuscleGroup>([...targetGroups, ...musclePriorities]);
+  const targetGroupSet = new Set(targetGroups);
+  // A priority muscle only earns the WIDER cap when it's also one of
+  // THIS day's own targets — no longer unconditionally unioned into
+  // every day regardless of relevance (the "leak" the review flagged).
+  const priorityGroupsForThisDay = musclePriorities.filter((mg) => targetGroupSet.has(mg));
 
   const targeted = new Map<string, ExerciseCandidate>();
-  for (const group of groupSet) {
-    for (const c of candidateSet.candidates.filter((c) => c.primaryMuscleGroup === group).slice(0, MAX_PER_MUSCLE_GROUP_DAY)) {
-      targeted.set(c.id, c);
-    }
+  const overflow: ExerciseCandidate[] = [];
+  for (const group of targetGroupSet) {
+    const cap = priorityGroupsForThisDay.includes(group) ? MAX_PER_MUSCLE_GROUP_DAY_PRIORITY : MAX_PER_MUSCLE_GROUP_DAY;
+    const matches = candidateSet.candidates.filter((c) => c.primaryMuscleGroup === group);
+    for (const c of matches.slice(0, cap)) targeted.set(c.id, c);
+    overflow.push(...matches.slice(cap)); // capped-out primary matches — preferred top-up material
+  }
+
+  // Secondary-muscle relevance: an exercise whose SECONDARY target
+  // overlaps this day's focus is a legitimate, common choice (e.g. an
+  // RDL — primary hamstrings — on a Glutes day) that primary-only
+  // filtering used to make invisible entirely.
+  for (const c of candidateSet.candidates) {
+    if (targeted.has(c.id)) continue;
+    if (!c.secondaryMuscleGroups.some((mg) => targetGroupSet.has(mg))) continue;
+    overflow.push(c); // added to overflow first; capped below
+  }
+  let secondaryAdded = 0;
+  for (const c of overflow) {
+    if (secondaryAdded >= MAX_PER_MUSCLE_GROUP_DAY_SECONDARY * targetGroupSet.size) break;
+    if (targeted.has(c.id)) continue;
+    if (!c.secondaryMuscleGroups.some((mg) => targetGroupSet.has(mg))) continue;
+    targeted.set(c.id, c);
+    secondaryAdded++;
   }
 
   // Every day still needs a warmup section (see prompt.ts's shared
@@ -498,20 +596,32 @@ export function narrowCandidatesForDay(
     targeted.set(c.id, c);
   }
 
-  // Floor: if narrowing left too thin a set (e.g. a target muscle group
-  // with few library matches under this brief's equipment/difficulty
-  // filters), top back up from the full pool rather than risk under-
-  // serving legitimate programming. Order matches the full pool's own
-  // sortCandidates so the "top-up" additions are the same ones a
-  // narrower cap would have included next anyway.
-  if (targeted.size < MIN_DAY_CANDIDATES) {
-    for (const c of candidateSet.candidates) {
-      if (targeted.size >= MIN_DAY_CANDIDATES) break;
-      targeted.set(c.id, c);
-    }
-  }
-
+  topUpToFloor(targeted, candidateSet.candidates, overflow);
   return Array.from(targeted.values()).sort(sortCandidates);
+}
+
+// Floor top-up, shared by both the day-type and muscle-group paths
+// above. Prefers candidates already identified as relevant-but-capped
+// (`preferred` — primary matches an earlier per-group cap excluded, or
+// secondary-muscle matches that lost the cap race) before falling back
+// to the fully generic full-pool order, so reaching the floor reflects
+// genuine scarcity in the library for this day, not merely a low
+// per-bucket cap masking otherwise-available relevant candidates.
+function topUpToFloor(
+  targeted: Map<string, ExerciseCandidate>,
+  fullPool: ExerciseCandidate[],
+  preferred: ExerciseCandidate[] = [],
+): void {
+  if (targeted.size >= MIN_DAY_CANDIDATES) return;
+  for (const c of preferred) {
+    if (targeted.size >= MIN_DAY_CANDIDATES) break;
+    targeted.set(c.id, c);
+  }
+  if (targeted.size >= MIN_DAY_CANDIDATES) return;
+  for (const c of fullPool) {
+    if (targeted.size >= MIN_DAY_CANDIDATES) break;
+    targeted.set(c.id, c);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
