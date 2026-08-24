@@ -153,7 +153,22 @@ export function assembleWeekFromDays(
     days.push(alignDayToShellDay(day, shellDays[idx]));
   }
 
-  const candidate: ModelWeekDraft = { id: randomUUID(), weekNumber, label: `Week ${weekNumber}`, days };
+  // [Expanded-week labeling remediation] Deliberately no `label` here —
+  // a previous version set `label: \`Week ${weekNumber}\`` as a default,
+  // which is pure redundancy (the outer UI already renders "Week
+  // {weekNumber}" from the weekNumber field itself — see
+  // DraftReviewClient.tsx) with zero independent information. Worse: for
+  // a block draft, this is called ONLY for the CANONICAL week (e.g.
+  // week 1), and expandCanonicalWeek() in progression.ts spreads this
+  // object's fields — including label — into every OTHER week it
+  // derives from it, correctly updating weekNumber but leaving the
+  // stale "Week 1" text behind. A coach reviewing the resulting week 2
+  // then saw the heading "Week 2 — Week 1", which reads as a real
+  // provenance/correctness bug even though the underlying content is
+  // completely correct for week 2. label stays optional (unset here) so
+  // a genuinely meaningful custom week title (e.g. "Accumulation") can
+  // still be set by a future writer without any schema change.
+  const candidate: ModelWeekDraft = { id: randomUUID(), weekNumber, days };
   // Deterministic week-level validation — the day-level schema already
   // validated each day individually (generateObject()'s own schema
   // enforcement); this re-checks the cross-day refinements (e.g. unique
@@ -168,6 +183,35 @@ export function assembleWeekFromDays(
   return { ok: true, week: parsed.data };
 }
 
+// [Expanded-week labeling remediation] Strips a trailing week-number
+// reference the model occasionally appends to a workout's OWN name
+// (e.g. "Glutes & Lower Body - Week 1") — buildDayGenerationPrompt
+// mentions "Week N" repeatedly for context (which week this day
+// belongs to, for progression purposes), and the model sometimes
+// echoes that into the name it invents for the workout itself, despite
+// no instruction to do so. Harmless-looking on the canonical week
+// itself, but becomes actively misleading once this exact day's
+// content is deterministically copied, unchanged, into every OTHER
+// week expandCanonicalWeek() derives from it (see progression.ts) — a
+// week-2 workout titled "...- Week 1" reads as if the wrong week's
+// content were shown, when the prescriptions/progression underneath
+// are completely correct for week 2.
+//
+// Deliberately narrow: only strips a TRAILING "- Week N" / "(Week N)"
+// -shaped suffix (hyphen/en-dash/em-dash/colon separator, or
+// parenthetical) — never touches anything else in the name. A
+// legitimately-named workout ("Lower Body Strength", "Glutes & Lower
+// Body", "Deload") has no match and passes through byte-for-byte
+// unchanged. Falls back to the original name if stripping would leave
+// nothing (e.g. a workout named literally "Week 1" with nothing else)
+// — never produces an empty name.
+const TRAILING_WEEK_REFERENCE_PATTERN = /\s*[-–—:]\s*week\s*\d+\s*$|\s*\(\s*week\s*\d+\s*\)\s*$/i;
+
+export function sanitizeGeneratedWorkoutName(name: string): string {
+  const stripped = name.replace(TRAILING_WEEK_REFERENCE_PATTERN, "").trim();
+  return stripped.length > 0 ? stripped : name;
+}
+
 // The persisted slot (week_number, day_number) and shell day are the
 // structural source of truth. The model can still drift on dayOfWeek or
 // label despite the prompt; never let that metadata make an otherwise
@@ -177,6 +221,7 @@ export function alignDayToShellDay(day: ModelDayDraft, shellDay: ProgramShellDay
     ...day,
     dayOfWeek: shellDay.dayOfWeek,
     label: shellDay.label,
+    workout: day.workout === null ? null : { ...day.workout, name: sanitizeGeneratedWorkoutName(day.workout.name) },
   };
 }
 

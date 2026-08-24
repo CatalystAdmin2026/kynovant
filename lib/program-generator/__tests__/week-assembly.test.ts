@@ -91,11 +91,22 @@ describe("assembleWeekFromDays — never throws, always a discriminated result",
   });
 
   it("alignDayToShellDay leaves workout content intact while replacing structural day metadata", () => {
+    // [Expanded-week labeling remediation] No longer a reference-equality
+    // check: alignDayToShellDay now also runs sanitizeGeneratedWorkoutName()
+    // over workout.name (stripping a stale trailing "- Week N" the model
+    // sometimes embeds in its own workout title — see staged-generation.ts's
+    // own comment), which means it always returns a NEW workout object
+    // (a shallow copy) rather than passing the original reference through
+    // untouched. Content equality is the right bar here; this fixture's
+    // name ("Wrong", from day(4, "Wrong")) has no week-reference suffix
+    // to strip, so the CONTENT is unchanged either way — only the object
+    // identity differs now, which is the deliberate, one-line cost of a
+    // real fix, not a regression.
     const drifted = day(4, "Wrong");
     const aligned = alignDayToShellDay(drifted, { dayOfWeek: 6, label: "Correct" });
     expect(aligned.dayOfWeek).toBe(6);
     expect(aligned.label).toBe("Correct");
-    expect(aligned.workout).toBe(drifted.workout);
+    expect(aligned.workout).toEqual(drifted.workout);
   });
 
   it("alignDayToShellDay does not touch id or notes — only dayOfWeek/label are shell-owned", () => {

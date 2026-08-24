@@ -212,6 +212,15 @@ export function buildDayGenerationPrompt(
     "## This Day",
     `Week ${weekNumber} of ${shell.totalWeeks} — dayOfWeek ${shellDay.dayOfWeek}, label "${shellDay.label}"${shellDay.focus ? `, focus: ${shellDay.focus}` : ""}. Your output's dayOfWeek and label MUST match these exactly.`,
     formatPhase(phase, weekNumber),
+    // [Expanded-week labeling remediation] Name the workout (the
+    // "name" field on your output's workout object) after its training
+    // focus/content only — e.g. "Glutes & Lower Body", "Upper Push",
+    // "Deload". Do NOT include the week number, phase name, or the
+    // Program's title in the workout name, even though both are given
+    // above for context. This same content is deterministically reused
+    // for other weeks in this block, so a week number baked into the
+    // name becomes stale and misleading once that happens.
+    "The workout's own name must describe its training content only — never include the week number, phase name, or Program title in it.",
     "",
     // P1 review finding: each day used to see only cross-WEEK context
     // (the same day-slot in a prior week) with no visibility into what
