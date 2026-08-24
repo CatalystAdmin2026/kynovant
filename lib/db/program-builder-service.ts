@@ -422,6 +422,50 @@ export async function publishProgram(id: string): Promise<{
 // read fresh from the DB inside this call — never client-supplied.
 // A tampered publish request has no way to name a blueprint at all,
 // let alone one this program doesn't actually reference.
+//
+// [Independent review remediation — P1 findings]
+//
+// FINDING 1 (cross-tenant info leak): every check below that could
+// reveal a blueprint's name or status now runs AFTER ownership has
+// been positively established. A referenced blueprint that is not
+// status="active" (i.e. draft or archived) AND not owned by this
+// program's own coach is rejected via ONE generic, deduplicated
+// message ("A required blueprint is unavailable or inaccessible.")
+// that names no blueprint, no status, no owner, no id. Only for an
+// ALREADY-ACTIVE dependency (shared-library visible to any coach via
+// the app's own existing viewing rules — coachCanViewWorkoutTemplate)
+// or a dependency this program's OWN coach owns does a validation
+// error ever name it — matching the pre-existing UX convention for
+// information the coach is already entitled to see.
+//
+// FINDING 2 (TOCTOU) + FINDING 3 (accurate transition counting): the
+// ENTIRE read-validate-write sequence — loading the program, resolving
+// its referenced dependency ids, reading each dependency's status/
+// owner/content, and every write — now runs inside ONE
+// db.transaction() at SERIALIZABLE isolation. Postgres's serializable
+// snapshot isolation (SSI) tracks true read-write conflicts against
+// ANY concurrently-committing transaction (regardless of that other
+// transaction's own isolation level) and aborts this transaction with
+// a 40001 serialization_failure — never allowing it to commit — if
+// anything it read (the program row, a dependency's status/createdBy,
+// or a dependency's content via validateWorkoutTemplate, now reading
+// through this same transaction rather than a separate connection —
+// see DbOrTx in lib/db/client.ts) was concurrently changed before this
+// transaction's commit. That is the actual guarantee behind "the state
+// validated is the state being published": Postgres itself refuses to
+// let a stale-snapshot commit succeed, rather than this code merely
+// hoping no race occurred. A 40001 is caught once, outside the
+// transaction, and reported as a clear "please try again" error — no
+// silent retry, no elaborate distributed locking.
+//
+// Every write is additionally its own conditional UPDATE ... RETURNING
+// (status='draft' AND created_by=<program's coach> for a blueprint;
+// status='draft' for the program), so autoPublishedBlueprintIds
+// contains ONLY the ids THIS invocation's UPDATE actually transitioned
+// — never a blueprint some other transaction already published, even
+// on the (SSI-permitted) occasions where two non-conflicting publishes
+// of *different* programs sharing a dependency happen to interleave
+// without triggering a serialization failure.
 export interface PublishProgramWithDependenciesResult {
   ok: boolean;
   template?: ProgramTemplate;
@@ -429,171 +473,254 @@ export interface PublishProgramWithDependenciesResult {
   errors?: string[];
 }
 
+const GENERIC_INACCESSIBLE_DEPENDENCY_ERROR = "A required blueprint is unavailable or inaccessible.";
+
+function hasSerializationFailureCode(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "40001";
+}
+
+function isSerializationFailure(err: unknown): boolean {
+  // Postgres SQLSTATE 40001 — the raw postgres.js driver error
+  // (PostgresError, with a `.code` property, same shape as the CHECK
+  // constraint violations already handled elsewhere in this codebase)
+  // is NOT what this function's own try/catch actually receives.
+  // drizzle-orm's query layer (PostgresJsPreparedQuery) wraps every
+  // driver error in a new `Error("Failed query: ...")` and attaches
+  // the original as `.cause` (confirmed empirically — see this
+  // function's own remediation history) — so `.code` must be checked
+  // on both the error itself and err.cause, not just the outer one.
+  if (hasSerializationFailureCode(err)) return true;
+  if (err instanceof Error && err.cause !== undefined) {
+    return hasSerializationFailureCode(err.cause);
+  }
+  return false;
+}
+
 export async function publishProgramWithDependencies(
   programId: string,
 ): Promise<PublishProgramWithDependenciesResult> {
   const db = getDb();
 
-  const [program] = await db
-    .select({ id: programTemplates.id, status: programTemplates.status, createdBy: programTemplates.createdBy })
-    .from(programTemplates)
-    .where(eq(programTemplates.id, programId))
-    .limit(1);
-  if (!program) {
-    return { ok: false, errors: ["Program not found."] };
+  let result: PublishProgramWithDependenciesResult;
+  try {
+    result = await db.transaction(
+      async (tx) => {
+        // ── Authoritative reads, inside this transaction ─────────
+        const [program] = await tx
+          .select({ id: programTemplates.id, status: programTemplates.status, createdBy: programTemplates.createdBy })
+          .from(programTemplates)
+          .where(eq(programTemplates.id, programId))
+          .limit(1);
+        if (!program) {
+          return { ok: false, errors: ["Program not found."] };
+        }
+        // Captured once as its own binding — see its use below for why
+        // ("null owner" must be handled as a deliberate, type-narrowed
+        // case, not papered over with a non-null assertion at the
+        // write site).
+        const ownerCoachId: string | null = program.createdBy;
+
+        const weeks = await tx
+          .select({ id: programWeeks.id })
+          .from(programWeeks)
+          .where(eq(programWeeks.programTemplateId, programId));
+        if (weeks.length === 0) {
+          return { ok: false, errors: ["Program has no weeks defined."] };
+        }
+        const weekIds = weeks.map((w) => w.id);
+        const days = await tx
+          .select({ workoutTemplateId: programWeekDays.workoutTemplateId })
+          .from(programWeekDays)
+          .where(inArray(programWeekDays.programWeekId, weekIds));
+        const templateIds = [
+          ...new Set(days.map((d) => d.workoutTemplateId).filter((tid): tid is string => tid !== null)),
+        ];
+        if (templateIds.length === 0) {
+          return { ok: false, errors: ["Program has no workout blueprints assigned to any days."] };
+        }
+
+        // Deterministic order — an unordered multi-row query is
+        // nondeterministic under Postgres (a lesson this codebase has
+        // already learned once elsewhere); deterministic order also
+        // keeps this transaction's own read/lock pattern consistent
+        // across repeated calls, which matters for SSI's conflict
+        // detection being predictable rather than order-dependent.
+        const templates = await tx
+          .select({
+            id: workoutTemplates.id,
+            name: workoutTemplates.name,
+            status: workoutTemplates.status,
+            createdBy: workoutTemplates.createdBy,
+          })
+          .from(workoutTemplates)
+          .where(inArray(workoutTemplates.id, templateIds))
+          .orderBy(asc(workoutTemplates.id));
+
+        const errors: string[] = [];
+        let hasInaccessibleDependency = false;
+        const candidates: string[] = []; // draft, owned by this program's coach, content-valid
+
+        const foundIds = new Set(templates.map((t) => t.id));
+        for (const tid of templateIds) {
+          if (!foundIds.has(tid)) {
+            // Same FK-RESTRICT reasoning as before: a referenced
+            // workout_templates row cannot actually be deleted while
+            // referenced, so this is unreachable in practice — kept as
+            // a fail-closed defensive branch, not a leak vector (no
+            // per-row detail available to leak in the first place).
+            hasInaccessibleDependency = true;
+          }
+        }
+
+        for (const t of templates) {
+          if (t.status === "active") {
+            // Already published — leave its status alone. Content is
+            // still validated on every program publish, exactly like
+            // validateProgramForPublish() already does for every
+            // referenced blueprint regardless of status — not
+            // weakened, not skipped. Naming it in a validation error
+            // is not a leak: an active blueprint is shared-library
+            // visible to any coach already (coachCanViewWorkoutTemplate),
+            // independent of this feature.
+            const contentResult = await validateWorkoutTemplate(t.id, tx);
+            if (!contentResult.valid) {
+              errors.push(`Blueprint "${t.name}" failed validation: ${contentResult.errors.join("; ")}`);
+            }
+            continue;
+          }
+
+          // status is "draft" or "archived" — not safe to leave alone,
+          // and NOT safe to even describe by name or status until
+          // ownership is positively established. Ownership is checked
+          // FIRST, before this blueprint's status is used in any error
+          // message — a private draft and a private archived blueprint
+          // are indistinguishable to the caller from this point on.
+          //
+          // ownerCoachId === null (the program itself has no owner —
+          // e.g. its creating user was since deleted) is treated the
+          // same as a mismatch, never auto-publishable, rather than
+          // relying on SQL's own "NULL = NULL is never true" semantics
+          // to fail closed by accident.
+          if (ownerCoachId === null || t.createdBy !== ownerCoachId) {
+            hasInaccessibleDependency = true;
+            continue;
+          }
+
+          // From here on, t is the program's OWN coach's blueprint —
+          // safe to name.
+          if (t.status === "archived") {
+            errors.push(`Blueprint "${t.name}" is archived and cannot be published. Restore it from Blueprints first.`);
+            continue;
+          }
+
+          // Own + draft — the only case this function may ever
+          // transition to "active".
+          const contentResult = await validateWorkoutTemplate(t.id, tx);
+          if (!contentResult.valid) {
+            errors.push(`Blueprint "${t.name}" failed validation: ${contentResult.errors.join("; ")}`);
+            continue;
+          }
+
+          candidates.push(t.id);
+        }
+
+        if (hasInaccessibleDependency) {
+          errors.push(GENERIC_INACCESSIBLE_DEPENDENCY_ERROR);
+        }
+
+        // Fail the ENTIRE operation closed on any error — no partial
+        // publication. Nothing has been written yet (everything above
+        // is read-only within this transaction), so returning here
+        // simply commits a no-op read-only transaction.
+        if (errors.length > 0) {
+          return { ok: false, errors };
+        }
+
+        // ── Writes — conditional, RETURNING actual transitions ───
+        // candidates is only ever non-empty when ownerCoachId is a real
+        // string (every push into candidates happens after the
+        // ownerCoachId===null-continue guard above) — this `if` makes
+        // that a type-checked fact instead of a non-null assertion,
+        // with no behavioral difference (an empty candidates array
+        // means this loop is a no-op either way).
+        const autoPublishedBlueprintIds: string[] = [];
+        if (ownerCoachId !== null) {
+          for (const id of candidates) {
+            const rows = await tx
+              .update(workoutTemplates)
+              .set({ status: "active", updatedAt: new Date() })
+              .where(
+                and(
+                  eq(workoutTemplates.id, id),
+                  eq(workoutTemplates.status, "draft"),
+                  eq(workoutTemplates.createdBy, ownerCoachId),
+                ),
+              )
+              .returning({ id: workoutTemplates.id });
+            // 0 rows here means this exact row no longer matches the
+            // predicate we just validated it against — under
+            // SERIALIZABLE isolation a concurrent committing writer
+            // that touched this row would instead cause OUR
+            // transaction to fail at commit with 40001 (caught below),
+            // so this branch is defense in depth, not the primary
+            // correctness mechanism. Either way: never report a
+            // blueprint this transaction did not itself transition.
+            if (rows.length > 0) autoPublishedBlueprintIds.push(rows[0].id);
+          }
+        }
+
+        const publishedRows = await tx
+          .update(programTemplates)
+          .set({ status: "active", updatedAt: new Date() })
+          .where(and(eq(programTemplates.id, programId), eq(programTemplates.status, "draft")))
+          .returning();
+
+        let template: ProgramTemplate;
+        if (publishedRows.length > 0) {
+          template = publishedRows[0];
+        } else {
+          // Program was already active (an idempotent re-publish, or —
+          // within this same transaction's consistent snapshot — this
+          // was always going to be the case). The dependency
+          // transitions above, if any, are still real and reported.
+          const [current] = await tx.select().from(programTemplates).where(eq(programTemplates.id, programId));
+          if (current?.status !== "active") {
+            throw new Error(`Program is in unexpected status "${current?.status}" and cannot be published.`);
+          }
+          template = current;
+        }
+
+        return { ok: true, template, autoPublishedBlueprintIds };
+      },
+      { isolationLevel: "serializable" },
+    );
+  } catch (err) {
+    if (isSerializationFailure(err)) {
+      return { ok: false, errors: ["Publishing conflicted with a concurrent change. Please try again."] };
+    }
+    throw err;
   }
 
-  // Same dependency-collection query as validateProgramForPublish().
-  const weeks = await db
-    .select({ id: programWeeks.id })
-    .from(programWeeks)
-    .where(eq(programWeeks.programTemplateId, programId));
-  if (weeks.length === 0) {
-    return { ok: false, errors: ["Program has no weeks defined."] };
-  }
-  const weekIds = weeks.map((w) => w.id);
-  const days = await db
-    .select({ workoutTemplateId: programWeekDays.workoutTemplateId })
-    .from(programWeekDays)
-    .where(inArray(programWeekDays.programWeekId, weekIds));
-  const templateIds = [
-    ...new Set(days.map((d) => d.workoutTemplateId).filter((tid): tid is string => tid !== null)),
-  ];
-  if (templateIds.length === 0) {
-    return { ok: false, errors: ["Program has no workout blueprints assigned to any days."] };
-  }
-
-  // Deterministic order — see the exercise-fixture-ordering lesson this
-  // codebase already learned once (an unordered multi-row query is
-  // nondeterministic under Postgres); also keeps lock-acquisition order
-  // identical across two concurrent publish attempts on the same
-  // program, so a genuine double-click/two-tab race fails closed via
-  // Postgres's own deadlock detection rather than ever interleaving.
-  const templates = await db
-    .select({
-      id: workoutTemplates.id,
-      name: workoutTemplates.name,
-      status: workoutTemplates.status,
-      createdBy: workoutTemplates.createdBy,
-    })
-    .from(workoutTemplates)
-    .where(inArray(workoutTemplates.id, templateIds))
-    .orderBy(asc(workoutTemplates.id));
-
-  const errors: string[] = [];
-  const toAutoPublish: string[] = [];
-
-  const foundIds = new Set(templates.map((t) => t.id));
-  for (const tid of templateIds) {
-    if (!foundIds.has(tid)) {
-      errors.push("A referenced blueprint could not be found.");
-    }
+  // Logged only after the transaction has actually committed — never
+  // for a transaction Postgres itself rolled back.
+  if (result.ok) {
+    console.log(
+      "[PROGRAM_PUBLISH_AUTO_DEPENDENCIES]",
+      JSON.stringify({
+        programId,
+        autoPublishedCount: result.autoPublishedBlueprintIds?.length ?? 0,
+        autoPublishedBlueprintIds: result.autoPublishedBlueprintIds ?? [],
+      }),
+    );
+  } else {
+    // Sanitized — count only, never the error text itself (which may
+    // legitimately name the coach's OWN blueprints) and never a
+    // cross-tenant detail (which the errors array never contains in
+    // the first place, per Finding 1's remediation above).
+    console.error("[PROGRAM_PUBLISH_AUTO_DEPENDENCIES_REJECTED]", JSON.stringify({ programId, errorCount: result.errors?.length ?? 0 }));
   }
 
-  for (const t of templates) {
-    if (t.status === "active") {
-      // Already published — leave its status alone, but its content is
-      // still validated on every program publish, exactly like
-      // validateProgramForPublish() already does for every referenced
-      // blueprint regardless of status. Not weakened, not skipped.
-      const result = await validateWorkoutTemplate(t.id);
-      if (!result.valid) {
-        errors.push(`Blueprint "${t.name}" failed validation: ${result.errors.join("; ")}`);
-      }
-      continue;
-    }
-
-    if (t.status === "archived") {
-      // Fail closed — auto-publishing an archived blueprint would
-      // silently reverse a coach's own explicit archive decision.
-      errors.push(`Blueprint "${t.name}" is archived and cannot be published. Restore it from Blueprints first.`);
-      continue;
-    }
-
-    // status === "draft" — the only status this function may ever flip
-    // to "active" automatically, and only after both checks below pass.
-
-    // Tenant isolation (Phase 4): only a blueprint owned by this
-    // program's own coach may be auto-published. Dependencies are
-    // read from the program's own persisted rows, never client input,
-    // but this check is defense in depth regardless — the same
-    // guarantee getExerciseByIdForCoach enforces for exercise
-    // replacement. A blueprint some other coach privately owns is
-    // rejected exactly like a nonexistent one, with no ownership
-    // detail leaked in the error.
-    if (t.createdBy !== program.createdBy) {
-      errors.push(`Blueprint "${t.name}" is not accessible and cannot be published.`);
-      continue;
-    }
-
-    const result = await validateWorkoutTemplate(t.id);
-    if (!result.valid) {
-      errors.push(`Blueprint "${t.name}" failed validation: ${result.errors.join("; ")}`);
-      continue;
-    }
-
-    toAutoPublish.push(t.id);
-  }
-
-  // Fail the ENTIRE operation closed on any error — no partial
-  // publication. Nothing has been written yet at this point (everything
-  // above is read-only), so "fail closed" here simply means "never open
-  // the transaction below."
-  if (errors.length > 0) {
-    console.error("[PROGRAM_PUBLISH_AUTO_DEPENDENCIES_REJECTED]", JSON.stringify({ programId, errorCount: errors.length }));
-    return { ok: false, errors };
-  }
-
-  // Atomic write phase — real transaction, real rollback. Every read
-  // above (validateWorkoutTemplate included) is side-effect-free pure
-  // DB reads (see lib/pil/enrichment.ts — no network/external calls),
-  // so nothing here can fail for a reason that would leave a partial
-  // write behind.
-  const outcome = await db.transaction(async (tx) => {
-    for (const id of toAutoPublish) {
-      await tx.update(workoutTemplates).set({ status: "active", updatedAt: new Date() }).where(eq(workoutTemplates.id, id));
-    }
-
-    // Conditional publish — the program's own status transition only
-    // ever applies FROM "draft". Concurrency control: a second,
-    // concurrent publish call (double-click, two tabs) either loses the
-    // row lock and blocks until the first commits (then sees 0 rows
-    // matched here and safely no-ops), or — if it happened to reach
-    // this UPDATE with a stale read — Postgres's own deadlock detector
-    // aborts one of the two transactions rather than ever letting them
-    // interleave into an inconsistent state. No new locking primitive
-    // needed; this reuses the transaction's own row-level locking.
-    const publishedRows = await tx
-      .update(programTemplates)
-      .set({ status: "active", updatedAt: new Date() })
-      .where(and(eq(programTemplates.id, programId), eq(programTemplates.status, "draft")))
-      .returning();
-
-    if (publishedRows.length === 0) {
-      const [current] = await tx
-        .select({ status: programTemplates.status })
-        .from(programTemplates)
-        .where(eq(programTemplates.id, programId));
-      if (current?.status === "active") {
-        // Already published (by this call's own earlier idempotent
-        // path being re-entered, or a concurrent request that won the
-        // race) — the auto-published blueprints above still happened
-        // and are real; the program-level transition is just a no-op.
-        const [row] = await tx.select().from(programTemplates).where(eq(programTemplates.id, programId));
-        return { template: row };
-      }
-      throw new Error(`Program is in unexpected status "${current?.status}" and cannot be published.`);
-    }
-
-    return { template: publishedRows[0] };
-  });
-
-  console.log(
-    "[PROGRAM_PUBLISH_AUTO_DEPENDENCIES]",
-    JSON.stringify({ programId, autoPublishedCount: toAutoPublish.length, autoPublishedBlueprintIds: toAutoPublish }),
-  );
-
-  return { ok: true, template: outcome.template, autoPublishedBlueprintIds: toAutoPublish };
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────────

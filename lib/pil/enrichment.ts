@@ -16,7 +16,7 @@
 
 import "server-only";
 import { eq, inArray, and, asc } from "drizzle-orm";
-import { getDb } from "@/lib/db/client";
+import { getDb, type DbOrTx } from "@/lib/db/client";
 import { workoutTemplates } from "@/lib/db/schema";
 import {
   exercises,
@@ -373,8 +373,14 @@ export function assembleBlueprint(data: RawBlueprintData): EnrichedBlueprint {
 export async function getBlueprintEnriched(
   templateId: string,
   coachId?: string,
+  // [Program publish auto-dependency workflow — TOCTOU remediation]
+  // Optional: pass the caller's own transaction (see DbOrTx's own
+  // comment) so this read participates in that transaction instead of
+  // opening a separate connection. Every existing caller omits this
+  // and gets the exact previous behavior.
+  dbClient?: DbOrTx,
 ): Promise<EnrichedBlueprint> {
-  const db = getDb();
+  const db = dbClient ?? getDb();
 
   // ── Query 1: Blueprint metadata ──────────────────────────
   const templateRows = await db

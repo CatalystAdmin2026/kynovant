@@ -13,7 +13,7 @@
 
 import "server-only";
 import { eq } from "drizzle-orm";
-import { getDb } from "./client";
+import { getDb, type DbOrTx } from "./client";
 import { workoutTemplates } from "./schema";
 import { getBlueprintEnriched } from "@/lib/pil/enrichment";
 import { validatePrescriptions } from "@/lib/pil/modules/validity";
@@ -74,8 +74,8 @@ function checkGroupMixedTechniques(prescriptions: EnrichedPrescription[]): strin
   return warnings;
 }
 
-async function checkDaysPerWeek(templateId: string): Promise<string | null> {
-  const db = getDb();
+async function checkDaysPerWeek(templateId: string, dbClient?: DbOrTx): Promise<string | null> {
+  const db = dbClient ?? getDb();
   const rows = await db
     .select({
       minimumDaysPerWeek: workoutTemplates.minimumDaysPerWeek,
@@ -118,11 +118,19 @@ function computeEstimatedMinutes(sections: EnrichedSection[]): number | null {
 
 export async function validateWorkoutTemplate(
   templateId: string,
+  // [Program publish auto-dependency workflow — TOCTOU remediation]
+  // Optional: pass the caller's own transaction so every read this
+  // function performs (blueprint content included) participates in —
+  // and is protected by — that transaction's isolation level, instead
+  // of running as a separate, unprotected read. See DbOrTx's comment
+  // in lib/db/client.ts. Every existing caller omits this and is
+  // unaffected.
+  dbClient?: DbOrTx,
 ): Promise<ValidationResult> {
   // ── 1. Enrich — M00 ──────────────────────────────────────
   let blueprint: EnrichedBlueprint;
   try {
-    blueprint = await getBlueprintEnriched(templateId);
+    blueprint = await getBlueprintEnriched(templateId, undefined, dbClient);
   } catch {
     return {
       valid: false,
@@ -146,7 +154,7 @@ export async function validateWorkoutTemplate(
 
   // ── 3. Template-level checks ─────────────────────────────
   const [daysError, sectionOrderErrors] = await Promise.all([
-    checkDaysPerWeek(templateId),
+    checkDaysPerWeek(templateId, dbClient),
     Promise.resolve(checkSectionDuplicateOrder(blueprint.sections)),
   ]);
 

@@ -77,3 +77,21 @@ export function getDb(): DbInstance {
 }
 
 export type Database = DbInstance;
+
+// [Program publish auto-dependency workflow — TOCTOU remediation]
+// A handful of read-only query functions (getBlueprintEnriched,
+// checkDaysPerWeek) normally call getDb() themselves and so always run
+// against a fresh connection/transaction, outside of any caller's own
+// transaction boundary. That's fine for their existing callers, but it
+// means a caller that validates a row's content and THEN mutates that
+// row inside its own transaction has no guarantee the validated state
+// is the state actually being committed — a concurrent write between
+// the (separate) validation read and the transactional write is
+// invisible to Postgres's own conflict detection, because the two
+// reads/writes never shared a transaction to detect a conflict within.
+// DbOrTx lets those functions optionally accept the caller's own `tx`
+// (from db.transaction(async (tx) => ...)) instead of opening a new
+// connection, so their reads participate in — and are protected by —
+// the caller's own transaction/isolation level. Passing nothing
+// preserves the exact previous behavior (falls back to getDb()).
+export type DbOrTx = DbInstance | Parameters<Parameters<DbInstance["transaction"]>[0]>[0];
