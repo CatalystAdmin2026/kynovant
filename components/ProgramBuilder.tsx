@@ -704,6 +704,12 @@ function PublishPanel({
 }) {
   const [errors,     setErrors]     = useState<string[] | null>(null);
   const [publishing, setPublishing] = useState(false);
+  // [Program publish auto-dependency workflow] Publishing now silently
+  // auto-publishes whichever draft blueprints this program references —
+  // this just tells the coach it happened. Zero-dependency case is
+  // untouched: autoPublishedCount stays 0, no message renders, existing
+  // publish UX is unchanged.
+  const [autoPublishedCount, setAutoPublishedCount] = useState(0);
 
   async function handlePublish() {
     setPublishing(true);
@@ -714,8 +720,9 @@ function PublishPanel({
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ publish: true }),
       });
-      const data = await res.json() as { ok: boolean; errors?: string[] };
+      const data = await res.json() as { ok: boolean; errors?: string[]; autoPublishedBlueprintIds?: string[] };
       if (data.ok) {
+        setAutoPublishedCount(data.autoPublishedBlueprintIds?.length ?? 0);
         onPublish();
       } else {
         setErrors(data.errors ?? ["Validation failed."]);
@@ -754,6 +761,15 @@ function PublishPanel({
               <p className="text-red-400/70 text-xs">{e}</p>
             </div>
           ))}
+        </div>
+      )}
+
+      {autoPublishedCount > 0 && (
+        <div className="mt-5 flex items-start gap-3 bg-emerald-500/[0.04] border border-emerald-500/[0.12] px-3 py-2.5">
+          <Check size={12} strokeWidth={3} className="text-emerald-400/70 mt-0.5 shrink-0" />
+          <p className="text-emerald-400/70 text-xs">
+            Program published — {autoPublishedCount} required blueprint{autoPublishedCount === 1 ? "" : "s"} {autoPublishedCount === 1 ? "was" : "were"} published along with it.
+          </p>
         </div>
       )}
     </div>

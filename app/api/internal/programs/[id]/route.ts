@@ -3,7 +3,7 @@ import {
   getProgramContent,
   updateProgramTemplate,
   deleteProgramTemplate,
-  publishProgram,
+  publishProgramWithDependencies,
 } from "@/lib/db/program-builder-service";
 import {
   requireCoachOrAdmin,
@@ -54,14 +54,24 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     };
 
     if (body.publish) {
-      const result = await publishProgram(id);
+      // [Program publish auto-dependency workflow] Auto-publishes the
+      // exact draft blueprints this program references (and only
+      // those), then publishes the program — one coach action instead
+      // of a separate manual "publish every blueprint first" chore.
+      // See publishProgramWithDependencies()'s own header comment for
+      // the full contract (tenant isolation, atomicity, idempotency).
+      const result = await publishProgramWithDependencies(id);
       if (!result.ok) {
         return NextResponse.json(
           { ok: false, errors: result.errors },
           { status: 422 },
         );
       }
-      return NextResponse.json({ ok: true, template: result.template });
+      return NextResponse.json({
+        ok: true,
+        template: result.template,
+        autoPublishedBlueprintIds: result.autoPublishedBlueprintIds ?? [],
+      });
     }
 
     const template = await updateProgramTemplate(id, {
