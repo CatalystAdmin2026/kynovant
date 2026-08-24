@@ -127,6 +127,56 @@ describe("replaceExercise", () => {
     if (result.ok) return;
     expect(result.error).toMatch(/more than one day\/section/i);
   });
+
+  // [Draft Review exercise search/replacement UX] Regression for
+  // required test #13 ("no generated prescription fields other than the
+  // intended exercise replacement are inadvertently changed") — the
+  // single-prescription replace path replaceExerciseAction now calls
+  // after a coach picks a result from the new ExercisePicker. The bulk
+  // equivalent (replaceExerciseByName) already has this exact assertion
+  // in lib/db/__tests__/program-generator-review-triage.test.ts; this is
+  // its single-prescription counterpart, which had no coverage before.
+  it("touches only exerciseId/exerciseName/exerciseResolution — every other prescribed field and its placement survive untouched", () => {
+    const draft = draftWithDays(
+      day("day-1", 1, "section-1", [
+        prescription({
+          id: "p-1",
+          orderIndex: 2,
+          sets: 4,
+          repsMin: 8,
+          repsMax: 10,
+          restSeconds: 90,
+          tempo: "3010",
+          isRequired: true,
+          exerciseResolution: { outcome: "ambiguous", candidates: [] },
+        }),
+      ]),
+    );
+    const result = replaceExercise(draft, {
+      dayId: "day-1",
+      sectionId: "section-1",
+      prescriptionId: "p-1",
+      exerciseId: "ex-2",
+      exerciseName: "Front Squat",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const after = result.draft.weeks[0].days[0].workout!.sections[0].prescriptions[0];
+    expect(after.exerciseId).toBe("ex-2");
+    expect(after.exerciseName).toBe("Front Squat");
+    // Stale resolution record is deliberately cleared — the coach's
+    // manual pick supersedes it.
+    expect(after.exerciseResolution).toBeUndefined();
+    // Everything else about the prescription is untouched.
+    expect(after.orderIndex).toBe(2);
+    expect(after.sets).toBe(4);
+    expect(after.repsMin).toBe(8);
+    expect(after.repsMax).toBe(10);
+    expect(after.restSeconds).toBe(90);
+    expect(after.tempo).toBe("3010");
+    expect(after.isRequired).toBe(true);
+  });
 });
 
 describe("reorderExercises", () => {

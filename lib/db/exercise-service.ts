@@ -276,6 +276,41 @@ export async function getExerciseById(id: string): Promise<Exercise | null> {
   return result ?? null;
 }
 
+// [Draft Review exercise search/replacement UX] Tenant-scoped sibling
+// of getExerciseById() above — that function was, and remains,
+// deliberately unscoped for its own existing (trusted, internal)
+// callers, but it was also the ONLY lookup app/hq/programs/generate/
+// actions.ts's replaceExerciseAction/replaceAllOccurrencesAction used
+// to validate a coach-submitted exercise id, with no scope check at
+// all: any active exercise id — including another coach's private
+// (scope="coach") exercise — would resolve successfully. Mirrors the
+// EXACT same visibility predicate searchExercises() above already
+// applies for its own coachId-scoped queries, so a coach can never
+// replace an exercise into their draft with an id searchExercises()
+// itself would never have shown them: system + organization scope,
+// plus their OWN coach-scope exercises only.
+export async function getExerciseByIdForCoach(id: string, coachId: string): Promise<Exercise | null> {
+  const result = await safeQuery(async () => {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(exercises)
+      .where(
+        and(
+          eq(exercises.id, id),
+          or(
+            eq(exercises.scope, "system"),
+            eq(exercises.scope, "organization"),
+            and(eq(exercises.scope, "coach"), eq(exercises.createdBy, coachId)),
+          )!,
+        ),
+      )
+      .limit(1);
+    return rows[0] ?? null;
+  });
+  return result ?? null;
+}
+
 export async function getExerciseMuscles(exerciseId: string): Promise<ExerciseMuscle[]> {
   const result = await safeQuery(async () => {
     const db = getDb();

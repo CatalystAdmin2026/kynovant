@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { GeneratedProgramDraft, GeneratedPrescriptionDraft, ProgramGenerationBrief } from "@/lib/program-generator/contracts";
@@ -10,6 +10,7 @@ import {
   updatePrescriptionAction,
   replaceExerciseAction,
   replaceAllOccurrencesAction,
+  searchReplacementExercisesAction,
   reorderExercisesAction,
   moveWorkoutDayAction,
   regenerateDayAction,
@@ -19,6 +20,7 @@ import {
   discardDraftAction,
   approveDraftAction,
 } from "../actions";
+import type { ReplacementExerciseSearchResult } from "../actions";
 
 interface GenerationProgress {
   totalWeeks: number | null;
@@ -538,6 +540,188 @@ function InfoSection({ groups }: { groups: FindingGroup[] }) {
   );
 }
 
+// [Draft Review exercise search/replacement UX] Replaces the old raw
+// "Replacement exercise ID" text field — a UUID no coach should be
+// expected to know — with a searchable-by-name picker. Debounced
+// (300ms), server-backed via searchReplacementExercisesAction (never
+// ships the Exercise Library to the browser — mirrors the same
+// debounce/loading/empty-state pattern components/BlueprintEditor.tsx's
+// own exercise search already established elsewhere in the app).
+//
+// Two-step by design: selecting a result only stages it (`selected`
+// state) — it does NOT call the replace action. A separate, explicit
+// "Replace" click (or Enter while already on the confirm step is
+// intentionally NOT wired to re-trigger it — see handleKeyDown) is
+// required, so arrowing through results and hitting Enter to "just see
+// what's there" can never accidentally fire a real replacement.
+//
+// The server action is the ONLY place a UUID actually flows — this
+// component never displays one; only human-readable names ever appear.
+function ExercisePicker({
+  draftId,
+  excludeExerciseId,
+  pending,
+  onConfirm,
+  onClose,
+}: {
+  draftId: string;
+  excludeExerciseId?: string | null;
+  pending: boolean;
+  onConfirm: (exercise: { id: string; name: string }) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<ReplacementExerciseSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const [highlighted, setHighlighted] = useState(0);
+  const [selected, setSelected] = useState<ReplacementExerciseSearchResult | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
+
+  const trimmedQuery = query.trim();
+
+  useEffect(() => {
+    // An empty query intentionally does nothing here — the render
+    // below already treats an empty trimmedQuery as "show nothing,"
+    // regardless of whatever stale results/searched/loading state is
+    // still sitting around from an earlier, now-cleared query.
+    if (!trimmedQuery) return;
+    // No setState directly in the effect body — mirrors
+    // components/BlueprintEditor.tsx's own existing debounced-search
+    // effect: the effect body only ever schedules the timer; every
+    // state update happens inside the (async, deferred) timeout
+    // callback below, including the loading flag itself.
+    let cancelled = false;
+    const handle = setTimeout(async () => {
+      if (cancelled) return;
+      setLoading(true);
+      const result = await searchReplacementExercisesAction({ draftId, query: trimmedQuery });
+      // Stale-response guard: if the query changed again while this
+      // request was in flight (a slower earlier keystroke resolving
+      // after a faster later one), never let it overwrite what the
+      // coach is now looking at.
+      if (cancelled) return;
+      setLoading(false);
+      setSearched(true);
+      if (result.ok) {
+        const found = result.data?.exercises ?? [];
+        const filtered = excludeExerciseId ? found.filter((e) => e.id !== excludeExerciseId) : found;
+        setResults(filtered);
+        setHighlighted(0);
+      } else {
+        setResults([]);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [trimmedQuery, draftId, excludeExerciseId]);
+
+  useEffect(() => {
+    function handleOutsideClick(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [onClose]);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onClose();
+      return;
+    }
+    if (selected) return; // confirming step — arrow/Enter no longer navigate a list
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlighted((i) => Math.min(i + 1, Math.max(results.length - 1, 0)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlighted((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (results[highlighted]) setSelected(results[highlighted]);
+    }
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      onKeyDown={handleKeyDown}
+      className="mt-2 bg-[#0d0e0f] border border-white/[0.08] p-2.5"
+    >
+      {selected ? (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-white text-[11px]">
+            Replace with <span className="text-[#C9A24D]">{selected.name}</span>?
+          </p>
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              disabled={pending}
+              onClick={() => setSelected(null)}
+              className="text-[10px] text-white/40 hover:text-white uppercase tracking-[0.15em] disabled:opacity-40"
+            >
+              Change
+            </button>
+            <button
+              disabled={pending}
+              onClick={() => onConfirm(selected)}
+              className="text-[10px] text-[#C9A24D] uppercase tracking-[0.2em] disabled:opacity-40"
+            >
+              Replace
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search exercises…"
+            aria-label="Search exercises"
+            role="combobox"
+            aria-controls={listboxId}
+            aria-expanded={trimmedQuery.length > 0}
+            aria-autocomplete="list"
+            className="w-full bg-[#080909] border border-white/[0.08] text-white text-[11px] px-2 py-1.5 placeholder:text-white/25"
+          />
+          {trimmedQuery.length > 0 && (
+            <div id={listboxId} role="listbox" className="mt-1.5 max-h-52 overflow-y-auto">
+              {loading && <p className="text-white/25 text-[10px] py-1.5 px-1">Searching…</p>}
+              {!loading && searched && results.length === 0 && (
+                <p className="text-white/25 text-[10px] py-1.5 px-1">No exercises found.</p>
+              )}
+              {!loading &&
+                results.map((ex, i) => (
+                  <button
+                    key={ex.id}
+                    role="option"
+                    aria-selected={i === highlighted}
+                    onClick={() => setSelected(ex)}
+                    onMouseEnter={() => setHighlighted(i)}
+                    className={`w-full text-left px-2 py-1.5 text-[11px] transition-colors ${
+                      i === highlighted ? "bg-[#C9A24D]/15 text-white" : "text-white/70"
+                    }`}
+                  >
+                    {ex.name}
+                    {ex.primaryMuscleGroup && (
+                      <span className="text-white/30 ml-2 text-[9px] uppercase tracking-[0.1em]">
+                        {ex.primaryMuscleGroup.replace(/_/g, " ")}
+                      </span>
+                    )}
+                  </button>
+                ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function FindingGroupCard({
   group,
   tone,
@@ -556,7 +740,7 @@ function FindingGroupCard({
   onRun: (fn: () => Promise<{ ok: boolean; error?: string }>, successMessage?: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [replaceExerciseId, setReplaceExerciseId] = useState("");
+  const [searchingReplacement, setSearchingReplacement] = useState(false);
   const color = tone === "blocker" ? "border-red-500/30" : "border-yellow-500/30";
 
   return (
@@ -664,32 +848,33 @@ function FindingGroupCard({
               ))}
             </div>
           )}
-          <div className="flex items-center gap-2">
-            <input
-              value={replaceExerciseId}
-              onChange={(e) => setReplaceExerciseId(e.target.value)}
-              placeholder="Replacement exercise ID"
-              className="bg-[#080909] border border-white/[0.08] text-white text-[10px] px-2 py-1.5 flex-1"
-            />
-            <button
-              disabled={pending || !replaceExerciseId}
-              onClick={() => {
+          {searchingReplacement ? (
+            <ExercisePicker
+              draftId={draftId}
+              pending={pending}
+              onConfirm={(ex) => {
                 onRun(
                   () =>
                     replaceAllOccurrencesAction({
                       draftId,
                       normalizedName: group.exerciseName!,
-                      exerciseId: replaceExerciseId,
+                      exerciseId: ex.id,
                     }),
-                  `Replaced all ${group.occurrenceCount} occurrence(s).`,
+                  `Replaced all ${group.occurrenceCount} occurrence(s) with "${ex.name}".`,
                 );
-                setReplaceExerciseId("");
+                setSearchingReplacement(false);
               }}
-              className="text-[10px] text-[#C9A24D] uppercase tracking-[0.2em] disabled:opacity-40 shrink-0"
+              onClose={() => setSearchingReplacement(false)}
+            />
+          ) : (
+            <button
+              disabled={pending}
+              onClick={() => setSearchingReplacement(true)}
+              className="text-[10px] text-white/40 hover:text-[#C9A24D] uppercase tracking-[0.15em] disabled:opacity-40"
             >
-              Replace All Occurrences
+              Search for a different exercise…
             </button>
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -773,7 +958,6 @@ function PrescriptionRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [replacing, setReplacing] = useState(false);
-  const [replaceId, setReplaceId] = useState("");
   const [fields, setFields] = useState({
     sets: prescription.sets?.toString() ?? "",
     repsMin: prescription.repsMin?.toString() ?? "",
@@ -858,25 +1042,19 @@ function PrescriptionRow({
       )}
 
       {replacing && (
-        <div className="mt-2 flex items-center gap-2">
-          <input
-            value={replaceId}
-            onChange={(e) => setReplaceId(e.target.value)}
-            placeholder="Replacement exercise ID"
-            className="bg-[#0d0e0f] border border-white/[0.08] text-white text-[10px] px-2 py-1.5 flex-1"
-          />
-          <button
-            disabled={pending || !replaceId}
-            onClick={() => {
-              onRun(() => replaceExerciseAction({ draftId, dayId, sectionId, prescriptionId: prescription.id, exerciseId: replaceId }), "Exercise replaced.");
-              setReplacing(false);
-              setReplaceId("");
-            }}
-            className="text-[10px] text-[#C9A24D] uppercase tracking-[0.2em] disabled:opacity-40"
-          >
-            Go
-          </button>
-        </div>
+        <ExercisePicker
+          draftId={draftId}
+          excludeExerciseId={prescription.exerciseId}
+          pending={pending}
+          onConfirm={(ex) => {
+            onRun(
+              () => replaceExerciseAction({ draftId, dayId, sectionId, prescriptionId: prescription.id, exerciseId: ex.id }),
+              `Replaced with "${ex.name}".`,
+            );
+            setReplacing(false);
+          }}
+          onClose={() => setReplacing(false)}
+        />
       )}
     </div>
   );

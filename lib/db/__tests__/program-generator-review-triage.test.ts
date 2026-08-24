@@ -29,7 +29,7 @@ import {
   listEditEvents,
   listValidationEvents,
 } from "../program-generation-service";
-import { getExerciseById } from "@/lib/db/exercise-service";
+import { getExerciseById, getExerciseByIdForCoach, searchExercises } from "@/lib/db/exercise-service";
 import { validateGeneratedDraft } from "@/lib/program-generator/validation";
 import { approveDraft } from "@/lib/program-generator/approval";
 import { groupDraftFindings, groupAckKey } from "@/lib/program-generator/findings-grouping";
@@ -46,6 +46,16 @@ const admin = { id: "" };
 
 let activeExerciseIds: string[] = [];
 let inactiveExerciseId = "";
+
+// [Draft Review exercise search/replacement UX] fixtures for
+// getExerciseByIdForCoach tenant-isolation/visibility tests and for
+// searchExercises() name/alias search behavior. Unique "kynovanttest"
+// token in every name/alias keeps these queries from ever matching real
+// seeded data, so search-behavior assertions stay deterministic.
+let coachBPrivateExerciseId = "";
+let searchExactId = "";
+let searchPrefixId = "";
+let searchAliasId = "";
 
 const draftIds: string[] = [];
 const exerciseFixtureIds: string[] = [];
@@ -252,6 +262,74 @@ beforeAll(async () => {
     .returning({ id: exercises.id });
   inactiveExerciseId = inactive.id;
   exerciseFixtureIds.push(inactive.id);
+
+  // [Draft Review exercise search/replacement UX] — coachB-owned private
+  // exercise, used to prove a coach can never see (via search or direct
+  // id lookup) another tenant's private exercise.
+  const [coachBPrivate] = await db
+    .insert(exercises)
+    .values({
+      slug: `review-triage-coachb-private-${randomUUID()}`,
+      name: "Kynovanttest CoachB Private Exercise",
+      movementPattern: "push_horizontal",
+      classification: "compound",
+      difficulty: "beginner",
+      status: "active",
+      scope: "coach",
+      createdBy: coachB.id,
+    })
+    .returning({ id: exercises.id });
+  coachBPrivateExerciseId = coachBPrivate.id;
+  exerciseFixtureIds.push(coachBPrivate.id);
+
+  // Controlled-name, scope="system" fixtures for deterministic
+  // searchExercises() name/alias search assertions — real seeded
+  // exercise names/aliases aren't under this suite's control, so exact/
+  // prefix/alias/case-insensitive/no-results behavior needs its own
+  // known rows to search against.
+  const [searchExact, searchPrefix, searchAlias] = await Promise.all([
+    db
+      .insert(exercises)
+      .values({
+        slug: `review-triage-search-exact-${randomUUID()}`,
+        name: "Kynovanttest Exact",
+        movementPattern: "push_horizontal",
+        classification: "compound",
+        difficulty: "beginner",
+        status: "active",
+        scope: "system",
+      })
+      .returning({ id: exercises.id }),
+    db
+      .insert(exercises)
+      .values({
+        slug: `review-triage-search-prefix-${randomUUID()}`,
+        name: "Kynovanttest Prefixcase Bench",
+        movementPattern: "push_horizontal",
+        classification: "compound",
+        difficulty: "beginner",
+        status: "active",
+        scope: "system",
+      })
+      .returning({ id: exercises.id }),
+    db
+      .insert(exercises)
+      .values({
+        slug: `review-triage-search-alias-${randomUUID()}`,
+        name: "Kynovanttest Somethingelse Deadlift",
+        alternateNames: ["Kynovanttest Special Alias Term"],
+        movementPattern: "hip_hinge",
+        classification: "compound",
+        difficulty: "beginner",
+        status: "active",
+        scope: "system",
+      })
+      .returning({ id: exercises.id }),
+  ]);
+  searchExactId = searchExact[0].id;
+  searchPrefixId = searchPrefix[0].id;
+  searchAliasId = searchAlias[0].id;
+  exerciseFixtureIds.push(searchExactId, searchPrefixId, searchAliasId);
 });
 
 // Cleanup robustness — same philosophy as program-generator-integration.
@@ -673,5 +751,92 @@ describe("Replace All Occurrences — ownership and validity gates", () => {
     expect(row.status).toBe("approved");
     // The same status the action's loadEditableDraft() check rejects.
     expect(["approved", "discarded"]).toContain(row.status);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// [Draft Review exercise search/replacement UX]
+//
+// getExerciseByIdForCoach — the exact function replaceExerciseAction and
+// replaceAllOccurrencesAction now call to validate a coach-submitted
+// exercise id (in place of the old, unscoped getExerciseById). These
+// tests are the tenant-isolation regression the task explicitly
+// requires for the server-side logic this task touched: a malicious
+// client manually submitting another tenant's private exercise id, or
+// an id that doesn't exist at all, must not resolve to a usable
+// exercise — same as searchReplacementExercisesAction can't be invoked
+// directly here (see that action's own comment), this exercises the
+// underlying gate the action calls.
+// ─────────────────────────────────────────────────────────────
+
+describe("getExerciseByIdForCoach — tenant isolation and visibility", () => {
+  it("a system-scope exercise is visible to any coach", async () => {
+    const exercise = await getExerciseByIdForCoach(activeExerciseIds[0], coachA.id);
+    expect(exercise).not.toBeNull();
+    expect(exercise!.id).toBe(activeExerciseIds[0]);
+  });
+
+  it("a coach can see their own private exercise", async () => {
+    const exercise = await getExerciseByIdForCoach(coachBPrivateExerciseId, coachB.id);
+    expect(exercise).not.toBeNull();
+    expect(exercise!.id).toBe(coachBPrivateExerciseId);
+  });
+
+  it("a coach cannot see (or replace with) another tenant's private exercise — the exact regression this task's security fix addresses", async () => {
+    const exercise = await getExerciseByIdForCoach(coachBPrivateExerciseId, coachA.id);
+    expect(exercise).toBeNull();
+  });
+
+  it("a nonexistent exercise id resolves to null — an arbitrary client-supplied uuid is rejected, not silently accepted", async () => {
+    const exercise = await getExerciseByIdForCoach(randomUUID(), coachA.id);
+    expect(exercise).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// [Draft Review exercise search/replacement UX]
+//
+// searchExercises() name/alias search — the exact query
+// searchReplacementExercisesAction reuses (no new search infrastructure
+// was added). Covers required test categories #1-#5: exact name,
+// partial/prefix, case-insensitive, alias, and no-results.
+// ─────────────────────────────────────────────────────────────
+
+describe("searchExercises — name/alias search behavior used by the replacement picker", () => {
+  it("finds an exercise by its exact name", async () => {
+    const results = await searchExercises({ name: "Kynovanttest Exact", statuses: ["active"], limit: 20 }, coachA.id);
+    expect(results.some((e) => e.id === searchExactId)).toBe(true);
+  });
+
+  it("finds an exercise by a prefix word of its name (partial search)", async () => {
+    const results = await searchExercises({ name: "Kynovanttest Prefixcase", statuses: ["active"], limit: 20 }, coachA.id);
+    expect(results.some((e) => e.id === searchPrefixId)).toBe(true);
+  });
+
+  it("is case-insensitive", async () => {
+    const results = await searchExercises({ name: "KYNOVANTTEST EXACT", statuses: ["active"], limit: 20 }, coachA.id);
+    expect(results.some((e) => e.id === searchExactId)).toBe(true);
+  });
+
+  it("finds an exercise by an alias/alternate name even when the query doesn't appear in its primary name", async () => {
+    const results = await searchExercises({ name: "Special Alias Term", statuses: ["active"], limit: 20 }, coachA.id);
+    expect(results.some((e) => e.id === searchAliasId)).toBe(true);
+  });
+
+  it("returns no results for a query that matches nothing", async () => {
+    const results = await searchExercises(
+      { name: `nonexistent-query-${randomUUID()}`, statuses: ["active"], limit: 20 },
+      coachA.id,
+    );
+    expect(results).toHaveLength(0);
+  });
+
+  it("never returns another coach's private exercise, even when the query matches its name", async () => {
+    const results = await searchExercises({ name: "Kynovanttest CoachB Private Exercise", statuses: ["active"], limit: 20 }, coachA.id);
+    expect(results.some((e) => e.id === coachBPrivateExerciseId)).toBe(false);
+
+    // The owning coach can find it.
+    const ownResults = await searchExercises({ name: "Kynovanttest CoachB Private Exercise", statuses: ["active"], limit: 20 }, coachB.id);
+    expect(ownResults.some((e) => e.id === coachBPrivateExerciseId)).toBe(true);
   });
 });

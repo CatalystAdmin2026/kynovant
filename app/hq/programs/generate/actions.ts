@@ -40,7 +40,8 @@ import { requireCoachOrAdmin, assertCoachOwnsClient, resolveTenantScope } from "
 import type { PublicUser } from "@/lib/supabase/session";
 import { getDb } from "@/lib/db/client";
 import { clientProfiles } from "@/lib/db/schema";
-import { getExerciseById } from "@/lib/db/exercise-service";
+import { getExerciseByIdForCoach, searchExercises } from "@/lib/db/exercise-service";
+import { rankExerciseNameMatch } from "@/lib/program-generator/exercise-search-rank";
 import {
   createDraft,
   getOwnedDraft,
@@ -427,7 +428,19 @@ export async function replaceExerciseAction(params: {
   // rather than letting an invented id slip into the draft (locked
   // rule #4/#5); full validation would also catch it, but this gives
   // an immediate, specific error instead of a generic blocker later.
-  const exercise = await getExerciseById(params.exerciseId);
+  //
+  // [Draft Review exercise search/replacement UX] getExerciseByIdForCoach
+  // (not the unscoped getExerciseById) — the same visibility rule
+  // searchExercises() itself already enforces: system + organization
+  // scope, plus the DRAFT's own coach's private exercises only. Scoped
+  // to loaded.draftRow.coachId (the draft's actual owning coach), not
+  // the acting user's own id — correct for both a coach editing their
+  // own draft (identical either way) and an admin editing on a coach's
+  // behalf (must see what THAT coach can see, not the admin's own
+  // scope). A client submitting another coach's private exercise id —
+  // whether by tampering or a stale/malicious request — is rejected
+  // here exactly like a nonexistent id.
+  const exercise = await getExerciseByIdForCoach(params.exerciseId, loaded.draftRow.coachId);
   if (!exercise) return { ok: false, error: "That exercise does not exist in the library." };
   if (exercise.status !== "active") {
     return { ok: false, error: "That exercise is not currently active and cannot be used." };
@@ -469,7 +482,10 @@ export async function replaceAllOccurrencesAction(params: {
   const loaded = await loadEditableDraft(params.draftId);
   if (!loaded.ok) return { ok: false, error: loaded.error };
 
-  const exercise = await getExerciseById(params.exerciseId);
+  // [Draft Review exercise search/replacement UX] Same tenant-scoped
+  // lookup as replaceExerciseAction above — see that call site's own
+  // comment for the full rationale.
+  const exercise = await getExerciseByIdForCoach(params.exerciseId, loaded.draftRow.coachId);
   if (!exercise) return { ok: false, error: "That exercise does not exist in the library." };
   if (exercise.status !== "active") {
     return { ok: false, error: "That exercise is not currently active and cannot be used." };
@@ -498,6 +514,69 @@ export async function replaceAllOccurrencesAction(params: {
 
   if (!saveResult.ok) return { ok: false, error: saveResult.error };
   return { ok: true, data: { replacedCount } };
+}
+
+// ─────────────────────────────────────────────────────────────
+// [Draft Review exercise search/replacement UX]
+//
+// Replaces the old "Replacement exercise ID" free-text field — a raw
+// UUID a coach was expected to know and type by hand — with a
+// searchable-by-name picker. This is the server side of that picker:
+// a thin wrapper around the EXISTING, already tenant-aware
+// searchExercises() (lib/db/exercise-service.ts), reusing the exact
+// same auth/ownership/draft-status gate every other edit action in
+// this file already goes through (loadEditableDraft) rather than
+// inventing a parallel search surface or a second Exercise Library.
+//
+// Server-backed rather than shipping the whole library to the browser
+// — searchExercises() already does a single indexed (GIN tsvector,
+// including alternate_names/aliases — see drizzle/0014) query, so this
+// is one lightweight round trip per search, not a client-side scan.
+//
+// Scoped to loaded.draftRow.coachId (the draft's own owning coach, see
+// replaceExerciseAction's own comment above for why this — not the
+// acting user's id — is the correct scope for both a coach on their
+// own draft and an admin acting on a coach's behalf) — a coach can
+// never even SEE another tenant's private exercise here, the same
+// guarantee getExerciseByIdForCoach enforces at the actual replace
+// step. This is defense in depth, not the only place tenant isolation
+// is enforced: the id this returns is still re-validated from scratch
+// by replaceExerciseAction/replaceAllOccurrencesAction when the coach
+// actually confirms a replacement — this search result is never
+// trusted on its own.
+export interface ReplacementExerciseSearchResult {
+  id: string;
+  name: string;
+  primaryMuscleGroup: string | null;
+}
+
+// searchExercises() itself orders results alphabetically (a single
+// ORDER BY, not a relevance rank) — rankExerciseNameMatch (lib/
+// program-generator/exercise-search-rank.ts; see that file's header for
+// the full rationale and tier order) re-sorts that already-small,
+// already tenant-scoped, already text-matched result set in memory,
+// with zero additional queries.
+export async function searchReplacementExercisesAction(params: {
+  draftId: string;
+  query: string;
+}): Promise<ActionResult<{ exercises: ReplacementExerciseSearchResult[] }>> {
+  const loaded = await loadEditableDraft(params.draftId);
+  if (!loaded.ok) return { ok: false, error: loaded.error };
+
+  const query = params.query.trim();
+  if (query.length === 0) return { ok: true, data: { exercises: [] } };
+
+  const results = await searchExercises({ name: query, statuses: ["active"], limit: 20 }, loaded.draftRow.coachId);
+
+  const lowerQuery = query.toLowerCase();
+  const ranked = [...results].sort(
+    (a, b) => rankExerciseNameMatch(a, lowerQuery) - rankExerciseNameMatch(b, lowerQuery),
+  );
+
+  return {
+    ok: true,
+    data: { exercises: ranked.map((e) => ({ id: e.id, name: e.name, primaryMuscleGroup: e.primaryMuscleGroup })) },
+  };
 }
 
 export async function reorderExercisesAction(params: {
