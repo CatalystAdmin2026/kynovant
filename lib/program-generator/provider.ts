@@ -444,6 +444,57 @@ async function callFixtureProvider(candidates: ExerciseCandidate[]): Promise<Gen
 }
 
 // ─────────────────────────────────────────────────────────────
+// [Monday-first scheduling remediation] Deterministic backstop for
+// shell-generated dayOfWeek values — correctness must not depend
+// entirely on the model honoring buildShellGenerationPrompt's new
+// dayOfWeek instruction (see that function's own comment for the
+// original bug: a real production draft, "Maddie," was generated
+// Sunday-first because nothing ever told the model dayOfWeek's
+// meaning, so it defaulted to naive 0-indexed sequential slots).
+//
+// This targets ONLY the exact, narrow signature of "the model picked
+// no specific days at all and defaulted to naive sequential slots
+// starting at 0" — i.e. the day set is EXACTLY {0, 1, ..., n-1} for n
+// scheduled days. Any OTHER set of dayOfWeek values (Tue/Thu/Sat,
+// weekends, a deliberately Sunday-anchored split, anything the model
+// chose in response to an explicit request) is left byte-for-byte
+// untouched — explicit scheduling intent always wins, by construction,
+// since it can never coincide with this one specific ambiguous shape
+// for n >= 2 (see the two exclusions below).
+//
+// Deliberately excludes n === 1: a single chosen day trivially "looks
+// like" {0}, the exact same shape as the ambiguous-default signature,
+// with zero structural way to distinguish "the model defaulted" from
+// "the coach explicitly wants only Sunday training" — there is no
+// contract field carrying explicit day-of-week intent (checked: brief
+// only has daysPerWeek/preferredSplit/freeformInstructions, nothing
+// structural), and guessing here risks silently overriding a genuine
+// Sunday-only request. The prompt instruction above (telling the model
+// to default to Monday even for a single day) is the only line of
+// defense for that one case, deliberately, rather than a heuristic
+// that could be wrong in exactly the case explicit intent matters most.
+//
+// Deliberately excludes n >= 7: every day of the week is used
+// regardless of "start day" — there is no distinct Monday-first
+// variant to normalize toward, and shifting would push a value out of
+// the valid 0-6 range.
+export function normalizeAmbiguousShellSchedule(days: ProgramShellDay[]): ProgramShellDay[] {
+  const n = days.length;
+  if (n <= 1 || n >= 7) return days;
+
+  const actual = new Set(days.map((d) => d.dayOfWeek));
+  const ambiguousDefault = new Set(Array.from({ length: n }, (_, i) => i)); // {0, 1, ..., n-1}
+  const isAmbiguousDefault = actual.size === ambiguousDefault.size && [...actual].every((v) => ambiguousDefault.has(v));
+  if (!isAmbiguousDefault) return days;
+
+  // Exact match — shift every day forward by one (0->1, 1->2, ..., n-1->n),
+  // landing on {1, ..., n}: Monday through the nth consecutive day, still
+  // fully within the valid 0-6 range since n <= 6 here. Only dayOfWeek
+  // moves; label/focus/targetMuscleGroups and array position are untouched.
+  return days.map((d) => ({ ...d, dayOfWeek: d.dayOfWeek + 1 }));
+}
+
+// ─────────────────────────────────────────────────────────────
 // PUBLIC API — staged generation
 // ─────────────────────────────────────────────────────────────
 
@@ -452,7 +503,12 @@ export async function generateProgramShell(
   clientContext: ClientContextSummary | null,
   candidateSet?: ExerciseCandidateSet,
 ): Promise<ShellGenerationOutcome> {
-  if (isFixtureModeEnabled()) return callFixtureShellProvider(brief);
+  if (isFixtureModeEnabled()) {
+    const fixtureResult = await callFixtureShellProvider(brief);
+    return fixtureResult.ok
+      ? { ...fixtureResult, shell: { ...fixtureResult.shell, days: normalizeAmbiguousShellSchedule(fixtureResult.shell.days) } }
+      : fixtureResult;
+  }
 
   const prompt = buildShellGenerationPrompt(brief, clientContext, candidateSet);
   const result = await callProvider({
@@ -462,7 +518,8 @@ export async function generateProgramShell(
     maxOutputTokens: SHELL_MAX_OUTPUT_TOKENS,
   });
   if (!result.ok) return result;
-  return { ok: true, shell: result.object, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
+  const shell = { ...result.object, days: normalizeAmbiguousShellSchedule(result.object.days) };
+  return { ok: true, shell, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
 }
 
 // The staged path's actual per-call unit — see this file's header

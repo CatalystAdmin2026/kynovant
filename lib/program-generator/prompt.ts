@@ -361,6 +361,16 @@ export function buildShellGenerationPrompt(
     "## What to produce",
     `- totalWeeks must be exactly ${brief.weeks}.`,
     `- days must have exactly ${brief.daysPerWeek} entries — the fixed weekly training split every week will follow. Give each a clear label (e.g. "Upper Push", "Lower Body", "Full Body A") consistent with the requested split (${brief.preferredSplit}).`,
+    // [Monday-first scheduling remediation] Root cause of a real
+    // production defect: this prompt never told the model what
+    // dayOfWeek means, so it defaulted to naive 0-indexed sequential
+    // values (0,1,2,...) — which the app's own persisted schema and
+    // every UI (schema-program.ts, ProgramBuilder.tsx, DraftReviewClient.tsx)
+    // interpret as 0=Sunday, rendering the program as starting Sunday
+    // instead of the intended Monday. This is a HINT, not a guarantee —
+    // provider.ts's normalizeAmbiguousShellSchedule() is the
+    // deterministic backstop for when the model doesn't comply.
+    "- dayOfWeek uses this application's fixed convention: 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday. Unless the brief or its Additional Notes explicitly requests a different schedule (e.g. specific named days, weekends, or a non-Monday start), the training week should begin on Monday (dayOfWeek=1) and use consecutive days from there.",
     "- phases must divide the program into logical progression blocks (e.g. accumulation, intensification, a deload) with non-overlapping week ranges that together cover every week from 1 to totalWeeks. Mark deload/lighter weeks explicitly via isDeload. Each phase's progressionTarget should describe concretely what should increase or change across weeks in that phase (e.g. \"add 1 rep per set each week, then increase load\").",
     "- globalConstraints should compactly restate any injury, exclusion, or equipment limitations from the brief above that every week's generation must continue to honor.",
     "Do not include any exercises, sets, reps, or workout content — that comes later, one week at a time.",
