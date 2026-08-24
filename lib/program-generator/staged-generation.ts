@@ -97,7 +97,14 @@ import {
   type ExerciseCandidateSet,
 } from "./exercise-candidates";
 import { findDayUnique, replaceDayContent } from "./edit-ops";
-import { deriveBlockPlans, findBlockForWeek, resolveGenerationArchitecture, type BlockPlan, type GenerationArchitecture } from "./block-plan";
+import {
+  deriveBlockPlans,
+  findBlockForWeek,
+  resolveGenerationArchitecture,
+  resolveEffectiveBlockGenerationVersion,
+  type BlockPlan,
+  type GenerationArchitecture,
+} from "./block-plan";
 import { expandCanonicalWeek } from "./progression";
 import { deriveCanonicalWeekBlueprint, validateCanonicalWeekBlueprint, summarizeSiblingAllocationsForPrompt } from "./blueprint";
 import {
@@ -714,16 +721,21 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     }
   }
 
-  // Phase D: version only ever matters for "block" — mirrors
-  // architecture's own case-1/case-3 resolution exactly (case 2,
-  // isResume with null architecture, forces legacy_day above and never
-  // reaches here with architecture==="block", so there is no
-  // "isResume forces version 1" branch to write here at all — it's
-  // structurally unreachable, not omitted).
-  let blockGenerationVersion: 1 | 2 | null = null;
-  if (architecture === "block") {
-    blockGenerationVersion = params.existingGenerationArchitectureVersion ?? CURRENT_BLOCK_GENERATION_VERSION;
-  }
+  // Phase D: version only ever matters for "block". Review finding on
+  // Phase D candidate 6734599: the original inline
+  // `existingGenerationArchitectureVersion ?? CURRENT_BLOCK_GENERATION_VERSION`
+  // silently upgraded a RESUME of an EXISTING "block" draft (isResume
+  // true, existingGenerationArchitecture already "block") with a null
+  // persisted version — a real pre-Phase-D block draft — to the
+  // CURRENT default at runtime, even though drizzle/0038's own
+  // contract says null on an existing block draft means version 1
+  // forever. See resolveEffectiveBlockGenerationVersion's own header
+  // (block-plan.ts) for the full precedence this now enforces in one
+  // place instead of a scattered `??`.
+  const blockGenerationVersion = resolveEffectiveBlockGenerationVersion(
+    { architecture, persistedVersion: params.existingGenerationArchitectureVersion, isResume: params.isResume },
+    CURRENT_BLOCK_GENERATION_VERSION,
+  );
 
   if (!params.existingGenerationArchitecture) {
     // First time this draft has ever made this decision — persist the
@@ -907,6 +919,25 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
         return { ok: false, error: failureReason };
       }
 
+      // Technique eligibility only exists as a concept under Phase D
+      // (version 2) — a version-1 (Phase C) block draft's canonical
+      // week was never prompted with any eligibility awareness at all,
+      // so introducing an eligibility map into ITS expansion would be
+      // new behavior for an old draft, not a bug fix. Re-derived here
+      // (never persisted — see blueprint.ts's own header for why a
+      // fully deterministic blueprint needs no persistence at all) from
+      // the SAME block/shell/experienceLevel a version-2 draft's
+      // canonical-week generation already used, so it is byte-for-byte
+      // identical every time this recomputes it, on any resume.
+      const techniqueEligibilityByDayOfWeek =
+        blockGenerationVersion === 2
+          ? Object.fromEntries(
+              deriveCanonicalWeekBlueprint(blockLookup.block, shell.days, params.brief.experienceLevel)
+                .days.filter((d) => d.techniqueEligibility !== null)
+                .map((d) => [d.dayOfWeek, d.techniqueEligibility as string]),
+            )
+          : undefined;
+
       const expansion = expandCanonicalWeek({
         canonicalWeek: canonicalWeekContent,
         progressionStrategy: blockLookup.block.progressionStrategy,
@@ -914,6 +945,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
         experienceLevel: params.brief.experienceLevel,
         blockWeekIndex: weekNumber - blockLookup.block.weekStart + 1,
         blockLength: blockLookup.block.blockLength,
+        techniqueEligibilityByDayOfWeek,
       });
       if (!expansion.ok) {
         logGenerationFailure({
@@ -1071,6 +1103,25 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
         // the legacy per-day guard below, applied once per batch
         // instead of once per call. See DEFAULT_GENERATION_TIME_BUDGET_MS's
         // own comment for the ceiling this budgets against.
+        //
+        // [Independent review remediation, Finding #14] Reviewed
+        // whether the 60s margin already baked into that 240s budget
+        // still holds now that a single guard crossing can be followed
+        // by up to dayConcurrency (default 5) SEQUENTIAL saveGenerationDay
+        // calls, not just one — worst case, the guard permits starting
+        // a batch with as little as dayTimeoutMs (45s) of budget left,
+        // so a batch that runs the full timeout lands right at the
+        // 240s line before persistence even begins. Concluded no
+        // change is needed: each saveGenerationDay call here is a
+        // single-row upsert of already-generated JSON (no exercise
+        // resolution/validation — that only runs once, at whole-draft
+        // finalization, outside this per-day loop), so 5 of them in a
+        // row cost low single-digit seconds in practice, comfortably
+        // inside the existing 60s margin alongside updateRunProgress
+        // and the failure-path writes below. Kept the fixed 240s/60s
+        // split as-is rather than adding a separate concurrency-aware
+        // margin constant — not worth the complexity for a difference
+        // this small.
         if (Date.now() - runStartedAt + dayTimeoutMs > timeBudgetMs) {
           const firstDay = batchIndexes[0];
           const firstShellDay = shell.days[firstDay - 1];
@@ -1110,7 +1161,34 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
             blueprintIntent: daySlot
               ? {
                   primaryPatternEmphasis: daySlot.primaryPatternEmphasis,
-                  techniqueEligibility: daySlot.techniqueEligibility,
+                  // Review finding on Phase D candidate 6734599 (canonical
+                  // prompt contract): the canonical week IS the block's
+                  // week 1 — for intermediate/mixed, Phase B's own
+                  // activation rule only turns an eligible technique on
+                  // at the block's FINAL week, so telling canonical
+                  // generation "eligible, use it now if appropriate"
+                  // would let the AI activate it prematurely, right back
+                  // into the "week 1 active -> middle straight -> final
+                  // active again" pattern this was meant to fix.
+                  // Structurally enforced, not left to natural-language
+                  // hope: only advanced/competitive (who are trusted to
+                  // activate immediately, and whose canonical choice
+                  // Phase B's existing "maintain as assigned" rule then
+                  // carries through the whole block unchanged) ever see
+                  // a non-null value here — everyone else gets the exact
+                  // same "not eligible this week" prompt text the
+                  // genuinely-ineligible case already uses, correctly
+                  // reflecting "not eligible in week 1" without touching
+                  // prompt.ts at all. Activation for intermediate/mixed
+                  // happens later, entirely inside Phase B (see this
+                  // file's own techniqueEligibilityByDayOfWeek — passed
+                  // into expandCanonicalWeek in the deterministic-
+                  // expansion branch, independent of what this canonical
+                  // prompt said).
+                  techniqueEligibility:
+                    daySlot.techniqueEligibility && (params.brief.experienceLevel === "advanced" || params.brief.experienceLevel === "competitive")
+                      ? daySlot.techniqueEligibility
+                      : null,
                   siblingAllocationSummary: summarizeSiblingAllocationsForPrompt(blueprint, shellDay.dayOfWeek),
                 }
               : null,

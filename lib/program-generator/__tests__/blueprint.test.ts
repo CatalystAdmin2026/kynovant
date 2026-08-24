@@ -100,6 +100,45 @@ describe("deriveCanonicalWeekBlueprint", () => {
     expect(new Set(patterns).size).toBe(3);
   });
 
+  it("[overlap grouping P2, candidate 6734599] a BRIDGING day that overlaps two otherwise-separate days transitively merges them into one component", () => {
+    // A=[chest] and C=[back] do NOT directly overlap each other, but
+    // B=[chest,back] overlaps BOTH — all three must end up in the SAME
+    // connected component (3 distinct pattern emphases), not two
+    // separate components where A/B merge but C is left alone (the
+    // exact bug: Array.find stopped at the FIRST matching group).
+    const days: BlueprintShellDay[] = [
+      { dayOfWeek: 1, label: "A", targetMuscleGroups: ["chest"] },
+      { dayOfWeek: 3, label: "C", targetMuscleGroups: ["upper_back"] },
+      { dayOfWeek: 5, label: "B (bridge)", targetMuscleGroups: ["chest", "upper_back"] },
+    ];
+    const blueprint = deriveCanonicalWeekBlueprint(block(), days, "advanced");
+    const patterns = blueprint.days.map((d) => d.primaryPatternEmphasis);
+    expect(patterns.every((p) => p !== null)).toBe(true);
+    expect(new Set(patterns).size).toBe(3); // all three in one component, all distinct
+  });
+
+  it("[overlap grouping] two truly separate components remain separate, even with a bridging day present for a THIRD component", () => {
+    const days: BlueprintShellDay[] = [
+      { dayOfWeek: 1, label: "Push A", targetMuscleGroups: ["chest"] },
+      { dayOfWeek: 2, label: "Push B", targetMuscleGroups: ["chest"] },
+      { dayOfWeek: 3, label: "Legs A", targetMuscleGroups: ["quadriceps"] },
+      { dayOfWeek: 4, label: "Legs B", targetMuscleGroups: ["quadriceps"] },
+    ];
+    const blueprint = deriveCanonicalWeekBlueprint(block(), days, "advanced");
+    const pushPattern1 = blueprint.days.find((d) => d.label === "Push A")!.primaryPatternEmphasis;
+    const pushPattern2 = blueprint.days.find((d) => d.label === "Push B")!.primaryPatternEmphasis;
+    const legsPattern1 = blueprint.days.find((d) => d.label === "Legs A")!.primaryPatternEmphasis;
+    const legsPattern2 = blueprint.days.find((d) => d.label === "Legs B")!.primaryPatternEmphasis;
+    // Within each component, the two days differ from each other...
+    expect(pushPattern1).not.toBe(pushPattern2);
+    expect(legsPattern1).not.toBe(legsPattern2);
+    // ...but the two components are independently assigned (both start
+    // the SAME pattern cycle from its own beginning, since they never
+    // interact) — the push component and leg component are NOT one
+    // shared 4-way-distinct component.
+    expect(new Set([pushPattern1, pushPattern2])).toEqual(new Set([legsPattern1, legsPattern2]));
+  });
+
   it("[G/H/I] technique eligibility respects the experience ceiling: beginner never eligible, intermediate exactly one slot, advanced up to two", () => {
     const beginner = deriveCanonicalWeekBlueprint(block(), FIVE_DAY_SPLIT, "beginner");
     expect(beginner.days.every((d) => d.techniqueEligibility === null)).toBe(true);

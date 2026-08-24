@@ -251,3 +251,85 @@ export interface GenerationArchitectureContext {
 export function resolveGenerationArchitecture(context: GenerationArchitectureContext): GenerationArchitecture {
   return isPhaseBlockSupportedGoal(context.goal) ? "block" : "legacy_day";
 }
+
+// ─────────────────────────────────────────────────────────────
+// BLOCK GENERATION VERSION (Phase D)
+//
+// Review finding on Phase D candidate 6734599: the original inline
+// resolution (`existingGenerationArchitectureVersion ?? CURRENT_
+// BLOCK_GENERATION_VERSION`) silently upgraded a RESUME of an
+// existing "block" draft with a null persisted version — a real
+// pre-Phase-D (Phase C) block draft — to the CURRENT default (2,
+// blueprint+concurrent) at RUNTIME, even though migration 0038's own
+// documented contract says a null version on an existing block draft
+// means version 1 (Phase C serial), never re-interpreted. The
+// persisted DB value itself was never corrupted by this bug (nothing
+// wrote 2 to a null-version row), but the ACTUAL GENERATION BEHAVIOR
+// for that resume was wrong — exactly the same class of bug Phase C's
+// own "any existing progress -> legacy_day" fix addressed for
+// architecture itself, now recurring one layer down for version.
+//
+// This function is the ONE place that decision is made — never
+// scattered `?? CURRENT_BLOCK_GENERATION_VERSION` at a call site.
+// Mirrors resolveGenerationArchitecture's own isResume-based
+// precedence exactly, one layer down:
+//   1. architecture !== "block" -> version is always null (a version
+//      is only ever meaningful for "block" — see migration 0038's own
+//      pairing CHECK constraint).
+//   2. A persisted version already exists (1 or 2) -> ALWAYS honored,
+//      never re-derived.
+//   3. isResume === true with persistedVersion still null -> this can
+//      ONLY be a historical block draft that predates migration 0038 (or
+//      a resume of a draft whose very first attempt never got far
+//      enough to decide a version at all) — interpret as version 1
+//      (Phase C serial), never as "whatever the current code defaults
+//      to." A malformed persisted value is expected to already have
+//      been sanitized to null by the caller (see actions.ts's
+//      parseGenerationArchitectureVersion) before it ever reaches
+//      here — this function treats null and "malformed-then-sanitized"
+//      identically, both failing closed to the same safe value.
+//   4. Neither of the above — a genuinely NEW block draft
+//      (isResume === false) — gets the CURRENT default.
+//
+// On "prove runtime behavior, not just the stored value" (the
+// remediation task's own explicit demand, since the original bug left
+// the STORED version untouched and only corrupted in-memory behavior):
+// staged-generation.ts calls this function once and uses its return
+// value, unmodified, as the SOLE branch condition for every
+// version-dependent decision that follows (blueprint computation, the
+// concurrent-batch loop vs. the legacy serial loop, whether
+// techniqueEligibilityByDayOfWeek is ever computed at all). There is
+// no second, parallel place that independently re-derives "which
+// version to run" the way the original `?? CURRENT_VERSION` bug did —
+// that duality (one expression implicitly describing what to persist,
+// a different one deciding what to run) was the actual defect. An
+// integration-level test proving the persisted column AND confirming,
+// by direct code inspection, that the branch condition reads the same
+// resolved value is therefore sufficient here; it was not sufficient
+// against the original code, which is exactly what made the original
+// bug possible. (A content-based end-to-end proof — e.g. asserting a
+// technique never activates for a v1-resumed draft — was attempted and
+// discarded: the shared dev-fixture's buildBlueprint() only ever emits
+// a single "main_lift" section, so findTechniqueActivationTarget()
+// legitimately returns null regardless of version, making that
+// particular signal version-blind rather than version-proving with
+// this fixture. See progression.test.ts's "technique ACTIVATION from
+// eligibility" suite for the real positive/negative proof of the
+// eligibility mechanism itself, using a fixture built specifically to
+// have an eligible activation target.)
+// ─────────────────────────────────────────────────────────────
+
+export interface BlockGenerationVersionContext {
+  architecture: GenerationArchitecture;
+  persistedVersion: 1 | 2 | null;
+  isResume: boolean;
+}
+
+export function resolveEffectiveBlockGenerationVersion(
+  context: BlockGenerationVersionContext,
+  currentDefaultVersion: 1 | 2,
+): 1 | 2 | null {
+  if (context.architecture !== "block") return null;
+  if (context.persistedVersion === 1 || context.persistedVersion === 2) return context.persistedVersion;
+  return context.isResume ? 1 : currentDefaultVersion;
+}

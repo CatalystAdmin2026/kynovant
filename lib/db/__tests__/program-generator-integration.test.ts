@@ -2170,4 +2170,188 @@ describe("Phase D — blueprint-guided canonical-week concurrency", () => {
     expect(draftRow.generationArchitecture).toBe("legacy_day");
     expect(draftRow.generationArchitectureVersion).toBeNull();
   }, 30_000);
+
+  it("[6-day week] every shell day generates exactly once across two concurrency-5 batches (5+1), no duplication", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 1, daysPerWeek: 6 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      isResume: false,
+      startFromWeek: 1,
+      startFromDay: 1,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
+    });
+    expect(result.ok).toBe(true);
+
+    const dayRows = await listGenerationDaysForWeek(row.id, 1);
+    expect(dayRows).toHaveLength(6);
+    expect(dayRows.every((d) => d.status === "completed")).toBe(true);
+    expect(new Set(dayRows.map((d) => d.dayNumber))).toEqual(new Set([1, 2, 3, 4, 5, 6]));
+    expect(new Set(dayRows.map((d) => d.dayJson && (d.dayJson as ModelDayDraft).id)).size).toBe(6);
+  }, 30_000);
+
+  it("[7-day week] every shell day generates exactly once across two concurrency-5 batches (5+2), no duplication", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 1, daysPerWeek: 7 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: null,
+      isResume: false,
+      startFromWeek: 1,
+      startFromDay: 1,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: null,
+      existingGenerationArchitectureVersion: null,
+    });
+    expect(result.ok).toBe(true);
+
+    const dayRows = await listGenerationDaysForWeek(row.id, 1);
+    expect(dayRows).toHaveLength(7);
+    expect(dayRows.every((d) => d.status === "completed")).toBe(true);
+    expect(new Set(dayRows.map((d) => d.dayNumber))).toEqual(new Set([1, 2, 3, 4, 5, 6, 7]));
+  }, 30_000);
+
+  it("[6-day week, second-batch failure] resume after the lone second-batch day (day 6) fails only calls the provider for day 6 — batch 1's five days are untouched", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 1, daysPerWeek: 6 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const shell = buildFixtureProgramShell(brief);
+    await saveProgramShell(row.id, shell);
+    const candidateSet = await buildExerciseCandidateSet(brief, blueprintCoach.id);
+    const seededDays: Record<number, ModelDayDraft> = {};
+    for (const dayIndex of [1, 2, 3, 4, 5]) {
+      const dayContent = await buildFixtureProgramDay(shell, dayIndex, candidateSet.candidates);
+      if (!dayContent) throw new Error("fixture setup failed — not enough active exercises seeded.");
+      seededDays[dayIndex] = dayContent;
+      await saveGenerationDay(row.id, 1, dayIndex, { status: "completed", dayJson: dayContent, provider: "dev-fixture", model: "dev-fixture" });
+    }
+    await saveGenerationDay(row.id, 1, 6, { status: "failed", errorCode: "timeout", errorMessage: "simulated", provider: "dev-fixture", model: "dev-fixture" });
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated: batch 1 (days 1-5) succeeded, day 6 (batch 2) failed" });
+    await db.update(programGenerationDrafts).set({ generationArchitecture: "block", generationArchitectureVersion: 2 }).where(eq(programGenerationDrafts.id, row.id));
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: shell,
+      isResume: true,
+      startFromWeek: 1,
+      startFromDay: 6,
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: "block",
+      existingGenerationArchitectureVersion: 2,
+    });
+    expect(result.ok).toBe(true);
+
+    const dayRows = await listGenerationDaysForWeek(row.id, 1);
+    expect(dayRows).toHaveLength(6);
+    for (const dayIndex of [1, 2, 3, 4, 5]) {
+      expect(dayRows.find((d) => d.dayNumber === dayIndex)?.dayJson).toEqual(seededDays[dayIndex]);
+    }
+    expect(dayRows.find((d) => d.dayNumber === 6)?.status).toBe("completed");
+  }, 30_000);
+
+  it("[multi-failure non-contiguous resume] round 1: days 1/3/5 succeed, 2/4 fail — resume calls the provider ONLY for 2 and 4, leaving 1/3/5 byte-for-byte unchanged", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 1, daysPerWeek: 5 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const shell = buildFixtureProgramShell(brief);
+    await saveProgramShell(row.id, shell);
+    const candidateSet = await buildExerciseCandidateSet(brief, blueprintCoach.id);
+    const seededDays: Record<number, ModelDayDraft> = {};
+    for (const dayIndex of [1, 3, 5]) {
+      const dayContent = await buildFixtureProgramDay(shell, dayIndex, candidateSet.candidates);
+      if (!dayContent) throw new Error("fixture setup failed — not enough active exercises seeded.");
+      seededDays[dayIndex] = dayContent;
+      await saveGenerationDay(row.id, 1, dayIndex, { status: "completed", dayJson: dayContent, provider: "dev-fixture", model: "dev-fixture" });
+    }
+    for (const dayIndex of [2, 4]) {
+      await saveGenerationDay(row.id, 1, dayIndex, { status: "failed", errorCode: "timeout", errorMessage: "simulated", provider: "dev-fixture", model: "dev-fixture" });
+    }
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated: non-contiguous batch outcome (1/3/5 succeeded, 2/4 failed)" });
+    await db.update(programGenerationDrafts).set({ generationArchitecture: "block", generationArchitectureVersion: 2 }).where(eq(programGenerationDrafts.id, row.id));
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: shell,
+      isResume: true,
+      startFromWeek: 1,
+      startFromDay: 2, // first non-completed day — exactly what resumeGenerationAction's own resolution would compute
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: "block",
+      existingGenerationArchitectureVersion: 2,
+    });
+    expect(result.ok).toBe(true);
+
+    const dayRows = await listGenerationDaysForWeek(row.id, 1);
+    expect(dayRows).toHaveLength(5);
+    expect(dayRows.every((d) => d.status === "completed")).toBe(true);
+    for (const dayIndex of [1, 3, 5]) {
+      expect(dayRows.find((d) => d.dayNumber === dayIndex)?.dayJson).toEqual(seededDays[dayIndex]);
+    }
+    expect(dayRows.find((d) => d.dayNumber === 2)?.dayJson).toBeTruthy();
+    expect(dayRows.find((d) => d.dayNumber === 4)?.dayJson).toBeTruthy();
+  }, 30_000);
+
+  it("[multi-failure non-contiguous resume] round 2: after 2 succeeds and 4 fails AGAIN, a second resume calls the provider ONLY for day 4 — 1/2/3/5 remain byte-for-byte unchanged", async () => {
+    const brief: ProgramGenerationBrief = { ...VALID_BRIEF, goal: "muscle_growth", experienceLevel: "advanced", weeks: 1, daysPerWeek: 5 };
+    const row = await createDraft({ coachId: blueprintCoach.id, clientId: null, brief });
+    draftIds.push(row.id);
+
+    const shell = buildFixtureProgramShell(brief);
+    await saveProgramShell(row.id, shell);
+    const candidateSet = await buildExerciseCandidateSet(brief, blueprintCoach.id);
+    const seededDays: Record<number, ModelDayDraft> = {};
+    for (const dayIndex of [1, 2, 3, 5]) {
+      const dayContent = await buildFixtureProgramDay(shell, dayIndex, candidateSet.candidates);
+      if (!dayContent) throw new Error("fixture setup failed — not enough active exercises seeded.");
+      seededDays[dayIndex] = dayContent;
+      await saveGenerationDay(row.id, 1, dayIndex, { status: "completed", dayJson: dayContent, provider: "dev-fixture", model: "dev-fixture" });
+    }
+    await saveGenerationDay(row.id, 1, 4, { status: "failed", errorCode: "timeout", errorMessage: "simulated round-2 failure", provider: "dev-fixture", model: "dev-fixture" });
+    await setDraftStatus(row.id, "failed", { failureReason: "simulated: round 2 — day 4 failed again after day 2 succeeded" });
+    await db.update(programGenerationDrafts).set({ generationArchitecture: "block", generationArchitectureVersion: 2 }).where(eq(programGenerationDrafts.id, row.id));
+
+    const result = await runStagedGeneration({
+      draftId: row.id,
+      coachId: blueprintCoach.id,
+      brief,
+      clientContext: null,
+      existingShell: shell,
+      isResume: true,
+      startFromWeek: 1,
+      startFromDay: 4, // resumeGenerationAction's own resolution stops at the FIRST gap — never looks past it to day 5
+      existingCompletedWeeks: new Map(),
+      existingGenerationArchitecture: "block",
+      existingGenerationArchitectureVersion: 2,
+    });
+    expect(result.ok).toBe(true);
+
+    const dayRows = await listGenerationDaysForWeek(row.id, 1);
+    expect(dayRows).toHaveLength(5);
+    expect(dayRows.every((d) => d.status === "completed")).toBe(true);
+    for (const dayIndex of [1, 2, 3, 5]) {
+      expect(dayRows.find((d) => d.dayNumber === dayIndex)?.dayJson).toEqual(seededDays[dayIndex]);
+    }
+    expect(dayRows.find((d) => d.dayNumber === 4)?.dayJson).toBeTruthy();
+  }, 30_000);
 });

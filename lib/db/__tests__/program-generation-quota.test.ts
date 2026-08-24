@@ -44,7 +44,7 @@ import {
   GENERATION_QUOTA_LIMIT,
   GENERATION_QUOTA_WINDOW_MS,
 } from "../program-generation-service";
-import { runStagedGeneration } from "@/lib/program-generator/staged-generation";
+import { runStagedGeneration, releaseQuotaOnTimeout } from "@/lib/program-generator/staged-generation";
 import { buildFixtureProgramShell, buildFixtureProgramWeek } from "@/lib/program-generator/fixture";
 import type { ProgramGenerationBrief } from "@/lib/program-generator/contracts";
 
@@ -92,6 +92,10 @@ const coachReleaseBasic = { id: "" };
 const coachReleaseLimit = { id: "" };
 const coachReleaseIdempotent = { id: "" };
 const coachReleaseSpecific = { id: "" };
+// Phase D progress-aware refund rule tests — its own coach, several
+// claim/release cycles that would otherwise interleave with any other
+// test sharing a coach's ledger.
+const coachPhaseDRefund = { id: "" };
 
 const draftIds: string[] = [];
 
@@ -121,6 +125,7 @@ beforeAll(async () => {
     coachReleaseLimit.id,
     coachReleaseIdempotent.id,
     coachReleaseSpecific.id,
+    coachPhaseDRefund.id,
   ] = await Promise.all([
     createAuthUser("limit"),
     createAuthUser("iso-a"),
@@ -133,6 +138,7 @@ beforeAll(async () => {
     createAuthUser("release-limit"),
     createAuthUser("release-idempotent"),
     createAuthUser("release-specific"),
+    createAuthUser("phase-d-refund"),
   ]);
 
   await Promise.all(
@@ -148,6 +154,7 @@ beforeAll(async () => {
       coachReleaseLimit,
       coachReleaseIdempotent,
       coachReleaseSpecific,
+      coachPhaseDRefund,
     ].map((c) => db.update(users).set({ role: "coach", status: "active" }).where(eq(users.id, c.id))),
   );
 }, 30_000);
@@ -180,6 +187,7 @@ afterAll(async () => {
     coachReleaseLimit.id,
     coachReleaseIdempotent.id,
     coachReleaseSpecific.id,
+    coachPhaseDRefund.id,
   ].filter(Boolean);
 
   // program_generation_drafts.coach_id is ON DELETE RESTRICT against
@@ -654,5 +662,154 @@ describe("releaseGenerationQuotaClaim — undoing a claim that paid for a defini
       .from(programGenerationQuotaClaims)
       .where(eq(programGenerationQuotaClaims.coachId, coachReleaseSpecific.id));
     expect(remaining.id).toBe(second.claimId);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// releaseQuotaOnTimeout — Phase D progress-aware refund rule
+// [independent review remediation, Finding #13]
+//
+// Codex's own review explicitly asked this rule be RE-VERIFIED, not
+// redesigned — these tests exercise the real, already-implemented
+// contract in staged-generation.ts (errorCode !== "timeout" -> never
+// refund; hasMadeProgressThisInvocation === true -> never refund even
+// on timeout; otherwise -> refund) directly against the real DB claim
+// ledger via claimGenerationQuota/releaseGenerationQuotaClaim, rather
+// than only asserting on the pure boolean inputs. draftId/runId below
+// are dummy UUIDs — releaseQuotaOnTimeout only threads them through to
+// logQuotaRelease, a console.log with no FK/DB write of its own (see
+// observability.ts), so they carry no referential requirement here.
+//
+// hasMadeProgressThisInvocation is computed by the CALLER (in
+// staged-generation.ts) from daysCompletedThisInvocation > 0 — these
+// tests take that boolean as a given, already-correct input and prove
+// releaseQuotaOnTimeout's own refund/no-refund DECISION on top of it.
+// The separate question of whether daysCompletedThisInvocation itself
+// is incremented at the right moment (after persistence, not merely
+// after provider-call completion — Finding #13.F) was verified by
+// direct code inspection of staged-generation.ts: in both the legacy
+// serial loop and the Phase D concurrent-batch loop,
+// `daysCompletedThisInvocation++` occurs strictly after `await
+// saveGenerationDay(...)` resolves successfully, never before or
+// independent of it. No separate test is needed for that half of the
+// contract — it's a single-line ordering fact, not a decision with
+// branches to exercise.
+describe("releaseQuotaOnTimeout — Phase D progress-aware refund rule (real DB)", () => {
+  const dummyDraftId = randomUUID();
+  const dummyRunId = randomUUID();
+
+  it("[Finding #13.A] a shell-generation timeout, which always occurs before any day progress, refunds the claim", async () => {
+    const claim = await claimGenerationQuota(coachPhaseDRefund.id, null, "full_draft");
+    expect(claim.ok).toBe(true);
+    if (!claim.ok) return;
+
+    // Shell failure is always the very first thing an invocation
+    // attempts, so hasMadeProgressThisInvocation is always false here
+    // — this is the "shell timeout before progress" scenario.
+    const released = await releaseQuotaOnTimeout("timeout", claim.claimId, dummyDraftId, dummyRunId, false);
+    expect(released).toBe(true);
+
+    const [row] = await db
+      .select({ id: programGenerationQuotaClaims.id })
+      .from(programGenerationQuotaClaims)
+      .where(eq(programGenerationQuotaClaims.id, claim.claimId));
+    expect(row).toBeUndefined();
+  });
+
+  it("[Finding #13.B] every day in a concurrent batch timing out (zero persisted successes) refunds the claim", async () => {
+    const claim = await claimGenerationQuota(coachPhaseDRefund.id, null, "full_draft");
+    expect(claim.ok).toBe(true);
+    if (!claim.ok) return;
+
+    // Same function-level contract as #13.A (hasMadeProgressThisInvocation
+    // === false), but exercised as its own scenario per the task's own
+    // enumeration: a Phase D batch where every single concurrent day
+    // call timed out, so daysCompletedThisInvocation never incremented.
+    const released = await releaseQuotaOnTimeout("timeout", claim.claimId, dummyDraftId, dummyRunId, false);
+    expect(released).toBe(true);
+
+    const [row] = await db
+      .select({ id: programGenerationQuotaClaims.id })
+      .from(programGenerationQuotaClaims)
+      .where(eq(programGenerationQuotaClaims.id, claim.claimId));
+    expect(row).toBeUndefined();
+  });
+
+  it("[Finding #13.C] 4 days succeed and 1 times out in the same batch — the claim is NOT refunded", async () => {
+    const claim = await claimGenerationQuota(coachPhaseDRefund.id, null, "full_draft");
+    expect(claim.ok).toBe(true);
+    if (!claim.ok) return;
+
+    // 4 successful persisted days this invocation before the 5th day's
+    // timeout is handled -> hasMadeProgressThisInvocation is true.
+    const released = await releaseQuotaOnTimeout("timeout", claim.claimId, dummyDraftId, dummyRunId, true);
+    expect(released).toBe(false);
+
+    const [row] = await db
+      .select({ id: programGenerationQuotaClaims.id })
+      .from(programGenerationQuotaClaims)
+      .where(eq(programGenerationQuotaClaims.id, claim.claimId));
+    expect(row?.id).toBe(claim.claimId);
+  });
+
+  it("[Finding #13.D] 1 day succeeds and 4 time out in the same batch — the claim is still NOT refunded", async () => {
+    const claim = await claimGenerationQuota(coachPhaseDRefund.id, null, "full_draft");
+    expect(claim.ok).toBe(true);
+    if (!claim.ok) return;
+
+    // The rule is binary (any progress vs. none), not proportional —
+    // even a single persisted success this invocation is enough to
+    // withhold the refund, regardless of how many siblings failed.
+    const released = await releaseQuotaOnTimeout("timeout", claim.claimId, dummyDraftId, dummyRunId, true);
+    expect(released).toBe(false);
+
+    const [row] = await db
+      .select({ id: programGenerationQuotaClaims.id })
+      .from(programGenerationQuotaClaims)
+      .where(eq(programGenerationQuotaClaims.id, claim.claimId));
+    expect(row?.id).toBe(claim.claimId);
+  });
+
+  it("[Finding #13.E] a resume invocation that calls the provider only for the one missing day, which times out, refunds the claim", async () => {
+    const claim = await claimGenerationQuota(coachPhaseDRefund.id, null, "full_draft");
+    expect(claim.ok).toBe(true);
+    if (!claim.ok) return;
+
+    // A resume's daysCompletedThisInvocation counter starts at zero for
+    // THIS invocation regardless of how many days were already
+    // persisted in prior invocations — only new progress made during
+    // the current call counts. The lone missing day timing out with no
+    // other days attempted this invocation means zero new progress.
+    const released = await releaseQuotaOnTimeout("timeout", claim.claimId, dummyDraftId, dummyRunId, false);
+    expect(released).toBe(true);
+
+    const [row] = await db
+      .select({ id: programGenerationQuotaClaims.id })
+      .from(programGenerationQuotaClaims)
+      .where(eq(programGenerationQuotaClaims.id, claim.claimId));
+    expect(row).toBeUndefined();
+  });
+
+  it("a non-timeout error code never refunds, regardless of progress made", async () => {
+    const claim = await claimGenerationQuota(coachPhaseDRefund.id, null, "full_draft");
+    expect(claim.ok).toBe(true);
+    if (!claim.ok) return;
+
+    const released = await releaseQuotaOnTimeout("provider_error", claim.claimId, dummyDraftId, dummyRunId, false);
+    expect(released).toBe(false);
+
+    const [row] = await db
+      .select({ id: programGenerationQuotaClaims.id })
+      .from(programGenerationQuotaClaims)
+      .where(eq(programGenerationQuotaClaims.id, claim.claimId));
+    expect(row?.id).toBe(claim.claimId);
+
+    // Clean up this one manually since it's intentionally never
+    // refunded by the function under test.
+    await releaseGenerationQuotaClaim(claim.claimId);
+  });
+
+  it("a missing claimId (no quota was ever claimed for this invocation) never refunds and never throws", async () => {
+    await expect(releaseQuotaOnTimeout("timeout", undefined, dummyDraftId, dummyRunId, false)).resolves.toBe(false);
   });
 });

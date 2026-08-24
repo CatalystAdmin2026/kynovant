@@ -111,23 +111,35 @@ const PATTERN_CYCLE = [
 // exactly ./strategy and ./block-plan).
 const TECHNIQUE_ELIGIBILITY_POOL = ["rest_pause", "drop_set", "myo_reps"] as const;
 
+// Review finding on Phase D candidate 6734599 (P2): the original
+// version added a day to only the FIRST existing group it overlapped,
+// via Array.find — a "bridging" day that overlaps TWO separate
+// existing groups (e.g. day A=[chest], day C=[back], day B=[chest,back]
+// processed in that order) got added to just the first one, leaving
+// the other group un-merged even though B transitively connects them.
+// Real transitive connected-component grouping instead: for every new
+// day, collect ALL groups it overlaps (not just the first), merge them
+// all together with the day into one group, and keep every
+// non-overlapping group untouched. A simple linear merge rather than a
+// full union-find structure — day counts here are always small (at
+// most 7, one per shell day), so the extra clarity is worth more than
+// the asymptotic difference.
 function groupOverlappingDays(days: BlueprintShellDay[]): BlueprintShellDay[][] {
-  // Union-find over "shares at least one targetMuscleGroup" — days
-  // with no targetMuscleGroups at all never overlap anything (no
-  // constraint is the permissive, correct default — mirrors
-  // narrowCandidatesForDay's own fallback philosophy for a shell that
-  // predates this field).
   const groups: BlueprintShellDay[][] = [];
   for (const day of days) {
     if (!day.targetMuscleGroups || day.targetMuscleGroups.length === 0) {
       groups.push([day]);
       continue;
     }
-    const overlapping = groups.find((g) =>
-      g.some((d) => d.targetMuscleGroups?.some((mg) => day.targetMuscleGroups!.includes(mg))),
-    );
-    if (overlapping) overlapping.push(day);
-    else groups.push([day]);
+    const overlapping: BlueprintShellDay[][] = [];
+    const remaining: BlueprintShellDay[][] = [];
+    for (const g of groups) {
+      const overlaps = g.some((d) => d.targetMuscleGroups?.some((mg) => day.targetMuscleGroups!.includes(mg)));
+      (overlaps ? overlapping : remaining).push(g);
+    }
+    remaining.push([...overlapping.flat(), day]);
+    groups.length = 0;
+    groups.push(...remaining);
   }
   return groups;
 }

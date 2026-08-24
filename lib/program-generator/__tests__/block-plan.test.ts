@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { deriveBlockPlans, findBlockForWeek, resolveGenerationArchitecture } from "../block-plan";
+import { deriveBlockPlans, findBlockForWeek, resolveGenerationArchitecture, resolveEffectiveBlockGenerationVersion } from "../block-plan";
 import { selectProgressionStrategy, type ExperienceLevel, type TemplateCategory } from "../strategy";
 
 const SUPPORTED_GOALS: TemplateCategory[] = [
@@ -188,5 +188,56 @@ describe("resolveGenerationArchitecture", () => {
 
   it("athletic_performance always routes to 'legacy_day'", () => {
     expect(resolveGenerationArchitecture({ goal: "athletic_performance" })).toBe("legacy_day");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// resolveEffectiveBlockGenerationVersion — Phase D review remediation
+// (candidate 6734599, P1): the original inline
+// `existingGenerationArchitectureVersion ?? CURRENT_BLOCK_GENERATION_VERSION`
+// silently upgraded a RESUME of an existing "block" draft with a null
+// persisted version (a real pre-Phase-D block draft) to the current
+// default at runtime. This function is the one central resolver now.
+// ─────────────────────────────────────────────────────────────
+describe("resolveEffectiveBlockGenerationVersion", () => {
+  const CURRENT_DEFAULT = 2 as const;
+
+  it("legacy_day architecture always resolves to null, regardless of persistedVersion or isResume", () => {
+    for (const persistedVersion of [null, 1, 2] as const) {
+      for (const isResume of [true, false]) {
+        expect(resolveEffectiveBlockGenerationVersion({ architecture: "legacy_day", persistedVersion, isResume }, CURRENT_DEFAULT)).toBeNull();
+      }
+    }
+  });
+
+  it("[B] a persisted version 2 is always honored on resume, never re-derived", () => {
+    expect(resolveEffectiveBlockGenerationVersion({ architecture: "block", persistedVersion: 2, isResume: true }, CURRENT_DEFAULT)).toBe(2);
+  });
+
+  it("[C] a persisted version 1 is always honored on resume — runs v1 serial, never upgraded", () => {
+    expect(resolveEffectiveBlockGenerationVersion({ architecture: "block", persistedVersion: 1, isResume: true }, CURRENT_DEFAULT)).toBe(1);
+  });
+
+  it("[D] the exact review-finding regression case: block architecture + NULL persisted version + isResume=true resolves to 1, NEVER the current default", () => {
+    const result = resolveEffectiveBlockGenerationVersion({ architecture: "block", persistedVersion: null, isResume: true }, CURRENT_DEFAULT);
+    expect(result).toBe(1);
+    expect(result).not.toBe(CURRENT_DEFAULT);
+  });
+
+  it("[E] a malformed version (already sanitized to null by the caller) on resume is treated exactly like a genuine null — resolves to 1, not the current default", () => {
+    // actions.ts's parseGenerationArchitectureVersion sanitizes any
+    // value outside {1,2} to null before this function ever sees it —
+    // this proves that once sanitized, it fails closed to version 1,
+    // the same safe value a genuine historical null gets.
+    expect(resolveEffectiveBlockGenerationVersion({ architecture: "block", persistedVersion: null, isResume: true }, CURRENT_DEFAULT)).toBe(1);
+  });
+
+  it("[A] a genuinely NEW block draft (isResume=false, no persisted version) gets the CURRENT default", () => {
+    expect(resolveEffectiveBlockGenerationVersion({ architecture: "block", persistedVersion: null, isResume: false }, CURRENT_DEFAULT)).toBe(CURRENT_DEFAULT);
+  });
+
+  it("is deterministic — identical inputs always produce identical output", () => {
+    const ctx = { architecture: "block" as const, persistedVersion: null, isResume: true };
+    expect(resolveEffectiveBlockGenerationVersion(ctx, CURRENT_DEFAULT)).toBe(resolveEffectiveBlockGenerationVersion(ctx, CURRENT_DEFAULT));
   });
 });

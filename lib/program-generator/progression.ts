@@ -198,6 +198,25 @@ export interface ExpandCanonicalWeekInput {
   // Web Crypto global requires no import statement, so the default
   // does not compromise this file's zero-import purity.
   idFactory?: () => string;
+  // Phase D review finding (candidate 6734599): a canonical week's
+  // technique PRESENCE was previously the only signal this module had
+  // for "was an intensity technique deliberately placed here" — for
+  // intermediate/mixed, that meant the canonical week could never
+  // safely omit a technique it wanted the BLOCK's final week to
+  // eventually activate, since there was nothing else to activate.
+  // This optional map — keyed by dayOfWeek, valued with the ONE
+  // technique that day is eligible for (Phase D's blueprint.ts is the
+  // real source; this module has zero dependency on it and never
+  // invents an eligible technique on its own) — lets Phase B ACTIVATE
+  // an eligible-but-not-yet-assigned technique at the correct point in
+  // the block, instead of only ever timing one the canonical week
+  // already happened to assign. See applyTechniqueTiming's own header
+  // for the exact activation rule this enables. Absent (or missing a
+  // given dayOfWeek) means "no eligibility signal for this day" —
+  // behavior for that day is then governed entirely by the EXISTING,
+  // unchanged presence-based timing rule, exactly as before this field
+  // existed.
+  techniqueEligibilityByDayOfWeek?: Record<number, string>;
 }
 
 export type ExpandCanonicalWeekResult = { ok: true; week: CanonicalWeek } | { ok: false; error: string };
@@ -211,6 +230,9 @@ export interface ExpandBlockInput {
   experienceLevel: ExperienceLevel;
   blockLength: number;
   idFactory?: () => string;
+  // See ExpandCanonicalWeekInput's own comment — passed through
+  // unchanged to every expanded week's expandCanonicalWeek() call.
+  techniqueEligibilityByDayOfWeek?: Record<number, string>;
 }
 
 export type ExpandBlockResult = { ok: true; weeks: CanonicalWeek[] } | { ok: false; error: string };
@@ -433,67 +455,69 @@ function defaultIdFactory(): string {
 // ─────────────────────────────────────────────────────────────
 // SECTION 11 — TECHNIQUE TIMING
 //
-// Only ever TIMES an existing, already-assigned intensity technique —
-// never invents one on an exercise the canonical week didn't already
-// mark that way. Beginner: none by default (always withheld in
-// expanded weeks). Intermediate/mixed: late-block only (withheld until
-// the block's final expanded week). Advanced/competitive: maintained
-// as assigned — the AI's placement is trusted, not second-guessed.
+// OWNERSHIP CONTRACT, RESOLVED (Phase D, candidate 6734599 — this was
+// previously an open P2 on Phase B/C, documented but deliberately not
+// solved there; Phase D's blueprint.ts is the eligibility source this
+// section always said the fix would need):
+//
+//   BLUEPRINT (upstream of this module): determines ELIGIBILITY —
+//     "may this day use technique X on one exercise, if appropriate."
+//   THIS FUNCTION: determines ACTIVATION TIMING across the block —
+//     when an eligible-but-not-yet-assigned technique actually turns
+//     on, and when an already-assigned one gets withheld or kept.
+//
+// Two distinct things can now happen to a prescription, handled as two
+// separate branches below:
+//
+//   1. The canonical week's own content ALREADY carries an intensity
+//      technique (isIntensitySetTechnique(setTechnique) is true) — the
+//      ORIGINAL, unchanged timing rule: beginner always withholds it in
+//      expanded weeks; intermediate/mixed withholds until the block's
+//      final expanded week; advanced/competitive maintains it as
+//      assigned (the AI's own placement is trusted, never second-
+//      guessed). Still never invents anything — only times what's
+//      already there.
+//
+//   2. Nothing is currently assigned, but `eligibleTechnique` names one
+//      this exact day-slot is eligible for (from blueprint.ts, threaded
+//      through by the caller — see ExpandCanonicalWeekInput's own
+//      comment) — ACTIVATE it, but ONLY for intermediate/mixed, and
+//      ONLY at the block's final expanded week. Beginner: never (an
+//      eligibility signal should not even exist for beginner —
+//      blueprint.ts's own experience ceiling guarantees this — but this
+//      function does not activate one even if it somehow received it,
+//      matching the unconditional "none by default" rule). Advanced/
+//      competitive: never activated HERE — their canonical week is free
+//      to activate an eligible technique immediately via the AI's own
+//      judgment (the prompt-level blueprintIntent tells it so), and
+//      branch 1's "maintain as assigned" already carries that choice
+//      through the rest of the block; there is nothing for this branch
+//      to add for them.
+//
 // This runs BEFORE the per-strategy transform; taper's own
 // unconditional removal (Section 9) still applies afterward regardless
-// of experience level or block position.
-//
-// OWNERSHIP CONTRACT (review finding on Phase B candidate 643af6c, P2
-// — documented here, deliberately NOT solved in this pass): this
-// function infers "was this technique deliberately placed, or should
-// it just ride along" purely from the technique's mere PRESENCE on the
-// canonical week's prescription plus the current block position. That
-// produces a structurally odd case for intermediate/mixed: a canonical
-// Week 1 already carrying, say, rest_pause gets it withheld in Week 2
-// and reintroduced only in the block's final week — as if canonical
-// Week 1 and the final week share a technique that the middle weeks
-// don't, even though nothing about Week 1's own authored content
-// changed.
-//
-// The correct long-term contract is that intermediate/mixed timing is
-// really about ELIGIBILITY, not presence: the canonical-week/blueprint
-// generator (a Phase C concern) should be able to mark a technique as
-// "eligible for late-block activation" as a concept distinct from "is
-// active on this exact prescription right now." Phase B would then
-// only ever OWN THE TIMING of an eligibility flag the upstream
-// generator set, instead of inferring intent from where the technique
-// happens to already sit. That requires a new field somewhere in the
-// canonical-week authoring path — out of scope here: this pass does
-// not invent a DB/schema field or broaden the architecture to add one.
-//
-// A tiny, PURE, non-schema representation that could carry this
-// without touching any persisted schema (proposed for Phase C's
-// consideration, not built here): an optional
-// `techniqueEligibility?: "assigned" | "eligible_late_block"` on a
-// Phase-C-only enriched prescription type that wraps CanonicalPrescription
-// before calling into this module — read by applyTechniqueTiming when
-// present, falling back to today's presence-based inference when
-// absent, so this stays backward compatible with every canonical week
-// that doesn't have the concept yet. This is a proposal only.
-//
-// Until Phase C addresses this, current Phase B behavior is correct
-// within its stated limits and is preserved as an explicit P2
-// deferred integration contract, not a silent gap: it never invents a
-// technique the canonical week didn't already carry, and taper always
-// strips high-fatigue techniques regardless of this timing logic.
+// of experience level, block position, or eligibility.
 // ─────────────────────────────────────────────────────────────
 function applyTechniqueTiming(
   setTechnique: string | undefined,
   experienceLevel: ExperienceLevel,
   blockWeekIndex: number,
   blockLength: number,
+  eligibleTechnique?: string,
 ): string | undefined {
-  if (!isIntensitySetTechnique(setTechnique)) return setTechnique;
-  if (experienceLevel === "beginner") return STRAIGHT_SET;
-  if (experienceLevel === "advanced" || experienceLevel === "competitive") return setTechnique;
-  // intermediate / mixed — late-block only.
-  const isFinalWeekOfBlock = blockWeekIndex === blockLength;
-  return isFinalWeekOfBlock ? setTechnique : STRAIGHT_SET;
+  if (isIntensitySetTechnique(setTechnique)) {
+    if (experienceLevel === "beginner") return STRAIGHT_SET;
+    if (experienceLevel === "advanced" || experienceLevel === "competitive") return setTechnique;
+    // intermediate / mixed — late-block only.
+    const isFinalWeekOfBlock = blockWeekIndex === blockLength;
+    return isFinalWeekOfBlock ? setTechnique : STRAIGHT_SET;
+  }
+
+  if (eligibleTechnique && (experienceLevel === "intermediate" || experienceLevel === "mixed") && blockWeekIndex === blockLength) {
+    return eligibleTechnique;
+  }
+
+  return setTechnique;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -713,8 +737,13 @@ function applyTaperProgression(p: CanonicalPrescription, ctx: StrategyContext): 
   return next;
 }
 
-function transformEligiblePrescription(p: CanonicalPrescription, ctx: StrategyContext, strategy: ProgressionStrategy): CanonicalPrescription {
-  const timedTechnique = applyTechniqueTiming(p.setTechnique, ctx.experienceLevel, ctx.blockWeekIndex, ctx.blockLength);
+function transformEligiblePrescription(
+  p: CanonicalPrescription,
+  ctx: StrategyContext,
+  strategy: ProgressionStrategy,
+  eligibleTechnique?: string,
+): CanonicalPrescription {
+  const timedTechnique = applyTechniqueTiming(p.setTechnique, ctx.experienceLevel, ctx.blockWeekIndex, ctx.blockLength, eligibleTechnique);
   const timed: CanonicalPrescription = { ...p, setTechnique: timedTechnique };
 
   switch (strategy) {
@@ -747,8 +776,9 @@ function expandPrescription(
   ctx: StrategyContext,
   strategy: ProgressionStrategy,
   idFactory: () => string,
+  eligibleTechnique?: string,
 ): CanonicalPrescription {
-  const base = isProgressionEligibleSection(ctx.sectionType) ? transformEligiblePrescription(p, ctx, strategy) : { ...p };
+  const base = isProgressionEligibleSection(ctx.sectionType) ? transformEligiblePrescription(p, ctx, strategy, eligibleTechnique) : { ...p };
   return { ...base, id: idFactory() };
 }
 
@@ -764,6 +794,22 @@ function expandPrescription(
 // through unchanged (Section 3).
 // ─────────────────────────────────────────────────────────────
 
+// Deterministic activation target for an eligible day: the LAST
+// prescription (by array position — the canonical week's own authored
+// order) in the day's first "accessory" section, falling back to its
+// first "finisher" section, matching the ordinary coaching convention
+// of layering an intensity technique onto accessory/finishing work
+// rather than a primary compound lift. Returns null (never a mandate)
+// when the day has neither section type — Phase B never forces a
+// technique onto a main_lift/conditioning slot just because a day was
+// marked eligible.
+function findTechniqueActivationTarget(day: CanonicalDay): string | null {
+  const sections = day.workout?.sections ?? [];
+  const target = sections.find((s) => s.sectionType === "accessory") ?? sections.find((s) => s.sectionType === "finisher");
+  if (!target || target.prescriptions.length === 0) return null;
+  return target.prescriptions[target.prescriptions.length - 1].id;
+}
+
 function expandWeek(
   canonicalWeek: CanonicalWeek,
   strategy: ProgressionStrategy,
@@ -772,6 +818,7 @@ function expandWeek(
   blockWeekIndex: number,
   blockLength: number,
   idFactory: () => string,
+  techniqueEligibilityByDayOfWeek?: Record<number, string>,
 ): CanonicalWeek {
   const effortBand = effortBandFor(experienceLevel);
   const progress = (blockWeekIndex - 1) / (blockLength - 1);
@@ -781,33 +828,45 @@ function expandWeek(
   // idFactory for tests would naturally expect.
   const weekId = idFactory();
 
-  const days = canonicalWeek.days.map((day) => ({
-    ...day,
-    id: idFactory(),
-    workout:
-      day.workout === null
-        ? null
-        : {
-            ...day.workout,
-            id: idFactory(),
-            sections: day.workout.sections.map((section) => {
-              const ctx: StrategyContext = {
-                phaseType,
-                experienceLevel,
-                effortBand,
-                progress,
-                blockWeekIndex,
-                blockLength,
-                sectionType: section.sectionType,
-              };
-              return {
-                ...section,
-                id: idFactory(),
-                prescriptions: section.prescriptions.map((p) => expandPrescription(p, ctx, strategy, idFactory)),
-              };
-            }),
-          },
-  }));
+  const days = canonicalWeek.days.map((day) => {
+    const eligibleTechnique = techniqueEligibilityByDayOfWeek?.[day.dayOfWeek];
+    // Resolved once per day, against the ORIGINAL canonical prescription
+    // ids — those ids are exactly what this day's own prescriptions
+    // still carry at this point (expandPrescription mints a NEW id only
+    // in its own return value, never mutating its input), so comparing
+    // against them here is safe and correct.
+    const activationTargetId = eligibleTechnique ? findTechniqueActivationTarget(day) : null;
+
+    return {
+      ...day,
+      id: idFactory(),
+      workout:
+        day.workout === null
+          ? null
+          : {
+              ...day.workout,
+              id: idFactory(),
+              sections: day.workout.sections.map((section) => {
+                const ctx: StrategyContext = {
+                  phaseType,
+                  experienceLevel,
+                  effortBand,
+                  progress,
+                  blockWeekIndex,
+                  blockLength,
+                  sectionType: section.sectionType,
+                };
+                return {
+                  ...section,
+                  id: idFactory(),
+                  prescriptions: section.prescriptions.map((p) =>
+                    expandPrescription(p, ctx, strategy, idFactory, p.id === activationTargetId ? eligibleTechnique : undefined),
+                  ),
+                };
+              }),
+            },
+    };
+  });
 
   return {
     ...canonicalWeek,
@@ -822,7 +881,7 @@ function expandWeek(
 // ─────────────────────────────────────────────────────────────
 
 export function expandCanonicalWeek(input: ExpandCanonicalWeekInput): ExpandCanonicalWeekResult {
-  const { canonicalWeek, progressionStrategy, phaseType, experienceLevel, blockWeekIndex, blockLength } = input;
+  const { canonicalWeek, progressionStrategy, phaseType, experienceLevel, blockWeekIndex, blockLength, techniqueEligibilityByDayOfWeek } = input;
   const idFactory = input.idFactory ?? defaultIdFactory;
 
   // Coherence first — fail closed before any bounds/id work if the
@@ -842,12 +901,21 @@ export function expandCanonicalWeek(input: ExpandCanonicalWeekInput): ExpandCano
     };
   }
 
-  const week = expandWeek(canonicalWeek, progressionStrategy, phaseType, experienceLevel, blockWeekIndex, blockLength, idFactory);
+  const week = expandWeek(
+    canonicalWeek,
+    progressionStrategy,
+    phaseType,
+    experienceLevel,
+    blockWeekIndex,
+    blockLength,
+    idFactory,
+    techniqueEligibilityByDayOfWeek,
+  );
   return { ok: true, week };
 }
 
 export function expandBlockFromCanonicalWeek(input: ExpandBlockInput): ExpandBlockResult {
-  const { canonicalWeek, progressionStrategy, phaseType, experienceLevel, blockLength } = input;
+  const { canonicalWeek, progressionStrategy, phaseType, experienceLevel, blockLength, techniqueEligibilityByDayOfWeek } = input;
   const idFactory = input.idFactory ?? defaultIdFactory;
 
   if (!Number.isInteger(blockLength) || blockLength < 1) {
@@ -881,6 +949,7 @@ export function expandBlockFromCanonicalWeek(input: ExpandBlockInput): ExpandBlo
       blockWeekIndex,
       blockLength,
       idFactory,
+      techniqueEligibilityByDayOfWeek,
     });
     if (!result.ok) return result;
     weeks.push(result.week);

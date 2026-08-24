@@ -925,6 +925,282 @@ describe("technique timing", () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// Technique ACTIVATION from blueprint eligibility (Phase D remediation,
+// candidate 6734599, resolving the Phase B/C P2): the canonical week's
+// OWN content need not already carry a technique — techniqueEligibilityByDayOfWeek
+// lets Phase B activate one on an eligible-but-currently-straight-set
+// slot at the correct point in the block.
+// ─────────────────────────────────────────────────────────────
+describe("technique ACTIVATION from eligibility", () => {
+  // Two sections: a main_lift (never a valid activation target) and an
+  // accessory (the deterministic target — see findTechniqueActivationTarget's
+  // own comment: last prescription in the day's first accessory section,
+  // falling back to finisher).
+  function fixtureWithAccessorySlot(dayOfWeek = 1): CanonicalWeek {
+    return week({
+      days: [
+        day({
+          dayOfWeek,
+          workout: {
+            id: "bp",
+            name: "D",
+            sections: [
+              section({ sectionType: "main_lift", orderIndex: 0, prescriptions: [prescription({ id: "main-1", exerciseName: "Bench Press", setTechnique: "straight_set" })] }),
+              section({ sectionType: "accessory", orderIndex: 1, prescriptions: [prescription({ id: "acc-1", exerciseName: "Lateral Raise", setTechnique: "straight_set" })] }),
+            ],
+          },
+        }),
+      ],
+    });
+  }
+
+  it("[beginner] an eligibility signal is never activated, even if supplied — canonical Week 1 and every expanded week stay straight_set", () => {
+    const canonical = fixtureWithAccessorySlot();
+    const result = expandBlockFromCanonicalWeek({
+      canonicalWeek: canonical,
+      progressionStrategy: "rep",
+      phaseType: "foundation",
+      experienceLevel: "beginner",
+      blockLength: 4,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const w of result.weeks) {
+      const accessory = w.days[0].workout!.sections.find((s) => s.sectionType === "accessory")!;
+      expect(accessory.prescriptions[0].setTechnique).toBe("straight_set");
+    }
+  });
+
+  it("[intermediate] canonical Week 1 and every middle week stay straight_set; ONLY the block's final week activates the eligible technique", () => {
+    const canonical = fixtureWithAccessorySlot();
+    const result = expandBlockFromCanonicalWeek({
+      canonicalWeek: canonical,
+      progressionStrategy: "double",
+      phaseType: "intensification",
+      experienceLevel: "intermediate",
+      blockLength: 4,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const accessoryTechniqueByWeek = result.weeks.map((w) => w.days[0].workout!.sections.find((s) => s.sectionType === "accessory")!.prescriptions[0].setTechnique);
+    // week 1 = canonical, untouched by this module at all.
+    expect(accessoryTechniqueByWeek).toEqual(["straight_set", "straight_set", "straight_set", "myo_reps"]);
+    // The main_lift slot is NEVER a valid activation target, regardless of week.
+    for (const w of result.weeks) {
+      const mainLift = w.days[0].workout!.sections.find((s) => s.sectionType === "main_lift")!;
+      expect(mainLift.prescriptions[0].setTechnique).toBe("straight_set");
+    }
+  });
+
+  it("[mixed] same contract as intermediate — only the final block week activates", () => {
+    const canonical = fixtureWithAccessorySlot();
+    const expanded = expandOk({
+      canonicalWeek: canonical,
+      progressionStrategy: "double",
+      phaseType: "intensification",
+      experienceLevel: "mixed",
+      blockWeekIndex: 3,
+      blockLength: 3,
+      techniqueEligibilityByDayOfWeek: { 1: "rest_pause" },
+    });
+    const accessory = expanded.days[0].workout!.sections.find((s) => s.sectionType === "accessory")!;
+    expect(accessory.prescriptions[0].setTechnique).toBe("rest_pause");
+  });
+
+  it("[advanced] an eligibility signal is never used to ACTIVATE anything here — advanced/competitive canonical generation activates via its own AI judgment (blueprintIntent), and this module only ever MAINTAINS what's already present", () => {
+    const canonical = fixtureWithAccessorySlot(); // accessory slot is straight_set — the AI chose not to activate it
+    const result = expandBlockFromCanonicalWeek({
+      canonicalWeek: canonical,
+      progressionStrategy: "rir",
+      phaseType: "intensification",
+      experienceLevel: "advanced",
+      blockLength: 4,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const w of result.weeks) {
+      const accessory = w.days[0].workout!.sections.find((s) => s.sectionType === "accessory")!;
+      expect(accessory.prescriptions[0].setTechnique).toBe("straight_set");
+    }
+  });
+
+  it("[advanced, already active] when the canonical week's AI DID activate an eligible technique, advanced maintains it across the whole block (the pre-existing 'maintain as assigned' rule, unaffected by eligibility)", () => {
+    const canonical = week({
+      days: [
+        day({
+          workout: {
+            id: "bp",
+            name: "D",
+            sections: [section({ sectionType: "accessory", prescriptions: [prescription({ setTechnique: "myo_reps" })] })],
+          },
+        }),
+      ],
+    });
+    const result = expandBlockFromCanonicalWeek({
+      canonicalWeek: canonical,
+      progressionStrategy: "rir",
+      phaseType: "intensification",
+      experienceLevel: "advanced",
+      blockLength: 3,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const w of result.weeks) expect(firstPrescription(w).setTechnique).toBe("myo_reps");
+  });
+
+  it("[competitive] same contract as advanced — eligibility alone never activates, only maintains an already-active technique", () => {
+    const canonical = fixtureWithAccessorySlot();
+    const expanded = expandOk({
+      canonicalWeek: canonical,
+      progressionStrategy: "rir",
+      phaseType: "intensification",
+      experienceLevel: "competitive",
+      blockWeekIndex: 4,
+      blockLength: 4,
+      techniqueEligibilityByDayOfWeek: { 1: "drop_set" },
+    });
+    const accessory = expanded.days[0].workout!.sections.find((s) => s.sectionType === "accessory")!;
+    expect(accessory.prescriptions[0].setTechnique).toBe("straight_set");
+  });
+
+  it("[taper] strips an already-ACTIVATED technique regardless of eligibility — taper's own unconditional rule is unaffected by this feature", () => {
+    const canonical = week({
+      days: [day({ workout: { id: "bp", name: "D", sections: [section({ sectionType: "accessory", prescriptions: [prescription({ setTechnique: "myo_reps" })] })] } })],
+    });
+    const expanded = expandOk({
+      canonicalWeek: canonical,
+      progressionStrategy: "taper",
+      phaseType: "taper",
+      experienceLevel: "intermediate",
+      blockWeekIndex: 2,
+      blockLength: 2,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    expect(firstPrescription(expanded).setTechnique).toBe("straight_set");
+  });
+
+  it("[no eligibility supplied] Phase B never invents a technique — behaves exactly as before this feature existed", () => {
+    const canonical = fixtureWithAccessorySlot();
+    const result = expandBlockFromCanonicalWeek({
+      canonicalWeek: canonical,
+      progressionStrategy: "double",
+      phaseType: "intensification",
+      experienceLevel: "intermediate",
+      blockLength: 4,
+      // techniqueEligibilityByDayOfWeek omitted entirely
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const w of result.weeks) {
+      const accessory = w.days[0].workout!.sections.find((s) => s.sectionType === "accessory")!;
+      expect(accessory.prescriptions[0].setTechnique).toBe("straight_set");
+    }
+  });
+
+  it("only activates on the day named by dayOfWeek — a day with NO eligibility entry never activates, even in the final block week", () => {
+    const canonical = week({
+      days: [
+        day({
+          dayOfWeek: 1,
+          workout: { id: "bp1", name: "D1", sections: [section({ sectionType: "accessory", prescriptions: [prescription({ id: "acc-1", setTechnique: "straight_set" })] })] },
+        }),
+        day({
+          dayOfWeek: 3,
+          workout: { id: "bp2", name: "D2", sections: [section({ sectionType: "accessory", prescriptions: [prescription({ id: "acc-2", setTechnique: "straight_set" })] })] },
+        }),
+      ],
+    });
+    const expanded = expandOk({
+      canonicalWeek: canonical,
+      progressionStrategy: "double",
+      phaseType: "intensification",
+      experienceLevel: "intermediate",
+      blockWeekIndex: 3,
+      blockLength: 3,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" }, // only dayOfWeek 1 is eligible
+    });
+    const day1Accessory = expanded.days.find((d) => d.dayOfWeek === 1)!.workout!.sections[0];
+    const day3Accessory = expanded.days.find((d) => d.dayOfWeek === 3)!.workout!.sections[0];
+    expect(day1Accessory.prescriptions[0].setTechnique).toBe("myo_reps");
+    expect(day3Accessory.prescriptions[0].setTechnique).toBe("straight_set");
+  });
+
+  it("[re-expansion] eligibility-driven activation is deterministic and stable across repeated expansion of the same canonical week", () => {
+    const canonical = fixtureWithAccessorySlot();
+    const first = expandOk({
+      canonicalWeek: canonical,
+      progressionStrategy: "double",
+      phaseType: "intensification",
+      experienceLevel: "intermediate",
+      blockWeekIndex: 3,
+      blockLength: 3,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    const second = expandOk({
+      canonicalWeek: canonical,
+      progressionStrategy: "double",
+      phaseType: "intensification",
+      experienceLevel: "intermediate",
+      blockWeekIndex: 3,
+      blockLength: 3,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    const firstAccessory = first.days[0].workout!.sections.find((s) => s.sectionType === "accessory")!.prescriptions[0].setTechnique;
+    const secondAccessory = second.days[0].workout!.sections.find((s) => s.sectionType === "accessory")!.prescriptions[0].setTechnique;
+    expect(firstAccessory).toBe("myo_reps");
+    expect(secondAccessory).toBe("myo_reps");
+  });
+
+  it("falls back to the finisher section when no accessory section exists", () => {
+    const canonical = week({
+      days: [
+        day({
+          workout: {
+            id: "bp",
+            name: "D",
+            sections: [
+              section({ sectionType: "main_lift", orderIndex: 0, prescriptions: [prescription({ id: "main-1", setTechnique: "straight_set" })] }),
+              section({ sectionType: "finisher", orderIndex: 1, prescriptions: [prescription({ id: "fin-1", setTechnique: "straight_set" })] }),
+            ],
+          },
+        }),
+      ],
+    });
+    const expanded = expandOk({
+      canonicalWeek: canonical,
+      progressionStrategy: "double",
+      phaseType: "intensification",
+      experienceLevel: "intermediate",
+      blockWeekIndex: 3,
+      blockLength: 3,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    const finisher = expanded.days[0].workout!.sections.find((s) => s.sectionType === "finisher")!;
+    expect(finisher.prescriptions[0].setTechnique).toBe("myo_reps");
+  });
+
+  it("never activates a technique when the day has neither an accessory nor a finisher section", () => {
+    const canonical = week({
+      days: [day({ workout: { id: "bp", name: "D", sections: [section({ sectionType: "main_lift", prescriptions: [prescription({ setTechnique: "straight_set" })] })] } })],
+    });
+    const expanded = expandOk({
+      canonicalWeek: canonical,
+      progressionStrategy: "double",
+      phaseType: "intensification",
+      experienceLevel: "intermediate",
+      blockWeekIndex: 3,
+      blockLength: 3,
+      techniqueEligibilityByDayOfWeek: { 1: "myo_reps" },
+    });
+    expect(firstPrescription(expanded).setTechnique).toBe("straight_set");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
 // Block-length sweep (Section 17)
 // ─────────────────────────────────────────────────────────────
 describe("block-length sweep", () => {
