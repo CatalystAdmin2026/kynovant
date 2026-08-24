@@ -444,48 +444,114 @@ async function callFixtureProvider(candidates: ExerciseCandidate[]): Promise<Gen
 }
 
 // ─────────────────────────────────────────────────────────────
-// [Monday-first scheduling remediation] Deterministic backstop for
-// shell-generated dayOfWeek values — correctness must not depend
-// entirely on the model honoring buildShellGenerationPrompt's new
-// dayOfWeek instruction (see that function's own comment for the
-// original bug: a real production draft, "Maddie," was generated
-// Sunday-first because nothing ever told the model dayOfWeek's
-// meaning, so it defaulted to naive 0-indexed sequential slots).
+// [Monday-first scheduling remediation — independent review fix,
+// candidate 637b665] Codex review findings on the first pass:
 //
+// P1: explicit free-text scheduling ("Train Sunday through Thursday")
+// can legitimately produce [0,1,2,3,4], and the original normalizer
+// had no access to the brief/freeformInstructions at all, so it
+// silently overrode that explicit coach intent to [1,2,3,4,5]. Fixed
+// by threading freeformInstructions through and skipping normalization
+// entirely whenever hasExplicitWeekdayIntent() finds a named weekday.
+//
+// P2: the original check used SET equality, so a permutation like
+// [2,0,1] — not the naive ascending sequence at all — also qualified
+// as "the ambiguous default." Fixed by requiring the exact ascending
+// positional pattern (days[i].dayOfWeek === i for every i), which a
+// genuinely-arbitrary or intentional non-ascending arrangement can
+// never satisfy.
+// ─────────────────────────────────────────────────────────────
+
+// Recognizes an explicit, deterministic mention of a specific calendar
+// day (or "weekend[s]", which unambiguously and deterministically means
+// Saturday+Sunday — unlike "weekdays," which is ambiguous about count/
+// which days, so deliberately NOT included; see the task's own
+// "weekdays preferred"/"early in the week" exclusions). Word-boundary,
+// case-insensitive, single regex pass — deliberately NOT general NLP.
+// Accepted abbreviations match the standard English set (Sun, Mon,
+// Tue/Tues, Wed, Thu/Thurs, Fri, Sat), each with an optional trailing
+// "s" for plurals ("Tuesdays and Saturdays"). Word boundaries mean this
+// also correctly matches inside "Mon-Fri" and "Sat/Sun" (hyphen and
+// slash are non-word characters, so \b still lands on either side of
+// the token) without needing separate range/pair handling — any string
+// containing at least one recognized day name is enough to suppress
+// normalization; the MODEL, not this function, is responsible for
+// interpreting the full requested schedule into dayOfWeek values.
+//
+// Known, accepted false-positive risk (documented rather than silently
+// ignored): a few of the required abbreviations are also ordinary
+// English words in isolation ("Sat" as past tense of "sit", "Sun" as
+// the star) — the task's own example list explicitly requires
+// recognizing bare "Sun"/"Sat" as valid day abbreviations, so this
+// trade-off is inherent to the spec, not an oversight. The cost of a
+// rare false positive here (occasionally leaving an ambiguous default
+// un-normalized) is low and fails toward preserving whatever the model
+// produced, never toward inventing something new.
+const WEEKDAY_TOKEN_PATTERN = new RegExp(
+  "\\b(" +
+    [
+      "sundays?",
+      "suns?",
+      "mondays?",
+      "mons?",
+      "tuesdays?",
+      "tuess?",
+      "tues?",
+      "wednesdays?",
+      "weds?",
+      "thursdays?",
+      "thurss?",
+      "thus?",
+      "fridays?",
+      "fris?",
+      "saturdays?",
+      "sats?",
+      "weekends?",
+    ].join("|") +
+    ")\\b",
+  "i",
+);
+
+export function hasExplicitWeekdayIntent(freeformInstructions?: string | null): boolean {
+  if (!freeformInstructions) return false;
+  return WEEKDAY_TOKEN_PATTERN.test(freeformInstructions);
+}
+
 // This targets ONLY the exact, narrow signature of "the model picked
 // no specific days at all and defaulted to naive sequential slots
-// starting at 0" — i.e. the day set is EXACTLY {0, 1, ..., n-1} for n
-// scheduled days. Any OTHER set of dayOfWeek values (Tue/Thu/Sat,
-// weekends, a deliberately Sunday-anchored split, anything the model
-// chose in response to an explicit request) is left byte-for-byte
-// untouched — explicit scheduling intent always wins, by construction,
-// since it can never coincide with this one specific ambiguous shape
-// for n >= 2 (see the two exclusions below).
+// starting at 0" — i.e. days[i].dayOfWeek === i for every position,
+// for n scheduled days (see the P2 fix note above: exact ascending
+// order, not mere set membership). Any OTHER arrangement — Tue/Thu/Sat,
+// weekends, a deliberately Sunday-anchored split, or even a permutation
+// of {0,...,n-1} that isn't already in ascending order — is left
+// byte-for-byte untouched, on top of the explicit-intent check above.
 //
 // Deliberately excludes n === 1: a single chosen day trivially "looks
 // like" {0}, the exact same shape as the ambiguous-default signature,
 // with zero structural way to distinguish "the model defaulted" from
-// "the coach explicitly wants only Sunday training" — there is no
-// contract field carrying explicit day-of-week intent (checked: brief
-// only has daysPerWeek/preferredSplit/freeformInstructions, nothing
-// structural), and guessing here risks silently overriding a genuine
-// Sunday-only request. The prompt instruction above (telling the model
-// to default to Monday even for a single day) is the only line of
-// defense for that one case, deliberately, rather than a heuristic
-// that could be wrong in exactly the case explicit intent matters most.
+// "the coach explicitly wants only Sunday training" beyond the
+// freeform-text check above (which still applies and still helps when
+// the coach actually named the day) — there is no contract field
+// carrying explicit day-of-week intent (checked: brief only has
+// daysPerWeek/preferredSplit/freeformInstructions, nothing structural).
+// The prompt instruction (telling the model to default to Monday even
+// for a single day) is the primary defense for the single-day case
+// when no day name was mentioned at all.
 //
 // Deliberately excludes n >= 7: every day of the week is used
 // regardless of "start day" — there is no distinct Monday-first
 // variant to normalize toward, and shifting would push a value out of
 // the valid 0-6 range.
-export function normalizeAmbiguousShellSchedule(days: ProgramShellDay[]): ProgramShellDay[] {
+export function normalizeAmbiguousShellSchedule(
+  days: ProgramShellDay[],
+  freeformInstructions?: string | null,
+): ProgramShellDay[] {
   const n = days.length;
   if (n <= 1 || n >= 7) return days;
+  if (hasExplicitWeekdayIntent(freeformInstructions)) return days;
 
-  const actual = new Set(days.map((d) => d.dayOfWeek));
-  const ambiguousDefault = new Set(Array.from({ length: n }, (_, i) => i)); // {0, 1, ..., n-1}
-  const isAmbiguousDefault = actual.size === ambiguousDefault.size && [...actual].every((v) => ambiguousDefault.has(v));
-  if (!isAmbiguousDefault) return days;
+  const isExactAscendingDefault = days.every((d, i) => d.dayOfWeek === i);
+  if (!isExactAscendingDefault) return days;
 
   // Exact match — shift every day forward by one (0->1, 1->2, ..., n-1->n),
   // landing on {1, ..., n}: Monday through the nth consecutive day, still
@@ -506,7 +572,10 @@ export async function generateProgramShell(
   if (isFixtureModeEnabled()) {
     const fixtureResult = await callFixtureShellProvider(brief);
     return fixtureResult.ok
-      ? { ...fixtureResult, shell: { ...fixtureResult.shell, days: normalizeAmbiguousShellSchedule(fixtureResult.shell.days) } }
+      ? {
+          ...fixtureResult,
+          shell: { ...fixtureResult.shell, days: normalizeAmbiguousShellSchedule(fixtureResult.shell.days, brief.freeformInstructions) },
+        }
       : fixtureResult;
   }
 
@@ -518,7 +587,7 @@ export async function generateProgramShell(
     maxOutputTokens: SHELL_MAX_OUTPUT_TOKENS,
   });
   if (!result.ok) return result;
-  const shell = { ...result.object, days: normalizeAmbiguousShellSchedule(result.object.days) };
+  const shell = { ...result.object, days: normalizeAmbiguousShellSchedule(result.object.days, brief.freeformInstructions) };
   return { ok: true, shell, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
 }
 
