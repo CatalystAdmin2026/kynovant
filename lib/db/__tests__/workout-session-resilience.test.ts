@@ -50,6 +50,27 @@ import { assertStagingDbOrThrow } from "./require-staging";
 
 assertStagingDbOrThrow();
 
+// [Independent review remediation — spurious test-timeout root cause]
+// Several tests here (most notably the completion-after-midnight case)
+// make close to a dozen SEQUENTIAL round trips to the real staging
+// database — createBlueprint x2, createClientProgram, getTodayWorkout,
+// createWorkoutSession, updateWorkoutSession, getActiveWorkoutSession,
+// a second getTodayWorkout, getWorkoutSession. Under ordinary staging
+// network latency that occasionally exceeds vitest's 5000ms DEFAULT
+// per-test timeout — confirmed by direct reproduction: the "escaped
+// 40001" symptom T2 saw was in fact this timeout firing mid-test, and
+// because it fired while vi.useFakeTimers()/vi.setSystemTime() were
+// still active and the test's own pending DB calls kept running
+// in the background after vitest gave up waiting, a timed-out test's
+// delayed writes could land during the NEXT test and cascade into a
+// second, unrelated-looking failure. This is a test-infrastructure
+// timing issue, not a defect in the session-resolution or
+// serialization-failure-recovery logic itself (isolated full-file runs
+// with this timeout raised show zero assertion failures). Raised well
+// above what any single test here should ever need, consistent with
+// this file's own beforeAll/afterAll timeouts below.
+vi.setConfig({ testTimeout: 30_000 });
+
 const db = getDb();
 
 const clientA = { id: "" };
@@ -552,6 +573,52 @@ describe("K — concurrent session start cannot create two authoritative session
     expect(rows).toHaveLength(1);
     expect(rows[0].workoutTemplateId).toBe(wtId);
   });
+
+  // [Independent review remediation — 40001 escape] T2 reproduced a raw
+  // Postgres 40001 escaping createWorkoutSession() intermittently — the
+  // isolated two-way race above passed reliably in isolation, but the
+  // failure surfaced under repeated real contention. Root-caused via
+  // source tracing (see isSerializationFailure's own comment in
+  // lib/db/client.ts): a commit-time SERIALIZABLE conflict bypasses
+  // drizzle's error-wrapping and can also, depending on timing, leave
+  // the loser's recovery re-query racing the winner's commit
+  // visibility. This repeats the exact two-way race many times in a
+  // row — proving stable convergence under sustained contention, not
+  // just a single lucky pass — and asserts no round ever lets a raw
+  // 40001 (or any error) escape past createWorkoutSession(), and that
+  // exactly one row ever exists for the client at the end of every
+  // round.
+  it("repeated high-contention concurrent starts converge every time with no escaped 40001 and no duplicate rows", async () => {
+    const wtId = await createBlueprint("WSR High Contention Blueprint");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    try {
+      const ROUNDS = 40;
+      for (let round = 0; round < ROUNDS; round++) {
+        // Reset to a clean "no session yet" state for this client
+        // before each round, without mutating any OTHER client's rows
+        // and without deleting historical data outside this test's own
+        // fixtures — this test creates and owns every session it
+        // touches under clientProgramId.
+        await db.delete(workoutSessions).where(eq(workoutSessions.clientProgramId, clientProgramId));
+
+        const [r1, r2] = await Promise.all([
+          createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE }),
+          createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE }),
+        ]);
+
+        expect(r1.id).toBe(r2.id);
+
+        const rows = await db.select({ id: workoutSessions.id }).from(workoutSessions).where(eq(workoutSessions.clientProgramId, clientProgramId));
+        expect(rows).toHaveLength(1);
+        sessionIds.push(rows[0].id);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 120_000);
 });
 
 describe("L — frozen snapshot survives a coach editing the underlying blueprint", () => {

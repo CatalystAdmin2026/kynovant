@@ -33,6 +33,17 @@ export class WorkoutSessionAuthorizationError extends Error {
   }
 }
 
+// Bounded recovery constants for the 40001 (serialization_failure)
+// path in createWorkoutSession() below — see that catch block's own
+// comment for why this is a small, fixed number of attempts rather
+// than an unbounded loop.
+const RECOVERY_MAX_ATTEMPTS = 3;
+const RECOVERY_RETRY_DELAY_MS = 25;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ─────────────────────────────────────────────────────────────
 // SHAPES
 // ─────────────────────────────────────────────────────────────
@@ -190,8 +201,26 @@ export async function createWorkoutSession(input: {
   } catch (err) {
     if (err instanceof WorkoutSessionAuthorizationError) throw err;
     if (isSerializationFailure(err)) {
-      const existing = await getActiveWorkoutSession(input.clientId, db);
-      if (existing) return existing;
+      // [Independent review remediation — bounded recovery]
+      // By the time Postgres tells this (losing) transaction it lost a
+      // serialization conflict, the WINNING transaction has, by
+      // definition, already committed — Postgres can only detect the
+      // conflict once it knows what the other side committed, and a
+      // committed transaction's effects are visible to every other
+      // session on the same primary synchronously (this isn't
+      // replication lag). A single immediate re-query is therefore
+      // expected to find it. This retries a handful of times with a
+      // short delay purely as defense in depth against any timing edge
+      // case the analysis above doesn't fully rule out — explicitly
+      // BOUNDED (never an unbounded loop), tenant-scoped to
+      // input.clientId, and NEVER attempts the insert again (which
+      // would risk a genuine duplicate rather than converging on the
+      // winner's row).
+      for (let attempt = 0; attempt < RECOVERY_MAX_ATTEMPTS; attempt++) {
+        const existing = await getActiveWorkoutSession(input.clientId, db);
+        if (existing) return existing;
+        if (attempt < RECOVERY_MAX_ATTEMPTS - 1) await sleep(RECOVERY_RETRY_DELAY_MS);
+      }
     }
     throw err;
   }

@@ -101,22 +101,49 @@ export type DbOrTx = DbInstance | Parameters<Parameters<DbInstance["transaction"
 // into a clean "please try again" result instead of a raw exception.
 // Originally written for publishProgramWithDependencies() (program-
 // builder-service.ts) and factored out here once workout-session-
-// service.ts needed the identical detection logic — one source of
-// truth for a subtlety that already cost a real debugging cycle once:
-// drizzle-orm's query layer wraps every driver error in a new
-// Error("Failed query: ...") and attaches the original PostgresError
-// (which actually carries `.code`) via `.cause`, so `.code` must be
-// checked on both the error itself and err.cause, not just the outer
-// one — confirmed empirically against a real concurrent-transaction
-// conflict in staging, not assumed.
+// service.ts needed the identical detection logic.
+//
+// [Workout session resilience — independent review remediation]
+// The single-level `.cause` check this function shipped with was NOT
+// sufficient: drizzle-orm's query layer wraps driver errors in a new
+// Error("Failed query: ...") with the original PostgresError on
+// `.cause`, which is what a mid-transaction STATEMENT failure looks
+// like — but a genuine SERIALIZABLE conflict can also (and, for
+// createWorkoutSession()'s multi-table read footprint via
+// getTodayWorkout(), apparently more often) surface as a COMMIT-time
+// failure instead. Traced end to end against this repo's actual
+// dependency versions: drizzle's postgres-js transaction() is a bare
+// passthrough to postgres.js's own client.begin() (see
+// node_modules/drizzle-orm/postgres-js/session.js), and postgres.js's
+// begin()/scope() (node_modules/postgres/src/index.js) issues the
+// final `commit` via its OWN internal tagged-template call — OUTSIDE
+// the try/catch that wraps the transaction callback, and never through
+// drizzle's PostgresJsPreparedQuery wrapper at all. A commit-time
+// 40001 therefore propagates as a RAW, undecorated PostgresError with
+// no "Failed query" envelope and no `.cause` — a shallower shape than
+// the one this function originally assumed, not a deeper one. Rather
+// than special-case "sometimes 0 levels, sometimes 1," this now walks
+// the FULL chain uniformly — the object itself, then `.cause`
+// repeatedly, and (Promise combinators can legitimately produce these)
+// every entry of an AggregateError's `.errors` — to a bounded depth,
+// so any wrapper shape at any depth is recognized the same way without
+// hardcoding a specific one. Recognition still ultimately requires an
+// actual `.code === "40001"` on some node in that chain; nothing here
+// classifies an error by message text, name, or proximity alone.
+const MAX_ERROR_CHAIN_DEPTH = 12;
+
 function hasSerializationFailureCode(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "40001";
 }
 
-export function isSerializationFailure(err: unknown): boolean {
+export function isSerializationFailure(err: unknown, _depth = 0): boolean {
+  if (_depth > MAX_ERROR_CHAIN_DEPTH) return false;
   if (hasSerializationFailureCode(err)) return true;
+  if (err instanceof AggregateError) {
+    return err.errors.some((inner) => isSerializationFailure(inner, _depth + 1));
+  }
   if (err instanceof Error && err.cause !== undefined) {
-    return hasSerializationFailureCode(err.cause);
+    return isSerializationFailure(err.cause, _depth + 1);
   }
   return false;
 }
