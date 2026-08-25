@@ -29,7 +29,7 @@
 // server/client timezone mismatch than what Vercel actually runs.
 process.env.TZ = "UTC";
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { randomUUID } from "crypto";
 import { eq, and, inArray } from "drizzle-orm";
 import { getDb } from "../client";
@@ -44,7 +44,7 @@ import {
 } from "../schema-program";
 import { exercises, workoutTemplateSections, workoutTemplateExercises } from "../schema-exercise";
 import { getTodayWorkout, getActiveWorkoutSession } from "../client-program-service";
-import { createWorkoutSession, logSet, getWorkoutSession, updateWorkoutSession } from "../workout-session-service";
+import { createWorkoutSession, logSet, getWorkoutSession, updateWorkoutSession, WorkoutSessionAuthorizationError } from "../workout-session-service";
 import { authorizeWorkoutSession } from "@/lib/auth/guards";
 import { assertStagingDbOrThrow } from "./require-staging";
 
@@ -141,6 +141,32 @@ async function createClientProgram(clientId: string, startDate: string, dayWorko
   return { clientProgramId: cp.id, weekId: week.id };
 }
 
+// [Independent review remediation] createWorkoutSession() now
+// re-derives and validates against getTodayWorkout()'s own
+// authoritative resolution before creating a new session — which
+// itself depends on real wall-clock time interpreted in the client's
+// stored timezone. Every test that starts a session (rather than just
+// reading already-created fixtures) therefore needs a PINNED, known
+// "now" that actually resolves to the dayOfWeek its fixture's
+// client_program_week_days row uses — relying on "whatever day this
+// suite happens to run on" would make the whole file nondeterministic
+// (and did, transiently, the moment this authorization check landed).
+// Monday, Aug 24 2026, noon Central — already independently confirmed
+// via the C/D/E boundary tests below — is the shared reference for
+// clientA (timezone="America/Chicago"): resolves to dayOfWeek=1 in
+// Chicago, matching a startDate of the same calendar day (elapsed=0,
+// week 1).
+const MONDAY_NOON_CHICAGO = "2026-08-24T12:00:00-05:00";
+const MONDAY_STARTDATE = "2026-08-24";
+
+// Ensures a thrown assertion inside a vi.useFakeTimers() block never
+// leaves fake timers active for a LATER test in this file — every
+// timer-mocking test below still calls vi.useRealTimers() itself on
+// its own success path, but this is the backstop.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 async function getExerciseRowId(workoutTemplateId: string): Promise<string> {
   const [row] = await db.select({ id: workoutTemplateExercises.id }).from(workoutTemplateExercises).where(eq(workoutTemplateExercises.workoutTemplateId, workoutTemplateId));
   return row.id;
@@ -235,8 +261,11 @@ afterAll(async () => {
 describe("A/H — persisted set hydration data (server-side contract WorkoutSession.tsx now consumes)", () => {
   it("logged sets round-trip weight/reps/duration/RPE correctly through getWorkoutSession", async () => {
     const wtId = await createBlueprint("WSR Hydration Blueprint");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtId });
-    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
     sessionIds.push(session.id);
     const exId = await getExerciseRowId(wtId);
 
@@ -260,8 +289,11 @@ describe("A/H — persisted set hydration data (server-side contract WorkoutSess
 describe("I — no duplicate set logs on re-log (upsert identity)", () => {
   it("logging the same set twice updates in place rather than creating a second row", async () => {
     const wtId = await createBlueprint("WSR Upsert Blueprint");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtId });
-    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
     sessionIds.push(session.id);
     const exId = await getExerciseRowId(wtId);
 
@@ -277,8 +309,11 @@ describe("I — no duplicate set logs on re-log (upsert identity)", () => {
 describe("B/C/D — session-first resolution across refresh, evening, and local-midnight boundaries", () => {
   it("B: a normal same-day refresh returns the exact same in-progress session", async () => {
     const wtId = await createBlueprint("WSR SameDay Blueprint");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtId });
-    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
     sessionIds.push(session.id);
 
     const first = await getTodayWorkout(clientA.id);
@@ -442,14 +477,17 @@ describe("J — deterministic resolution of legacy multiple-in-progress sessions
   it("picks the most-recently-created in-progress session, never an unordered/arbitrary one", async () => {
     const wt1 = await createBlueprint("WSR Legacy Dup 1");
     const wt2 = await createBlueprint("WSR Legacy Dup 2");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wt1, 2: wt2 });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wt1, 2: wt2 });
 
     // Simulate a legacy/edge-case state directly at the DB layer —
     // application code no longer creates a second in-progress session
     // (see createWorkoutSession's own concurrency-safety), but
     // getActiveWorkoutSession must still behave deterministically if
     // one is somehow already present.
-    const older = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wt1, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const older = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wt1, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
     sessionIds.push(older.id);
     await new Promise((r) => setTimeout(r, 10));
     const [newer] = await db
@@ -470,12 +508,15 @@ describe("J — deterministic resolution of legacy multiple-in-progress sessions
 describe("K — concurrent session start cannot create two authoritative sessions", () => {
   it("two simultaneous createWorkoutSession calls for the same client converge on one session", async () => {
     const wtId = await createBlueprint("WSR Concurrent Start Blueprint");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtId });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
 
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
     const [r1, r2] = await Promise.all([
-      createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" }),
-      createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" }),
+      createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE }),
+      createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE }),
     ]);
+    vi.useRealTimers();
     sessionIds.push(r1.id, r2.id);
 
     expect(r1.id).toBe(r2.id);
@@ -483,13 +524,44 @@ describe("K — concurrent session start cannot create two authoritative session
     const rows = await db.select({ id: workoutSessions.id }).from(workoutSessions).where(eq(workoutSessions.clientProgramId, clientProgramId));
     expect(rows).toHaveLength(1);
   });
+
+  it("one legitimate start + one tampered (wrong workoutTemplateId) concurrent start: legitimate succeeds, tampered is rejected, no extra row is created", async () => {
+    const wtId = await createBlueprint("WSR Concurrent Legit Blueprint");
+    const foreignWt = await createBlueprint("WSR Concurrent Tampered Blueprint");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const [legit, tampered] = await Promise.allSettled([
+      createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE }),
+      createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: foreignWt, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE }),
+    ]);
+    vi.useRealTimers();
+
+    expect(legit.status).toBe("fulfilled");
+    if (legit.status === "fulfilled") {
+      sessionIds.push(legit.value.id);
+      expect(legit.value.workoutTemplateId).toBe(wtId);
+    }
+    expect(tampered.status).toBe("rejected");
+    if (tampered.status === "rejected") {
+      expect(tampered.reason).toBeInstanceOf(WorkoutSessionAuthorizationError);
+    }
+
+    const rows = await db.select({ id: workoutSessions.id, workoutTemplateId: workoutSessions.workoutTemplateId }).from(workoutSessions).where(eq(workoutSessions.clientProgramId, clientProgramId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].workoutTemplateId).toBe(wtId);
+  });
 });
 
 describe("L — frozen snapshot survives a coach editing the underlying blueprint", () => {
   it("an active session's returned name/content is unaffected by a later blueprint rename", async () => {
     const wtId = await createBlueprint("WSR Original Name");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtId });
-    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
     sessionIds.push(session.id);
 
     // Simulate a coach editing/renaming the blueprint after the
@@ -507,8 +579,11 @@ describe("L — frozen snapshot survives a coach editing the underlying blueprin
 describe("M — historical completed sessions are unchanged", () => {
   it("a pre-existing completed session is never selected as active and its own data is untouched", async () => {
     const wtId = await createBlueprint("WSR History Blueprint");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtId });
-    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
     sessionIds.push(session.id);
     const exId = await getExerciseRowId(wtId);
     await logSet({ workoutSessionId: session.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 8, actualWeightKg: "50.00" });
@@ -532,8 +607,11 @@ describe("M — historical completed sessions are unchanged", () => {
 describe("P — client isolation for session lookup and authorization", () => {
   it("client B cannot read client A's in-progress session via getWorkoutSession", async () => {
     const wtId = await createBlueprint("WSR Isolation Blueprint");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtId });
-    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
     sessionIds.push(session.id);
 
     const asOwner = await getWorkoutSession(session.id, clientA.id);
@@ -545,8 +623,11 @@ describe("P — client isolation for session lookup and authorization", () => {
 
   it("authorizeWorkoutSession denies a client acting on another client's session id", async () => {
     const wtId = await createBlueprint("WSR Authorize Isolation Blueprint");
-    const { clientProgramId } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtId });
-    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
     sessionIds.push(session.id);
 
     const ownerDenied = await authorizeWorkoutSession(session.id, clientA.id);
@@ -559,14 +640,227 @@ describe("P — client isolation for session lookup and authorization", () => {
   it("client B's active-session resolution never returns client A's session, even with an in-progress session of B's own", async () => {
     const wtA = await createBlueprint("WSR Isolation A Blueprint");
     const wtB = await createBlueprint("WSR Isolation B Blueprint");
-    const { clientProgramId: cpA } = await createClientProgram(clientA.id, "2026-08-01", { 1: wtA });
-    const { clientProgramId: cpB } = await createClientProgram(clientB.id, "2026-08-01", { 1: wtB });
-    const sessionA = await createWorkoutSession({ clientId: clientA.id, clientProgramId: cpA, workoutTemplateId: wtA, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
-    const sessionB = await createWorkoutSession({ clientId: clientB.id, clientProgramId: cpB, workoutTemplateId: wtB, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-03" });
+    const { clientProgramId: cpA } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtA });
+    // clientB's timezone is Pacific/Auckland — at the SAME pinned "now"
+    // used for clientA, Auckland's local calendar is already Tuesday
+    // (see the "G" timezone test's own comment for the exact math), so
+    // this fixture and startDate are Auckland-correct, not a copy-paste
+    // of clientA's Monday/Chicago values.
+    const { clientProgramId: cpB } = await createClientProgram(clientB.id, "2026-08-25", { 2: wtB });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const sessionA = await createWorkoutSession({ clientId: clientA.id, clientProgramId: cpA, workoutTemplateId: wtA, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    const sessionB = await createWorkoutSession({ clientId: clientB.id, clientProgramId: cpB, workoutTemplateId: wtB, programWeekNumber: 1, programDayOfWeek: 2, scheduledDate: "2026-08-25" });
+    vi.useRealTimers();
     sessionIds.push(sessionA.id, sessionB.id);
 
     const activeForB = await getActiveWorkoutSession(clientB.id);
     expect(activeForB?.id).toBe(sessionB.id);
     expect(activeForB?.id).not.toBe(sessionA.id);
+  });
+});
+
+describe("Cross-client / unrelated / tampered start-session authorization", () => {
+  it("a client cannot start a session for an unrelated coach's workout template that isn't scheduled for them", async () => {
+    const scheduledWt = await createBlueprint("WSR Auth Scheduled Blueprint");
+    const unrelatedWt = await createBlueprint("WSR Auth Unrelated Blueprint");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: scheduledWt });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    await expect(
+      createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: unrelatedWt, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE }),
+    ).rejects.toBeInstanceOf(WorkoutSessionAuthorizationError);
+    vi.useRealTimers();
+
+    const rows = await db.select({ id: workoutSessions.id }).from(workoutSessions).where(eq(workoutSessions.clientProgramId, clientProgramId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("a client cannot start a session using another client's clientProgramId/workoutTemplateId pairing", async () => {
+    const wtA = await createBlueprint("WSR Auth CrossClient A");
+    const wtB = await createBlueprint("WSR Auth CrossClient B");
+    const { clientProgramId: cpA } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtA });
+    const { clientProgramId: cpB } = await createClientProgram(clientB.id, "2026-08-25", { 2: wtB });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    // Client A's authenticated identity (clientId) is server-controlled
+    // and can't itself be spoofed to clientB — but this proves that
+    // even if a tampered request submits client B's own
+    // clientProgramId/workoutTemplateId pairing alongside client A's
+    // real clientId, the mismatch against client A's OWN authoritative
+    // schedule still rejects it.
+    await expect(
+      createWorkoutSession({ clientId: clientA.id, clientProgramId: cpB, workoutTemplateId: wtB, programWeekNumber: 1, programDayOfWeek: 2, scheduledDate: "2026-08-25" }),
+    ).rejects.toBeInstanceOf(WorkoutSessionAuthorizationError);
+    vi.useRealTimers();
+
+    const rowsA = await db.select({ id: workoutSessions.id }).from(workoutSessions).where(eq(workoutSessions.clientProgramId, cpA));
+    expect(rowsA).toHaveLength(0);
+    const rowsB = await db.select({ id: workoutSessions.id }).from(workoutSessions).where(eq(workoutSessions.clientProgramId, cpB));
+    expect(rowsB).toHaveLength(0);
+  });
+
+  it("an arbitrary/nonexistent workoutTemplateId is rejected", async () => {
+    const scheduledWt = await createBlueprint("WSR Auth Arbitrary Blueprint");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: scheduledWt });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    await expect(
+      createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: randomUUID(), programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE }),
+    ).rejects.toBeInstanceOf(WorkoutSessionAuthorizationError);
+    vi.useRealTimers();
+
+    const rows = await db.select({ id: workoutSessions.id }).from(workoutSessions).where(eq(workoutSessions.clientProgramId, clientProgramId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("a legitimate, correctly-scheduled start still succeeds", async () => {
+    const scheduledWt = await createBlueprint("WSR Auth Legit Blueprint");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: scheduledWt });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: scheduledWt, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
+    sessionIds.push(session.id);
+
+    expect(session.workoutTemplateId).toBe(scheduledWt);
+    expect(session.status).toBe("in_progress");
+  });
+});
+
+describe("Cross-client finish (updateWorkoutSession/PUT contract)", () => {
+  it("attempting to finish another client's session mutates nothing and resolves to null (mapped to 404 at the route)", async () => {
+    const wtId = await createBlueprint("WSR Cross-Client Finish Blueprint");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
+    sessionIds.push(session.id);
+
+    const result = await updateWorkoutSession(session.id, clientB.id, { status: "completed" });
+    expect(result).toBeNull();
+
+    // No mutation — the session, viewed by its real owner, is still
+    // exactly as it was.
+    const untouched = await getWorkoutSession(session.id, clientA.id);
+    expect(untouched?.session.status).toBe("in_progress");
+    expect(untouched?.session.completedAt).toBeNull();
+  });
+
+  it("finishing one's own session still works (regression)", async () => {
+    const wtId = await createBlueprint("WSR Own Finish Blueprint");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wtId });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(MONDAY_NOON_CHICAGO));
+    const session = await createWorkoutSession({ clientId: clientA.id, clientProgramId, workoutTemplateId: wtId, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE });
+    vi.useRealTimers();
+    sessionIds.push(session.id);
+
+    const result = await updateWorkoutSession(session.id, clientA.id, { status: "completed" });
+    expect(result).not.toBeNull();
+    expect(result?.status).toBe("completed");
+    expect(result?.completedAt).not.toBeNull();
+  });
+
+  it("a nonexistent session id resolves to null, indistinguishable from a cross-client one", async () => {
+    const result = await updateWorkoutSession(randomUUID(), clientA.id, { status: "completed" });
+    expect(result).toBeNull();
+  });
+});
+
+describe("P1 rollout-blocking test — legacy duplicate resurrection after authoritative completion", () => {
+  it("older duplicate A does NOT resurface once newer authoritative session B completes", async () => {
+    const wt1 = await createBlueprint("WSR Resurrection Dup 1");
+    const wt2 = await createBlueprint("WSR Resurrection Dup 2");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wt1, 2: wt2 });
+
+    // 1. Older in-progress A, created directly at the DB layer to
+    // simulate the exact legacy state the review's own repro steps
+    // describe (application code no longer creates a duplicate, but
+    // this proves resolution is safe even if one already exists).
+    const [olderA] = await db
+      .insert(workoutSessions)
+      .values({ clientId: clientA.id, clientProgramId, workoutTemplateId: wt1, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-24", startedAt: new Date(), status: "in_progress", completionPercent: 0, workoutSnapshot: {} })
+      .returning();
+    sessionIds.push(olderA.id);
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    // 2. Newer in-progress B.
+    const [newerB] = await db
+      .insert(workoutSessions)
+      .values({ clientId: clientA.id, clientProgramId, workoutTemplateId: wt2, programWeekNumber: 1, programDayOfWeek: 2, scheduledDate: "2026-08-25", startedAt: new Date(), status: "in_progress", completionPercent: 0, workoutSnapshot: {} })
+      .returning();
+    sessionIds.push(newerB.id);
+
+    // 3. getTodayWorkout() (via getActiveWorkoutSession) returns B.
+    const whileBActive = await getActiveWorkoutSession(clientA.id);
+    expect(whileBActive?.id).toBe(newerB.id);
+
+    // 4. Complete B.
+    const completed = await updateWorkoutSession(newerB.id, clientA.id, { status: "completed" });
+    expect(completed?.status).toBe("completed");
+
+    // 5/6. getActiveWorkoutSession() again — MUST NOT return A. This is
+    // the exact P1 the independent review flagged: the old "newest
+    // in_progress row" query would have returned A here, resurrecting
+    // it as authoritative purely because B was no longer in_progress.
+    const afterBCompletes = await getActiveWorkoutSession(clientA.id);
+    expect(afterBCompletes).toBeNull();
+
+    // Historical data preserved exactly — A was never deleted, never
+    // silently completed, never rewritten.
+    const aRow = await getWorkoutSession(olderA.id, clientA.id);
+    expect(aRow?.session.status).toBe("in_progress");
+    expect(aRow?.session.workoutTemplateId).toBe(wt1);
+
+    // With no active session, timezone-correct schedule resolution
+    // resumes normally (real current time — by this point neither
+    // session is selectable, so whatever "today" actually is doesn't
+    // matter for this specific assertion; the key invariant is just
+    // that resolution no longer treats A as authoritative).
+    const scheduleResumed = await getTodayWorkout(clientA.id);
+    if (scheduleResumed.kind === "workout") {
+      expect(scheduleResumed.data.existingSessionId).not.toBe(olderA.id);
+    }
+  });
+
+  it("A alone (no B) still resumes normally", async () => {
+    const wt1 = await createBlueprint("WSR SingleActive Dup 1");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wt1 });
+    const [onlyA] = await db
+      .insert(workoutSessions)
+      .values({ clientId: clientA.id, clientProgramId, workoutTemplateId: wt1, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: MONDAY_STARTDATE, startedAt: new Date(), status: "in_progress", completionPercent: 0, workoutSnapshot: {} })
+      .returning();
+    sessionIds.push(onlyA.id);
+
+    const active = await getActiveWorkoutSession(clientA.id);
+    expect(active?.id).toBe(onlyA.id);
+  });
+
+  it("A and B both completed — normal schedule resolution, neither resurfaces", async () => {
+    const wt1 = await createBlueprint("WSR BothDone Dup 1");
+    const wt2 = await createBlueprint("WSR BothDone Dup 2");
+    const { clientProgramId } = await createClientProgram(clientA.id, MONDAY_STARTDATE, { 1: wt1, 2: wt2 });
+    const [olderA] = await db
+      .insert(workoutSessions)
+      .values({ clientId: clientA.id, clientProgramId, workoutTemplateId: wt1, programWeekNumber: 1, programDayOfWeek: 1, scheduledDate: "2026-08-24", startedAt: new Date(), completedAt: new Date(), status: "completed", completionPercent: 100, workoutSnapshot: {} })
+      .returning();
+    sessionIds.push(olderA.id);
+    await new Promise((r) => setTimeout(r, 10));
+    const [newerB] = await db
+      .insert(workoutSessions)
+      .values({ clientId: clientA.id, clientProgramId, workoutTemplateId: wt2, programWeekNumber: 1, programDayOfWeek: 2, scheduledDate: "2026-08-25", startedAt: new Date(), completedAt: new Date(), status: "completed", completionPercent: 100, workoutSnapshot: {} })
+      .returning();
+    sessionIds.push(newerB.id);
+
+    const active = await getActiveWorkoutSession(clientA.id);
+    expect(active).toBeNull();
   });
 });

@@ -44,6 +44,15 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
       clientNotes: body.clientNotes,
     });
 
+    // [Independent review remediation — P2 cross-client finish response]
+    // A nonexistent session id and another client's session are
+    // indistinguishable here — same 404, same message, no mutation
+    // either way — matching the GET handler's own existing contract
+    // just above.
+    if (!session) {
+      return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
+    }
+
     return NextResponse.json({ ok: true, session });
   } catch (err) {
     return NextResponse.json(

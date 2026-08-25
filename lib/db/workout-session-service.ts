@@ -7,8 +7,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { eq, and, desc, asc, sql, inArray } from "drizzle-orm";
-import { getDb, isSerializationFailure, type Database, type DbOrTx } from "./client";
+import { eq, and, asc, sql, inArray } from "drizzle-orm";
+import { getDb, isSerializationFailure, type Database } from "./client";
 import { programTemplates, workoutTemplates } from "./schema";
 import {
   clientPrograms,
@@ -18,7 +18,20 @@ import {
   type WorkoutSetLog,
 } from "./schema-program";
 import { workoutTemplateExercises } from "./schema-exercise";
-import { buildWorkoutSnapshot } from "./client-program-service";
+import { buildWorkoutSnapshot, getActiveWorkoutSession, getTodayWorkout } from "./client-program-service";
+
+// [Independent review remediation — P2 start-session authorization]
+// Thrown when a session-start request's claimed workoutTemplateId does
+// not match what getTodayWorkout() independently, authoritatively
+// resolves for that same client. Distinguished from a generic Error so
+// the API route can map it to a 403/422-style client error instead of
+// a raw 500 — a rejected request, not a server fault.
+export class WorkoutSessionAuthorizationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkoutSessionAuthorizationError";
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // SHAPES
@@ -98,6 +111,25 @@ export interface HistorySession {
 // winner just created — both concurrent callers converge on the same
 // single authoritative row instead of one of them surfacing a raw
 // error.
+// [Independent review remediation — P2 start-session authorization]
+// input.workoutTemplateId/clientProgramId/programWeekNumber/
+// programDayOfWeek/scheduledDate are the SAME fields the client has
+// always sent, but they are no longer trusted as authorization for
+// what gets created. Before ever inserting a new session, this
+// re-derives what the authenticated client is ACTUALLY scheduled to
+// do right now via getTodayWorkout() — the exact same authoritative
+// resolution the "Today's Workout" card itself uses, reused rather
+// than reimplemented (no parallel scheduling system). A request is
+// only honored if its claimed workoutTemplateId matches that
+// resolution; the row that actually gets inserted uses the
+// AUTHORITATIVE values from that resolution, not the caller's raw
+// input, for clientProgramId/programWeekNumber/programDayOfWeek/
+// scheduledDate — so even a partially-tampered request (right
+// workoutTemplateId, wrong secondary fields) can never persist an
+// inconsistent row. This closes off cross-client, unrelated-program,
+// unrelated-template, and arbitrary-UUID start attempts uniformly: none
+// of them can ever equal the server's own independently-resolved
+// workoutTemplateId for that client.
 export async function createWorkoutSession(input: {
   clientId: string;
   clientProgramId: string | null;
@@ -108,37 +140,42 @@ export async function createWorkoutSession(input: {
 }): Promise<WorkoutSession> {
   const db = getDb();
 
-  async function findExisting(client: DbOrTx) {
-    const [existing] = await client
-      .select()
-      .from(workoutSessions)
-      .where(and(eq(workoutSessions.clientId, input.clientId), eq(workoutSessions.status, "in_progress")))
-      .orderBy(desc(workoutSessions.createdAt))
-      .limit(1);
-    return existing ?? null;
-  }
-
   try {
     return await db.transaction(
       async (tx) => {
-        const existing = await findExisting(tx);
+        const existing = await getActiveWorkoutSession(input.clientId, tx);
         if (existing) return existing;
+
+        // Resolved INSIDE this same transaction (see DbOrTx in
+        // lib/db/client.ts) so the active-session check just above and
+        // the schedule resolution here share one consistent snapshot —
+        // without this, a session created by a concurrent request
+        // between the two reads would be invisible to this one, and
+        // this call could still attempt to insert a second row for the
+        // same client.
+        const authoritative = await getTodayWorkout(input.clientId, tx);
+        if (authoritative.kind !== "workout") {
+          throw new WorkoutSessionAuthorizationError("No workout is currently scheduled for this client.");
+        }
+        if (authoritative.data.workoutTemplateId !== input.workoutTemplateId) {
+          throw new WorkoutSessionAuthorizationError("The requested workout is not the one currently scheduled for this client.");
+        }
 
         // Snapshot the workout structure at session-creation time —
         // only actually needed when a new session is really being
-        // created, so this runs after the existing-session check, not
-        // before it.
-        const snapshot = await buildWorkoutSnapshot(input.workoutTemplateId);
+        // created, so this runs after both checks above, not before
+        // them.
+        const snapshot = await buildWorkoutSnapshot(authoritative.data.workoutTemplateId);
 
         const [row] = await tx
           .insert(workoutSessions)
           .values({
             clientId: input.clientId,
-            clientProgramId: input.clientProgramId ?? null,
-            workoutTemplateId: input.workoutTemplateId,
-            programWeekNumber: input.programWeekNumber ?? null,
-            programDayOfWeek: input.programDayOfWeek ?? null,
-            scheduledDate: input.scheduledDate ?? null,
+            clientProgramId: authoritative.data.clientProgramId || null,
+            workoutTemplateId: authoritative.data.workoutTemplateId,
+            programWeekNumber: authoritative.data.weekNumber,
+            programDayOfWeek: authoritative.data.dayOfWeek,
+            scheduledDate: authoritative.data.scheduledDate,
             startedAt: new Date(),
             status: "in_progress",
             completionPercent: 0,
@@ -151,8 +188,9 @@ export async function createWorkoutSession(input: {
       { isolationLevel: "serializable" },
     );
   } catch (err) {
+    if (err instanceof WorkoutSessionAuthorizationError) throw err;
     if (isSerializationFailure(err)) {
-      const existing = await findExisting(db);
+      const existing = await getActiveWorkoutSession(input.clientId, db);
       if (existing) return existing;
     }
     throw err;
@@ -190,6 +228,16 @@ export async function getWorkoutSession(
   return { session, sets };
 }
 
+// [Independent review remediation — P2 cross-client finish response]
+// Returns null (never a fabricated/undefined WorkoutSession) when the
+// WHERE clause's tenant scoping (id + clientId) matches no row — a
+// nonexistent session id or one belonging to another client are
+// indistinguishable to the caller, exactly like getWorkoutSession's
+// own existing contract. Previously this destructured `[row]` from an
+// empty `.returning()` result and returned `row` (`undefined`)
+// silently typed as a non-nullable WorkoutSession — no mutation ever
+// happened, but the caller (the PUT route) had no way to tell success
+// from a no-op and returned ok:true regardless.
 export async function updateWorkoutSession(
   sessionId: string,
   clientId: string,
@@ -197,7 +245,7 @@ export async function updateWorkoutSession(
     status?: "completed" | "skipped";
     clientNotes?: string | null;
   },
-): Promise<WorkoutSession> {
+): Promise<WorkoutSession | null> {
   const db = getDb();
 
   const baseUpdates: Record<string, unknown> = { updatedAt: new Date() };
@@ -217,7 +265,7 @@ export async function updateWorkoutSession(
         .where(and(eq(workoutSessions.id, sessionId), eq(workoutSessions.clientId, clientId)))
         .returning();
     });
-    return row;
+    return row ?? null;
   }
 
   const [row] = await db
@@ -225,7 +273,7 @@ export async function updateWorkoutSession(
     .set(baseUpdates)
     .where(and(eq(workoutSessions.id, sessionId), eq(workoutSessions.clientId, clientId)))
     .returning();
-  return row;
+  return row ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────

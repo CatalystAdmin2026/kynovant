@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { createWorkoutSession } from "@/lib/db/workout-session-service";
+import { createWorkoutSession, WorkoutSessionAuthorizationError } from "@/lib/db/workout-session-service";
 import { requireAuthenticatedUser } from "@/lib/auth/guards";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +35,14 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, session }, { status: 201 });
   } catch (err) {
+    // [Independent review remediation — P2 start-session authorization]
+    // A rejected request (claimed workoutTemplateId doesn't match this
+    // client's own authoritative schedule), not a server fault —
+    // mapped to 403 rather than the generic 500 every other thrown
+    // error here still gets.
+    if (err instanceof WorkoutSessionAuthorizationError) {
+      return NextResponse.json({ ok: false, error: err.message }, { status: 403 });
+    }
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : "Failed" },
       { status: 500 },

@@ -8,7 +8,7 @@
 
 import "server-only";
 import { eq, and, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
-import { getDb } from "./client";
+import { getDb, type DbOrTx } from "./client";
 import { coachOwnsClient } from "@/lib/auth/guards";
 import {
   users,
@@ -345,8 +345,9 @@ export async function updateClientProgram(
 
 export async function getClientActiveProgram(
   clientId: string,
+  dbClient?: DbOrTx,
 ): Promise<ClientProgram | null> {
-  const db = getDb();
+  const db = dbClient ?? getDb();
   const rows = await db
     .select()
     .from(clientPrograms)
@@ -625,8 +626,15 @@ function daysBetween(from: string, toDateStr: string): number {
 // getDateInTimezone/getWeekdayInTimezone already treat as an invalid
 // zone and safely resolve to their own UTC fallback — one fallback
 // path, not a second one invented here.
-async function getClientTimezone(clientId: string): Promise<string> {
-  const db = getDb();
+//
+// Accepts an optional transaction (see DbOrTx in lib/db/client.ts) so
+// createWorkoutSession() can resolve everything it depends on —
+// including this — inside its own SERIALIZABLE transaction, keeping
+// the concurrent-start correctness guarantee intact even now that
+// starting a session also revalidates against this and
+// getTodayWorkout().
+async function getClientTimezone(clientId: string, dbClient?: DbOrTx): Promise<string> {
+  const db = dbClient ?? getDb();
   const [profile] = await db
     .select({ timezone: clientProfiles.timezone })
     .from(clientProfiles)
@@ -635,44 +643,59 @@ async function getClientTimezone(clientId: string): Promise<string> {
   return profile?.timezone ?? "";
 }
 
-// Deterministic resolution when more than one status='in_progress' row
-// exists for a client. The schema has no unique constraint enforcing
-// "at most one in-progress session per client" (investigated: no
-// migration was found to be genuinely necessary — see
-// createWorkoutSession()'s own comment for how NEW duplicates are
-// prevented going forward at the application layer instead). For
-// whatever legacy/edge-case rows might already exist, or could exist
-// despite that prevention (this query makes no assumption it's
-// perfect), "most recently started wins" is the deterministic,
-// explicit choice — ORDER BY createdAt DESC, never an unordered
-// LIMIT 1. Older in-progress rows are left exactly as they are: never
-// deleted, never silently completed, just not selected as
-// authoritative.
+// [Independent review remediation — P1 legacy duplicate resurrection]
+// The schema has no unique constraint enforcing "at most one
+// in-progress session per client" (investigated: no migration was
+// found to be genuinely necessary — see createWorkoutSession()'s own
+// comment for how NEW duplicates are prevented going forward at the
+// application layer instead). For legacy/edge-case rows that could
+// already exist despite that prevention, the FIRST version of this
+// function picked "the newest status='in_progress' row" — which let an
+// OLDER still-in_progress duplicate (A) resurface as authoritative the
+// moment a NEWER one (B) was completed, since completing B removed it
+// from the in_progress pool and A then became "the newest in_progress
+// row" again. That is exactly backwards: once B ever existed, A must
+// never become authoritative again, regardless of what B's status
+// later becomes.
+//
+// Fixed by changing the question entirely: instead of "what is the
+// newest in_progress row," this asks "what is the single most
+// recently created session for this client, of ANY status — and is
+// THAT one currently in_progress." Once a newer session (B) exists at
+// all, an older row (A) can never again be "the most recent," so it
+// can never again be selected here — independent of B's own status.
+// If the most recent session has since moved to a terminal state
+// (completed/skipped), there is NO active session, full stop; normal
+// schedule-based resolution takes over, exactly as required. No status
+// is invented, no row is ever mutated or deleted here — this is a
+// read-only reinterpretation of existing, already-persisted fields
+// (clientId, status, createdAt, id).
+//
+// Deterministic tie-break: ORDER BY createdAt DESC, id DESC — never an
+// unordered LIMIT 1, and never reliant on createdAt alone in case two
+// rows share the same timestamp precision.
 export async function getActiveWorkoutSession(
   clientId: string,
+  dbClient?: DbOrTx,
 ): Promise<WorkoutSessionRow | null> {
-  const db = getDb();
-  const rows = await db
+  const db = dbClient ?? getDb();
+  const [mostRecent] = await db
     .select()
     .from(workoutSessions)
-    .where(
-      and(
-        eq(workoutSessions.clientId, clientId),
-        eq(workoutSessions.status, "in_progress"),
-      ),
-    )
-    .orderBy(desc(workoutSessions.createdAt))
+    .where(eq(workoutSessions.clientId, clientId))
+    .orderBy(desc(workoutSessions.createdAt), desc(workoutSessions.id))
     .limit(1);
-  return rows[0] ?? null;
+  return mostRecent && mostRecent.status === "in_progress" ? mostRecent : null;
 }
 
 export async function getTodayWorkout(
   clientId: string,
+  dbClient?: DbOrTx,
 ): Promise<TodayResult> {
-  const db = getDb();
+  const db = dbClient ?? getDb();
 
   // ── 1. Session-first resolution ──────────────────────────
-  const activeSession = await getActiveWorkoutSession(clientId);
+  const activeSession = await getActiveWorkoutSession(clientId, dbClient);
   if (activeSession) {
     // Authoritative — frozen at session-creation time, never rederived
     // from the current (possibly since-edited) program/blueprint. See
@@ -717,7 +740,7 @@ export async function getTodayWorkout(
   }
 
   // ── 2. No active session — normal, timezone-correct scheduling ──
-  const assignment = await getClientActiveProgram(clientId);
+  const assignment = await getClientActiveProgram(clientId, dbClient);
   if (!assignment) return { kind: "no_program" };
 
   // Fetch template early — needed for not_started data and program_complete check.
@@ -737,7 +760,7 @@ export async function getTodayWorkout(
   // investigation found (todayStr via raw toISOString()/UTC,
   // dayOfWeek via the process's own local getDay()) is gone; there is
   // now exactly one timezone interpretation of "now" for this client.
-  const timezone = await getClientTimezone(clientId);
+  const timezone = await getClientTimezone(clientId, dbClient);
   const now = new Date();
   const todayStr = getDateInTimezone(now, timezone);
   const dayOfWeek = getWeekdayInTimezone(now, timezone);
