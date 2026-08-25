@@ -9,7 +9,7 @@
 
 import "server-only";
 import { eq, and, asc, inArray, sql } from "drizzle-orm";
-import { getDb } from "./client";
+import { getDb, isSerializationFailure } from "./client";
 import { coachCanViewWorkoutTemplate } from "@/lib/auth/guards";
 
 // Atomically increments program_templates.version for the given template ID.
@@ -474,27 +474,6 @@ export interface PublishProgramWithDependenciesResult {
 }
 
 const GENERIC_INACCESSIBLE_DEPENDENCY_ERROR = "A required blueprint is unavailable or inaccessible.";
-
-function hasSerializationFailureCode(err: unknown): boolean {
-  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "40001";
-}
-
-function isSerializationFailure(err: unknown): boolean {
-  // Postgres SQLSTATE 40001 — the raw postgres.js driver error
-  // (PostgresError, with a `.code` property, same shape as the CHECK
-  // constraint violations already handled elsewhere in this codebase)
-  // is NOT what this function's own try/catch actually receives.
-  // drizzle-orm's query layer (PostgresJsPreparedQuery) wraps every
-  // driver error in a new `Error("Failed query: ...")` and attaches
-  // the original as `.cause` (confirmed empirically — see this
-  // function's own remediation history) — so `.code` must be checked
-  // on both the error itself and err.cause, not just the outer one.
-  if (hasSerializationFailureCode(err)) return true;
-  if (err instanceof Error && err.cause !== undefined) {
-    return hasSerializationFailureCode(err.cause);
-  }
-  return false;
-}
 
 export async function publishProgramWithDependencies(
   programId: string,

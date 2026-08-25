@@ -7,8 +7,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { eq, and, asc, sql, inArray } from "drizzle-orm";
-import { getDb, type Database } from "./client";
+import { eq, and, desc, asc, sql, inArray } from "drizzle-orm";
+import { getDb, isSerializationFailure, type Database, type DbOrTx } from "./client";
 import { programTemplates, workoutTemplates } from "./schema";
 import {
   clientPrograms,
@@ -74,6 +74,30 @@ export interface HistorySession {
 // SESSION CRUD
 // ─────────────────────────────────────────────────────────────
 
+// [In-progress workout session resilience] The schema has no unique
+// constraint preventing a second status='in_progress' row for the same
+// client (investigated — see getActiveWorkoutSession()'s own comment
+// in client-program-service.ts for why a migration wasn't introduced
+// for this). Since getTodayWorkout() now resolves to an existing
+// in-progress session before ever showing a "start" button, the
+// ordinary flow should never even attempt to create a second one — but
+// this function itself is the ONLY place a workout_sessions row is
+// ever inserted (confirmed), so it is also the correct, narrow place
+// to make duplicate creation impossible even under a refresh-then-
+// resubmit, a stale tab, or a genuine double-click race, without
+// relying on the UI alone (Part 7's own requirement).
+//
+// Reuses the SAME SERIALIZABLE-transaction + 40001-detection pattern
+// already established for publishProgramWithDependencies() (see
+// isSerializationFailure's own comment in lib/db/client.ts): check for
+// an existing in-progress session and insert only if none exists, all
+// inside one transaction, so two concurrent calls can never both pass
+// the check and both insert. If Postgres aborts the losing transaction
+// with 40001, that call re-queries (outside any transaction, since by
+// definition the winner has now committed) and returns the session the
+// winner just created — both concurrent callers converge on the same
+// single authoritative row instead of one of them surfacing a raw
+// error.
 export async function createWorkoutSession(input: {
   clientId: string;
   clientProgramId: string | null;
@@ -84,26 +108,55 @@ export async function createWorkoutSession(input: {
 }): Promise<WorkoutSession> {
   const db = getDb();
 
-  // Snapshot the workout structure at session-creation time
-  const snapshot = await buildWorkoutSnapshot(input.workoutTemplateId);
+  async function findExisting(client: DbOrTx) {
+    const [existing] = await client
+      .select()
+      .from(workoutSessions)
+      .where(and(eq(workoutSessions.clientId, input.clientId), eq(workoutSessions.status, "in_progress")))
+      .orderBy(desc(workoutSessions.createdAt))
+      .limit(1);
+    return existing ?? null;
+  }
 
-  const [row] = await db
-    .insert(workoutSessions)
-    .values({
-      clientId: input.clientId,
-      clientProgramId: input.clientProgramId ?? null,
-      workoutTemplateId: input.workoutTemplateId,
-      programWeekNumber: input.programWeekNumber ?? null,
-      programDayOfWeek: input.programDayOfWeek ?? null,
-      scheduledDate: input.scheduledDate ?? null,
-      startedAt: new Date(),
-      status: "in_progress",
-      completionPercent: 0,
-      workoutSnapshot: snapshot as unknown as Record<string, unknown>,
-    })
-    .returning();
+  try {
+    return await db.transaction(
+      async (tx) => {
+        const existing = await findExisting(tx);
+        if (existing) return existing;
 
-  return row;
+        // Snapshot the workout structure at session-creation time —
+        // only actually needed when a new session is really being
+        // created, so this runs after the existing-session check, not
+        // before it.
+        const snapshot = await buildWorkoutSnapshot(input.workoutTemplateId);
+
+        const [row] = await tx
+          .insert(workoutSessions)
+          .values({
+            clientId: input.clientId,
+            clientProgramId: input.clientProgramId ?? null,
+            workoutTemplateId: input.workoutTemplateId,
+            programWeekNumber: input.programWeekNumber ?? null,
+            programDayOfWeek: input.programDayOfWeek ?? null,
+            scheduledDate: input.scheduledDate ?? null,
+            startedAt: new Date(),
+            status: "in_progress",
+            completionPercent: 0,
+            workoutSnapshot: snapshot as unknown as Record<string, unknown>,
+          })
+          .returning();
+
+        return row;
+      },
+      { isolationLevel: "serializable" },
+    );
+  } catch (err) {
+    if (isSerializationFailure(err)) {
+      const existing = await findExisting(db);
+      if (existing) return existing;
+    }
+    throw err;
+  }
 }
 
 export async function getWorkoutSession(

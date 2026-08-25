@@ -28,7 +28,9 @@ import {
   workoutSessions,
   type ClientProgram,
   type ClientProgramStatus,
+  type WorkoutSession as WorkoutSessionRow,
 } from "./schema-program";
+import { getDateInTimezone, getWeekdayInTimezone } from "@/lib/checkin/schedule";
 import {
   workoutTemplateSections,
   workoutTemplateExercises,
@@ -576,27 +578,92 @@ export async function buildWorkoutSnapshot(
 // ─────────────────────────────────────────────────────────────
 // TODAY'S WORKOUT LOOKUP
 //
-// Resolves which workout (if any) the client should do today
-// based on their active program and today's calendar date.
+// [In-progress workout session resilience] Resolves which workout the
+// client should be doing right now. As of this remediation, that is
+// NO LONGER purely a fresh calendar computation — it is, in order:
 //
-// Week calculation:
-//   weekNumber = floor(daysBetween(startDate, today) / 7) + 1
-//   dayOfWeek  = today.getDay()   (0=Sun … 6=Sat)
+//   1. SESSION-FIRST: does this client have an authoritative
+//      status='in_progress' workout_sessions row at all? If so, THAT
+//      session — its own frozen workoutTemplateId, scheduledDate, and
+//      workoutSnapshot — is the answer, full stop. Refresh, remount,
+//      PWA reopen, a calendar-date rollover, or the client's program
+//      being edited must never silently swap it out for "whatever the
+//      schedule says right now." See getActiveWorkoutSession() below.
 //
-// Returns a tagged union so callers can handle each case:
-//   workout       — a specific blueprint is scheduled today
+//   2. Only when no in-progress session exists does normal, timezone-
+//      correct calendar scheduling run (weekNumber/dayOfWeek from the
+//      client's own IANA timezone — see getClientTimezone() and
+//      lib/checkin/schedule.ts's getDateInTimezone/getWeekdayInTimezone
+//      — not the server's raw UTC clock, which is what silently
+//      produced "tomorrow's workout" for an evening session; see this
+//      investigation's own reproduction).
+//
+// Returns the same tagged union as before so every existing caller is
+// unaffected when no session is active — this is additive precedence,
+// not a redesign of the result shape:
+//   workout       — a specific blueprint is scheduled/active today
 //   rest_day      — program has this day as rest
 //   no_program    — client has no active program
 //   program_complete — past the last week of the program
 //   not_started   — program start date is in the future
 // ─────────────────────────────────────────────────────────────
 
-function daysBetween(from: string, to: Date): number {
+function daysBetween(from: string, toDateStr: string): number {
   const start = new Date(from + "T00:00:00Z");
-  const end = new Date(
-    to.toISOString().slice(0, 10) + "T00:00:00Z",
-  );
+  const end = new Date(toDateStr + "T00:00:00Z");
   return Math.floor((end.getTime() - start.getTime()) / 86_400_000);
+}
+
+// The client's own IANA timezone, for date/weekday math — NOT the
+// server's. client_profiles.timezone already exists (default
+// "America/Chicago") and is already the canonical source
+// lib/checkin/schedule.ts's callers use for the identical class of
+// problem; this reuses it rather than inventing a second notion of
+// "the client's timezone." A client with no profile row at all (should
+// not happen in practice — no FK guarantees it, so this stays
+// defensive) falls back to an empty string, which
+// getDateInTimezone/getWeekdayInTimezone already treat as an invalid
+// zone and safely resolve to their own UTC fallback — one fallback
+// path, not a second one invented here.
+async function getClientTimezone(clientId: string): Promise<string> {
+  const db = getDb();
+  const [profile] = await db
+    .select({ timezone: clientProfiles.timezone })
+    .from(clientProfiles)
+    .where(eq(clientProfiles.userId, clientId))
+    .limit(1);
+  return profile?.timezone ?? "";
+}
+
+// Deterministic resolution when more than one status='in_progress' row
+// exists for a client. The schema has no unique constraint enforcing
+// "at most one in-progress session per client" (investigated: no
+// migration was found to be genuinely necessary — see
+// createWorkoutSession()'s own comment for how NEW duplicates are
+// prevented going forward at the application layer instead). For
+// whatever legacy/edge-case rows might already exist, or could exist
+// despite that prevention (this query makes no assumption it's
+// perfect), "most recently started wins" is the deterministic,
+// explicit choice — ORDER BY createdAt DESC, never an unordered
+// LIMIT 1. Older in-progress rows are left exactly as they are: never
+// deleted, never silently completed, just not selected as
+// authoritative.
+export async function getActiveWorkoutSession(
+  clientId: string,
+): Promise<WorkoutSessionRow | null> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(workoutSessions)
+    .where(
+      and(
+        eq(workoutSessions.clientId, clientId),
+        eq(workoutSessions.status, "in_progress"),
+      ),
+    )
+    .orderBy(desc(workoutSessions.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function getTodayWorkout(
@@ -604,6 +671,52 @@ export async function getTodayWorkout(
 ): Promise<TodayResult> {
   const db = getDb();
 
+  // ── 1. Session-first resolution ──────────────────────────
+  const activeSession = await getActiveWorkoutSession(clientId);
+  if (activeSession) {
+    // Authoritative — frozen at session-creation time, never rederived
+    // from the current (possibly since-edited) program/blueprint. See
+    // this function's own header comment.
+    const snapshot = activeSession.workoutSnapshot as unknown as WorkoutSnapshot;
+
+    let programName = "Program";
+    let totalWeeks = 0;
+    if (activeSession.clientProgramId) {
+      const [row] = await db
+        .select({
+          programName: programTemplates.name,
+          totalWeeks: programTemplates.defaultDurationWeeks,
+        })
+        .from(clientPrograms)
+        .innerJoin(programTemplates, eq(clientPrograms.programTemplateId, programTemplates.id))
+        .where(eq(clientPrograms.id, activeSession.clientProgramId))
+        .limit(1);
+      if (row) {
+        programName = row.programName;
+        totalWeeks = row.totalWeeks ?? 0;
+      }
+    }
+
+    return {
+      kind: "workout",
+      data: {
+        clientProgramId: activeSession.clientProgramId ?? "",
+        programName,
+        weekNumber: activeSession.programWeekNumber ?? 0,
+        dayOfWeek: activeSession.programDayOfWeek ?? 0,
+        totalWeeks,
+        workoutTemplateId: activeSession.workoutTemplateId,
+        workoutName: snapshot.templateName,
+        estimatedDurationMinutes: snapshot.estimatedDurationMinutes,
+        scheduledDate: activeSession.scheduledDate ?? "",
+        existingSessionId: activeSession.id,
+        existingSessionStatus: activeSession.status,
+        snapshot,
+      },
+    };
+  }
+
+  // ── 2. No active session — normal, timezone-correct scheduling ──
   const assignment = await getClientActiveProgram(clientId);
   if (!assignment) return { kind: "no_program" };
 
@@ -619,9 +732,16 @@ export async function getTodayWorkout(
 
   if (!tmpl) return { kind: "no_program" };
 
-  const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
-  const elapsed = daysBetween(assignment.startDate, today);
+  // Both the date string and the weekday are derived from the SAME
+  // timezone-interpreted instant — the exact inconsistency the
+  // investigation found (todayStr via raw toISOString()/UTC,
+  // dayOfWeek via the process's own local getDay()) is gone; there is
+  // now exactly one timezone interpretation of "now" for this client.
+  const timezone = await getClientTimezone(clientId);
+  const now = new Date();
+  const todayStr = getDateInTimezone(now, timezone);
+  const dayOfWeek = getWeekdayInTimezone(now, timezone);
+  const elapsed = daysBetween(assignment.startDate, todayStr);
 
   if (elapsed < 0) {
     return {
@@ -636,7 +756,6 @@ export async function getTodayWorkout(
   }
 
   const weekNumber = Math.floor(elapsed / 7) + 1;
-  const dayOfWeek = today.getDay();
 
   if (tmpl.totalWeeks !== null && weekNumber > tmpl.totalWeeks) {
     return { kind: "program_complete" };
@@ -679,7 +798,11 @@ export async function getTodayWorkout(
 
   if (!wt) return { kind: "rest_day" };
 
-  // Check for an existing session today
+  // Check for an existing (any status — including already-completed
+  // today, which drives the "Session logged" UI) session today. This
+  // can no longer find an in_progress row (that's handled by step 1
+  // above, unconditionally, before this code ever runs) — it exists
+  // purely to preserve "already completed today" detection.
   const [existingSession] = await db
     .select({ id: workoutSessions.id, status: workoutSessions.status })
     .from(workoutSessions)
@@ -747,7 +870,13 @@ export async function getComplianceSummary(
   if (!tmpl) return null;
 
   const today = new Date();
-  const elapsed = daysBetween(assignment.startDate, today);
+  // Unchanged UTC-based semantics for this call site — this function
+  // is compliance/program-page metadata, not the today's-workout
+  // resolution this remediation targets; daysBetween's signature moved
+  // to a plain date string, so this preserves exactly the prior
+  // behavior explicitly rather than silently inheriting a timezone
+  // change out of scope for this fix.
+  const elapsed = daysBetween(assignment.startDate, today.toISOString().slice(0, 10));
   const weekNumber = Math.max(1, Math.floor(elapsed / 7) + 1);
 
   // Count scheduled sessions: client-owned day slots with a workout assigned
@@ -953,7 +1082,13 @@ export async function getProgramPageData(
 
   if (!tmpl) return { goal: goalRow ?? null, activeProgram: null };
 
-  const elapsed = daysBetween(assignment.startDate, today);
+  // Unchanged UTC-based semantics for this call site — this function
+  // is compliance/program-page metadata, not the today's-workout
+  // resolution this remediation targets; daysBetween's signature moved
+  // to a plain date string, so this preserves exactly the prior
+  // behavior explicitly rather than silently inheriting a timezone
+  // change out of scope for this fix.
+  const elapsed = daysBetween(assignment.startDate, today.toISOString().slice(0, 10));
   const isPreparing = elapsed < 0;
   const rawWeekNum = isPreparing ? null : Math.floor(elapsed / 7) + 1;
 

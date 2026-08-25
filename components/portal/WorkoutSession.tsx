@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { lbsToKg } from "@/lib/portal/units";
+import { lbsToKg, kgToLbs } from "@/lib/portal/units";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -571,6 +571,13 @@ export default function WorkoutSession({
   const [setStates, setSetStates] = useState<Map<string, SetData>>(new Map());
   const [finishing, setFinishing] = useState(false);
   const [restTimer, setRestTimer] = useState<RestTimer | null>(null);
+  // [In-progress workout session resilience] Whether already-persisted
+  // set results (workout_set_logs) have finished loading — see the
+  // hydration effect below. Gates only "Finish" (so a resumed session
+  // can't be completed before its true progress is known), never
+  // logging new sets — per this remediation's own instruction not to
+  // block interaction for longer than necessary.
+  const [hydrating, setHydrating] = useState(true);
 
   // Detect reduced motion once on mount — stable for session lifetime
   const [rm] = useState<boolean>(() =>
@@ -616,6 +623,80 @@ export default function WorkoutSession({
     if (!snapshot.estimatedDurationMinutes) return null;
     return new Date(startedAt.getTime() + snapshot.estimatedDurationMinutes * 60 * 1000);
   }, [startedAt, snapshot.estimatedDurationMinutes]);
+
+  // ── Hydrate already-persisted set results on mount/remount ──
+  // [In-progress workout session resilience] Root cause A from the
+  // investigation: this component previously never fetched
+  // workout_set_logs at all, so any refresh/remount showed a blank
+  // slate even though the server had every logged set intact. Wired
+  // to the ALREADY-EXISTING, already-correct GET /api/portal/
+  // workout-session/{id} (getWorkoutSession()) — no new endpoint, no
+  // new table.
+  //
+  // Stale-response / race safety (Part 5): the merge below only ADDS
+  // an entry for a set key the user has NOT already touched locally
+  // since mount (typed into, or logged) — setStates starts empty and
+  // is otherwise only ever written by direct user action, so "already
+  // has an entry" is a precise, sufficient test for "the user did
+  // something with this set before hydration resolved." A slow/older
+  // hydration response can therefore never clobber newer client state;
+  // it only ever fills in gaps the user hasn't reached yet. No setState
+  // call sits in this effect's synchronous body — every one is inside
+  // the deferred .then()/.catch() callbacks, consistent with this
+  // codebase's established debounced-effect pattern elsewhere (e.g.
+  // ExercisePicker in DraftReviewClient.tsx).
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/portal/workout-session/${sessionId}`)
+      .then((r) => r.json())
+      .then(
+        (data: {
+          ok: boolean;
+          sets?: Array<{
+            workoutTemplateExerciseId: string;
+            setNumber: number;
+            actualReps: number | null;
+            actualWeightKg: string | null;
+            actualDurationSeconds: number | null;
+            actualRpe: string | null;
+          }>;
+        }) => {
+          if (cancelled) return;
+          if (data.ok && data.sets) {
+            const persistedSets = data.sets;
+            setSetStates((prev) => {
+              let changed = false;
+              const next = new Map(prev);
+              for (const s of persistedSets) {
+                const key = sKey(s.workoutTemplateExerciseId, s.setNumber);
+                if (next.has(key)) continue; // never overwrite newer local state
+                changed = true;
+                next.set(key, {
+                  status: "done",
+                  weightLbs: "",
+                  reps: "",
+                  duration: "",
+                  rpe: "",
+                  loggedWeightLbs: s.actualWeightKg !== null ? kgToLbs(parseFloat(s.actualWeightKg)) : null,
+                  loggedReps: s.actualReps,
+                  loggedDuration: s.actualDurationSeconds,
+                  loggedRpe: s.actualRpe !== null ? parseFloat(s.actualRpe) : null,
+                  errorMsg: "",
+                });
+              }
+              return changed ? next : prev;
+            });
+          }
+          setHydrating(false);
+        },
+      )
+      .catch(() => {
+        if (!cancelled) setHydrating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
 
   // ── Rest timer countdown ──────────────────────────────────
   useEffect(() => {
@@ -872,10 +953,10 @@ export default function WorkoutSession({
         <div className="mt-8 border-t border-white/[0.06] pt-6">
           <button
             onClick={handleFinish}
-            disabled={finishing}
+            disabled={finishing || hydrating}
             className="w-full bg-[#C9A24D] text-black font-bold text-[11px] tracking-[0.3em] uppercase py-4 hover:bg-[#D4B56A] transition-colors disabled:opacity-50 min-h-[52px]"
           >
-            {finishing ? "Saving…" : `Finish Workout${pct > 0 ? ` — ${pct}%` : ""}`}
+            {finishing ? "Saving…" : hydrating ? "Loading progress…" : `Finish Workout${pct > 0 ? ` — ${pct}%` : ""}`}
           </button>
         </div>
       </div>

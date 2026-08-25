@@ -95,3 +95,28 @@ export type Database = DbInstance;
 // the caller's own transaction/isolation level. Passing nothing
 // preserves the exact previous behavior (falls back to getDb()).
 export type DbOrTx = DbInstance | Parameters<Parameters<DbInstance["transaction"]>[0]>[0];
+
+// Shared with any caller running a SERIALIZABLE transaction that needs
+// to detect Postgres SQLSTATE 40001 (serialization_failure) and turn it
+// into a clean "please try again" result instead of a raw exception.
+// Originally written for publishProgramWithDependencies() (program-
+// builder-service.ts) and factored out here once workout-session-
+// service.ts needed the identical detection logic — one source of
+// truth for a subtlety that already cost a real debugging cycle once:
+// drizzle-orm's query layer wraps every driver error in a new
+// Error("Failed query: ...") and attaches the original PostgresError
+// (which actually carries `.code`) via `.cause`, so `.code` must be
+// checked on both the error itself and err.cause, not just the outer
+// one — confirmed empirically against a real concurrent-transaction
+// conflict in staging, not assumed.
+function hasSerializationFailureCode(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "40001";
+}
+
+export function isSerializationFailure(err: unknown): boolean {
+  if (hasSerializationFailureCode(err)) return true;
+  if (err instanceof Error && err.cause !== undefined) {
+    return hasSerializationFailureCode(err.cause);
+  }
+  return false;
+}
