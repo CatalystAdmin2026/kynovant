@@ -35,6 +35,8 @@ import {
   createWorkoutSession,
   logSet,
   saveSetDraft,
+  clearSetDraft,
+  isValidDraftSeq,
   getWorkoutSession,
   updateWorkoutSession,
   getHistoricalSessionDetail,
@@ -405,6 +407,19 @@ describe("O — cross-client autosave is rejected", () => {
     const row = await rawSetLog(sessionId, exId, 1);
     expect(row).toBeNull();
   });
+
+  it("clientB cannot clearSetDraft against clientA's session, and clientA's draft survives untouched", async () => {
+    const { sessionId, exId } = await freshSession("O2");
+    await saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 5, draftSeq: 1 });
+
+    await expect(
+      clearSetDraft({ workoutSessionId: sessionId, clientId: clientB.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: 2 }),
+    ).rejects.toThrow(WorkoutSessionAuthorizationError);
+
+    const row = await rawSetLog(sessionId, exId, 1);
+    expect(row?.status).toBe("draft");
+    expect(row?.actualReps).toBe(5);
+  });
 });
 
 describe("P — an unrecognized session id is rejected", () => {
@@ -428,6 +443,19 @@ describe("Q — an exercise/set not in the frozen snapshot is rejected", () => {
     const { sessionId, exId } = await freshSession("Q2");
     await expect(
       saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 99, actualReps: 5, draftSeq: 1 }),
+    ).rejects.toThrow(WorkoutSessionAuthorizationError);
+  });
+
+  it("clearSetDraft rejects the same invalid exercise/set identities as saveSetDraft", async () => {
+    const { sessionId, exId } = await freshSession("Q3");
+    await expect(
+      clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: randomUUID(), setNumber: 1, draftSeq: 1 }),
+    ).rejects.toThrow(WorkoutSessionAuthorizationError);
+    await expect(
+      clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 99, draftSeq: 1 }),
+    ).rejects.toThrow(WorkoutSessionAuthorizationError);
+    await expect(
+      clearSetDraft({ workoutSessionId: randomUUID(), clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: 1 }),
     ).rejects.toThrow(WorkoutSessionAuthorizationError);
   });
 });
@@ -469,5 +497,229 @@ describe("U — existing logged rows remain fully compatible with history", () =
     expect(detail!.setLogs).toHaveLength(1);
     expect(detail!.setLogs[0].setNumber).toBe(1);
     expect(detail!.setLogs[0].actualReps).toBe(10);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// INDEPENDENT REVIEW REMEDIATION ROUND — P1#1 (clear-last-field),
+// P1#2 (atomic Finish-vs-autosave guard), and draftSeq hardening.
+// Numbered per the review's own 20-item required test list.
+// ─────────────────────────────────────────────────────────────
+
+describe("1/2 — clearing the last autosaved field is itself durable", () => {
+  it("a drafted field, once cleared, deletes the draft row rather than leaving the stale value behind", async () => {
+    const { sessionId, exId } = await freshSession("Clear1");
+
+    await saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: null, actualWeightKg: "61.24", draftSeq: 1 });
+    let row = await rawSetLog(sessionId, exId, 1);
+    expect(row?.actualWeightKg).toBe("61.24");
+
+    const clear = await clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: 2 });
+    expect(clear.applied).toBe(true);
+    expect(clear.deleted).toBe(true);
+
+    row = await rawSetLog(sessionId, exId, 1);
+    expect(row).toBeNull(); // (2) refresh/hydration sees no row — blank, not a stale 61.24
+
+    const hydrated = await getWorkoutSession(sessionId, clientA.id);
+    expect(hydrated!.sets.find((s) => s.setNumber === 1)).toBeUndefined();
+  });
+
+  it("clearing a set that was never drafted is a harmless no-op, not an error", async () => {
+    const { sessionId, exId } = await freshSession("Clear1b");
+    const clear = await clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: 1 });
+    expect(clear.applied).toBe(true);
+    expect(clear.deleted).toBe(false);
+    expect(clear.reason).toBe("nothing-to-clear");
+  });
+});
+
+describe("3/4 — clear race ordering", () => {
+  it("(race 2) a delayed stale clear cannot remove a newer edit that landed after it was issued", async () => {
+    const { sessionId, exId } = await freshSession("Clear2");
+
+    await saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 5, draftSeq: 100 });
+    // A clear issued at seq=150 is delayed in flight...
+    // ...meanwhile a newer edit (seq=200) lands first.
+    await saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 9, draftSeq: 200 });
+    // ...and only now does the stale, delayed clear (seq=150) arrive.
+    const staleClear = await clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: 150 });
+    expect(staleClear.applied).toBe(false);
+    expect(staleClear.deleted).toBe(false);
+
+    const row = await rawSetLog(sessionId, exId, 1);
+    expect(row).not.toBeNull();
+    expect(row?.actualReps).toBe(9); // the newer edit (145-equivalent in the review's example), untouched
+    expect(row?.draftSeq).toBe(200);
+  });
+
+  it("(race 1 & 3) clear wins when it is genuinely the newest write, and a subsequent new edit still applies normally afterward", async () => {
+    const { sessionId, exId } = await freshSession("Clear3");
+
+    await saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 5, draftSeq: 100 });
+    const clear = await clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: 200 });
+    expect(clear.applied).toBe(true);
+    expect(clear.deleted).toBe(true);
+    expect(await rawSetLog(sessionId, exId, 1)).toBeNull();
+
+    // User types a new value after the clear settles — final value must
+    // be exactly this new edit (a fresh insert, since the row is gone).
+    const retyped = await saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 7, draftSeq: 300 });
+    expect(retyped.applied).toBe(true);
+    const row = await rawSetLog(sessionId, exId, 1);
+    expect(row?.actualReps).toBe(7);
+    expect(row?.status).toBe("draft");
+  });
+});
+
+describe("5 — a stale clear can never touch an already-logged row", () => {
+  it("clearSetDraft against a logged set is rejected and leaves it logged and unchanged", async () => {
+    const { sessionId, exId } = await freshSession("Clear5");
+    await logSet({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 10, actualWeightKg: "60.00" });
+
+    const clear = await clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: Date.now() });
+    expect(clear.applied).toBe(false);
+    expect(clear.reason).toBe("already-logged");
+
+    const row = await rawSetLog(sessionId, exId, 1);
+    expect(row?.status).toBe("logged");
+    expect(row?.actualReps).toBe(10);
+    expect(row?.actualWeightKg).toBe("60.00");
+  });
+});
+
+describe("6 — a stale clear cannot mutate a completed session", () => {
+  it("clearSetDraft against a completed session is a silent no-op", async () => {
+    const { sessionId, exId } = await freshSession("Clear6");
+    await saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 5, draftSeq: 1 });
+    await updateWorkoutSession(sessionId, clientA.id, { status: "completed" });
+
+    const clear = await clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: 2 });
+    expect(clear.applied).toBe(false);
+    expect(clear.reason).toBe("session-not-active");
+
+    // The draft row must survive untouched — a completed session's
+    // data is not retroactively mutated by a late clear either.
+    const row = await rawSetLog(sessionId, exId, 1);
+    expect(row).not.toBeNull();
+    expect(row?.status).toBe("draft");
+
+    const [session] = await db.select({ status: workoutSessions.status }).from(workoutSessions).where(eq(workoutSessions.id, sessionId));
+    expect(session.status).toBe("completed");
+  });
+});
+
+describe("7/8 — Finish committing mid-autosave prevents any draft from landing afterward (real DB lock, not sequential)", () => {
+  // Orchestrates the EXACT interleaving the review described as the
+  // bug: Finish's own transaction acquires the row lock on
+  // workout_sessions first and is deliberately held open (not yet
+  // committed) while a concurrent saveSetDraft() call is fired and
+  // blocks waiting for that same lock. Only once we've confirmed the
+  // autosave is genuinely blocked do we let Finish commit
+  // status='completed'. If the P1#2 fix works, saveSetDraft's blocked
+  // SELECT ... FOR UPDATE resumes AFTER Finish's commit and sees the
+  // fresh status — never a stale 'in_progress' read — so it must
+  // reject rather than insert. This is deterministic, not a timing
+  // gamble, and is run several times against fresh sessions to rule
+  // out a one-off fluke of connection/pool scheduling.
+  async function raceFinishAgainstAutosave(label: string) {
+    const { sessionId, exId } = await freshSession(label);
+
+    let releaseFinishLock!: () => void;
+    const finishHoldingLock = new Promise<void>((resolve) => {
+      releaseFinishLock = resolve;
+    });
+    let commitFinish!: () => void;
+    const canCommitFinish = new Promise<void>((resolve) => {
+      commitFinish = resolve;
+    });
+
+    const finishTx = db.transaction(async (tx) => {
+      await tx.select({ id: workoutSessions.id }).from(workoutSessions).where(eq(workoutSessions.id, sessionId)).for("update");
+      releaseFinishLock();
+      await canCommitFinish;
+      await tx.update(workoutSessions).set({ status: "completed", completedAt: new Date() }).where(eq(workoutSessions.id, sessionId));
+    });
+
+    await finishHoldingLock;
+
+    // Fired while Finish's transaction still holds the row lock — this
+    // call's own SELECT ... FOR UPDATE inside saveSetDraft must block.
+    const draftPromise = saveSetDraft({
+      workoutSessionId: sessionId,
+      clientId: clientA.id,
+      workoutTemplateExerciseId: exId,
+      setNumber: 1,
+      actualReps: 8,
+      draftSeq: 1,
+    });
+
+    // Give the autosave call time to actually issue its SELECT ... FOR
+    // UPDATE and start waiting on the lock before we let Finish commit.
+    await new Promise((r) => setTimeout(r, 150));
+
+    commitFinish();
+    await finishTx;
+    const draftResult = await draftPromise;
+
+    expect(draftResult.applied).toBe(false);
+    expect(draftResult.reason).toBe("session-not-active");
+
+    const [session] = await db.select({ status: workoutSessions.status }).from(workoutSessions).where(eq(workoutSessions.id, sessionId));
+    expect(session.status).toBe("completed");
+
+    const row = await rawSetLog(sessionId, exId, 1);
+    expect(row).toBeNull(); // (7) no draft row was ever inserted after completion
+  }
+
+  it("holds across 5 independently-orchestrated trials", async () => {
+    // (8) repeated contention, against fresh sessions each time — not
+    // a single sequential check.
+    for (let i = 0; i < 5; i++) {
+      await raceFinishAgainstAutosave(`Race${i}`);
+    }
+  });
+});
+
+describe("9/10/11/12 — draftSeq is validated as a non-negative safe integer", () => {
+  it("isValidDraftSeq accepts ordinary values and rejects every malformed shape", () => {
+    expect(isValidDraftSeq(0)).toBe(true);
+    expect(isValidDraftSeq(Date.now())).toBe(true);
+    expect(isValidDraftSeq(1.5)).toBe(false); // (9) fractional
+    expect(isValidDraftSeq(-1)).toBe(false); // (10) negative
+    expect(isValidDraftSeq(Number.MAX_SAFE_INTEGER + 10)).toBe(false); // (11) unsafe integer
+    expect(isValidDraftSeq(Number.POSITIVE_INFINITY)).toBe(false); // (12) Infinity
+    expect(isValidDraftSeq(Number.NaN)).toBe(false); // (12) NaN
+    expect(isValidDraftSeq("100")).toBe(false); // wrong type entirely
+  });
+
+  it("saveSetDraft rejects a malformed draftSeq at the service boundary rather than persisting it", async () => {
+    const { sessionId, exId } = await freshSession("SeqGuard");
+    await expect(
+      saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 5, draftSeq: 1.5 }),
+    ).rejects.toThrow(/draftSeq/);
+    expect(await rawSetLog(sessionId, exId, 1)).toBeNull();
+  });
+
+  it("clearSetDraft rejects a malformed draftSeq at the service boundary", async () => {
+    const { sessionId, exId } = await freshSession("SeqGuard2");
+    await expect(
+      clearSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, draftSeq: -5 }),
+    ).rejects.toThrow(/draftSeq/);
+  });
+});
+
+describe("15 — a stale autosave arriving after Log can never downgrade or mutate the logged set", () => {
+  it("saveSetDraft against a just-logged row is rejected and the logged values survive", async () => {
+    const { sessionId, exId } = await freshSession("LogThenStale");
+    await logSet({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 11, actualWeightKg: "65.00" });
+
+    const stale = await saveSetDraft({ workoutSessionId: sessionId, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 1, draftSeq: Date.now() });
+    expect(stale.applied).toBe(false);
+
+    const row = await rawSetLog(sessionId, exId, 1);
+    expect(row?.status).toBe("logged");
+    expect(row?.actualReps).toBe(11);
+    expect(row?.actualWeightKg).toBe("65.00");
   });
 });

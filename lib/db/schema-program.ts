@@ -425,22 +425,36 @@ export const workoutSessions = pgTable(
 //     NOT tapped Log yet. Never counted toward completion, never
 //     reported as done on hydration — restored into the editable
 //     fields instead, still requiring an explicit Log tap.
-//   draftSeq — a client-supplied, strictly-increasing sequence
-//     (Date.now() at the moment of the edit that triggered this
-//     autosave) written ONLY by the draft-autosave path. The
-//     autosave upsert's own WHERE clause (see saveSetDraft() in
-//     lib/db/workout-session-service.ts) requires
+//   draftSeq — a client-supplied sequence (Date.now() at the moment of
+//     the edit that triggered this autosave/clear) written ONLY by the
+//     draft-autosave/clear paths. The autosave upsert's own WHERE
+//     clause and the clear path's own DELETE WHERE clause (see
+//     saveSetDraft()/clearSetDraft() in
+//     lib/db/workout-session-service.ts) both require
 //     status='draft' AND draft_seq < the incoming value before
-//     applying an update — so an out-of-order-arriving autosave
+//     applying a change — so an out-of-order-arriving autosave
 //     response can never overwrite a newer one's values, a second
-//     tab's stale write can never clobber a newer one from another
-//     tab, and NO autosave write of any age can ever touch a row
-//     that has already reached status='logged'. NULL for any row
-//     that has only ever been logged directly (never autosaved) —
-//     including every row that existed before this column was added,
-//     which is why existing rows default to status='logged' below:
-//     every row ever written before draft autosave existed could only
-//     have come from an explicit Log tap.
+//     tab's stale write (or stale clear) can never clobber a newer
+//     one from another tab, and NO draft write/clear of any age can
+//     ever touch a row that has already reached status='logged'. NULL
+//     for any row that has only ever been logged directly (never
+//     autosaved) — including every row that existed before this
+//     column was added, which is why existing rows default to
+//     status='logged' below: every row ever written before draft
+//     autosave existed could only have come from an explicit Log tap.
+//     [Independent review remediation] Honest limitation, not
+//     resolved by this design and not claimed otherwise: Date.now() is
+//     wall-clock milliseconds, not a distributed logical clock. Two
+//     genuinely distinct edits (e.g. from two different tabs) that
+//     land in the SAME millisecond produce an EQUAL draftSeq, and the
+//     comparison above is a strict `<` — an incoming write whose
+//     draftSeq merely EQUALS the stored one is treated as not-newer
+//     and rejected, even though it may in fact be the more recent
+//     edit. This is accepted, non-blocking MVP behavior (an
+//     exceedingly rare, single-set, sub-millisecond coincidence), not
+//     a mathematically total ordering across simultaneous tabs — do
+//     not read "newest always wins" as an absolute guarantee at
+//     millisecond granularity.
 //
 // actualWeightKg is optional — used for load-tracking features
 // in a future sprint. NULL is the correct value for bodyweight

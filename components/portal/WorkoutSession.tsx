@@ -929,42 +929,65 @@ export default function WorkoutSession({
   }
 
   // [Workout set draft autosave]
-  // Sends the CURRENT typed values for one set as a draft. Guards:
+  // Sends the CURRENT typed values for one set as a draft — OR, if
+  // every field is now blank, sends an explicit CLEAR (Independent
+  // review P1#1: the original version of this function simply
+  // returned early when everything was blank, which meant "clearing" a
+  // previously-autosaved field never reached the server at all — a
+  // refresh would resurrect the stale value). Which request goes out
+  // is decided fresh from the CURRENT values at flush time, not at
+  // schedule time, so a clear-then-retype-before-the-timer-fires
+  // correctly ends up sending a save, not a clear (race #3 in the
+  // review).
+  // Guards:
   //   - only while status is still "idle" — if Log/Finish/Correct
   //     already moved this set on since the timer was scheduled, there
-  //     is nothing to autosave (Log's own write is authoritative).
-  //   - skips entirely if every field is blank (nothing typed).
+  //     is nothing to autosave/clear (Log's own write is authoritative).
   //   - after the response (or a network failure) resolves, only
   //     updates the Saving/Saved/error indicator if this request is
   //     STILL the most recent one sent for this key — an older
   //     response arriving after a newer request was already sent must
   //     never regress the indicator (client-side mirror of the same
-  //     "newest wins" contract the server enforces on the actual data).
+  //     staleness-ordering contract the server enforces on the actual
+  //     data — see schema-program.ts's own comment on why this is
+  //     "practical stale-write protection," not a mathematically total
+  //     order across simultaneous tabs).
   async function flushDraft(exerciseId: string, setNum: number, opts?: { keepalive?: boolean }) {
     const key = sKey(exerciseId, setNum);
     const data = setStatesRef.current.get(key) ?? DEFAULT_SET;
     if (data.status !== "idle") return;
-    if (!data.weightLbs && !data.reps && !data.duration && !data.rpe) return;
 
     const seq = draftSeq.current.get(key);
     if (seq === undefined) return;
 
-    const { weightNum, repsNum, durationNum, rpeNum } = parseSetNumbers(data);
+    const isClear = !data.weightLbs && !data.reps && !data.duration && !data.rpe;
     draftInFlight.current.set(key, seq);
 
     try {
       const res = await fetch(`/api/portal/workout-session/${sessionId}/sets/draft`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workoutTemplateExerciseId: exerciseId,
-          setNumber: setNum,
-          actualReps: repsNum,
-          actualWeightKg: weightNum !== null ? lbsToKg(weightNum).toFixed(4) : null,
-          actualDurationSeconds: durationNum,
-          actualRpe: rpeNum !== null ? String(rpeNum) : null,
-          draftSeq: seq,
-        }),
+        body: JSON.stringify(
+          isClear
+            ? {
+                workoutTemplateExerciseId: exerciseId,
+                setNumber: setNum,
+                draftSeq: seq,
+                clear: true,
+              }
+            : (() => {
+                const { weightNum, repsNum, durationNum, rpeNum } = parseSetNumbers(data);
+                return {
+                  workoutTemplateExerciseId: exerciseId,
+                  setNumber: setNum,
+                  actualReps: repsNum,
+                  actualWeightKg: weightNum !== null ? lbsToKg(weightNum).toFixed(4) : null,
+                  actualDurationSeconds: durationNum,
+                  actualRpe: rpeNum !== null ? String(rpeNum) : null,
+                  draftSeq: seq,
+                };
+              })(),
+        ),
         keepalive: opts?.keepalive,
       });
 
@@ -973,12 +996,16 @@ export default function WorkoutSession({
       const json = (await res.json().catch(() => null)) as { ok?: boolean; applied?: boolean } | null;
 
       if (json?.ok && json.applied) {
-        updateSetState(exerciseId, setNum, { saveState: "saved" });
+        // A successful clear leaves nothing to call "Saved" — hide the
+        // indicator entirely rather than show "Saved" beside a blank
+        // field. A successful save shows "Saved" as before.
+        updateSetState(exerciseId, setNum, { saveState: isClear ? "idle" : "saved" });
       } else if (!json?.ok) {
         // Genuine failure (validation/auth/server error) — the only
         // case Phase 9 asks to surface. `ok:true, applied:false` is a
-        // normal, silent race (superseded/session no longer active),
-        // never shown as an error.
+        // normal, silent race (superseded/already-logged/session no
+        // longer active), never shown as an error — this applies to
+        // clear requests exactly the same way it applies to saves.
         updateSetState(exerciseId, setNum, { saveState: "error" });
       }
     } catch {
@@ -990,11 +1017,18 @@ export default function WorkoutSession({
   // [Workout set draft autosave]
   // Wraps every editable-field onChange: applies the edit as before,
   // then — only while the set is still in its pre-Log "idle" state —
-  // (re)schedules a debounced autosave. Deliberately excludes
+  // (re)schedules a debounced autosave OR clear. Deliberately excludes
   // "editing" (post-Correct): re-editing an already-logged set is out
   // of this feature's scope; Log remains that flow's own persistence
   // path. Per-set debounce (Phase 3): editing one set's timer never
   // touches another set's.
+  //
+  // [Independent review remediation — P1#1] Blank fields no longer
+  // short-circuit with no network call — clearing the last remaining
+  // value is itself scheduled and flushed through the exact same
+  // debounce/seq/flushDraft machinery as a normal save, so the CLEAR
+  // is durable and correctly ordered against any other pending write
+  // for this same set.
   function handleFieldChange(exerciseId: string, setNum: number, patch: Partial<SetData>) {
     const key = sKey(exerciseId, setNum);
     const current = setStatesRef.current.get(key) ?? DEFAULT_SET;
@@ -1006,19 +1040,10 @@ export default function WorkoutSession({
     const existingTimer = draftTimers.current.get(key);
     if (existingTimer) clearTimeout(existingTimer);
 
-    if (!next.weightLbs && !next.reps && !next.duration && !next.rpe) {
-      // Cleared back to blank — nothing worth persisting; don't show a
-      // stale Saving/Saved indicator for empty input.
-      draftTimers.current.delete(key);
-      draftTargets.current.delete(key);
-      draftSeq.current.delete(key);
-      updateSetState(exerciseId, setNum, { saveState: "idle" });
-      return;
-    }
-
+    const isClear = !next.weightLbs && !next.reps && !next.duration && !next.rpe;
     draftSeq.current.set(key, Date.now());
     draftTargets.current.set(key, { exerciseId, setNum });
-    updateSetState(exerciseId, setNum, { saveState: "saving" });
+    updateSetState(exerciseId, setNum, { saveState: isClear ? "idle" : "saving" });
     draftTimers.current.set(
       key,
       setTimeout(() => {
