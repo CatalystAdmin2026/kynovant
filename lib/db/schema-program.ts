@@ -26,6 +26,7 @@ import {
   uuid,
   text,
   integer,
+  bigint,
   timestamp,
   date,
   jsonb,
@@ -60,6 +61,17 @@ export const workoutSessionStatusEnum = pgEnum("workout_session_status", [
   "completed",
   "skipped",
 ]);
+
+// [Workout set draft autosave] Before this, workout_set_logs had no
+// field distinguishing "the client typed something" from "the client
+// tapped Log" — a row's mere existence WAS the only signal, and
+// computeCompletionPercent() (lib/db/workout-session-service.ts)
+// counts rows with a plain count(*), so writing autosaved draft values
+// into this table unchanged would have silently inflated completion
+// percentage and made hydration show an unfinished set as done. See
+// the workoutSetLogs table's own comment below for how `status` and
+// `draftSeq` close that gap.
+export const setLogStatusEnum = pgEnum("set_log_status", ["draft", "logged"]);
 
 // ─────────────────────────────────────────────────────────────
 // TABLE 1 — program_weeks
@@ -399,9 +411,36 @@ export const workoutSessions = pgTable(
 // ─────────────────────────────────────────────────────────────
 // TABLE 5 — workout_set_logs
 //
-// Append-only record of each set the client marks complete.
-// Unique on (sessionId, exerciseId, setNumber) so duplicate
-// taps from the UI are idempotent (ON CONFLICT DO NOTHING).
+// One row per (session, exercise, set slot) — the SAME row represents
+// either an unfinished autosaved draft or a client-confirmed logged
+// set over its lifetime, distinguished by `status`, never by row
+// existence alone. Unique on (sessionId, exerciseId, setNumber) so
+// duplicate taps from the UI are idempotent (ON CONFLICT DO UPDATE).
+//
+// [Workout set draft autosave]
+//   status='logged' — the client explicitly tapped Log. This is what
+//     computeCompletionPercent() counts, and the only state
+//     getWorkoutSession()'s hydration reports as done/restored-logged.
+//   status='draft'  — the client typed values that autosaved but has
+//     NOT tapped Log yet. Never counted toward completion, never
+//     reported as done on hydration — restored into the editable
+//     fields instead, still requiring an explicit Log tap.
+//   draftSeq — a client-supplied, strictly-increasing sequence
+//     (Date.now() at the moment of the edit that triggered this
+//     autosave) written ONLY by the draft-autosave path. The
+//     autosave upsert's own WHERE clause (see saveSetDraft() in
+//     lib/db/workout-session-service.ts) requires
+//     status='draft' AND draft_seq < the incoming value before
+//     applying an update — so an out-of-order-arriving autosave
+//     response can never overwrite a newer one's values, a second
+//     tab's stale write can never clobber a newer one from another
+//     tab, and NO autosave write of any age can ever touch a row
+//     that has already reached status='logged'. NULL for any row
+//     that has only ever been logged directly (never autosaved) —
+//     including every row that existed before this column was added,
+//     which is why existing rows default to status='logged' below:
+//     every row ever written before draft autosave existed could only
+//     have come from an explicit Log tap.
 //
 // actualWeightKg is optional — used for load-tracking features
 // in a future sprint. NULL is the correct value for bodyweight
@@ -432,6 +471,8 @@ export const workoutSetLogs = pgTable(
     actualDurationSeconds: integer("actual_duration_seconds"),
     actualRpe: numeric("actual_rpe", { precision: 3, scale: 1 }),
     notes: text("notes"),
+    status: setLogStatusEnum("status").notNull().default("logged"),
+    draftSeq: bigint("draft_seq", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -458,6 +499,7 @@ export const workoutSetLogs = pgTable(
       "chk_actual_duration_nonneg",
       sql`${table.actualDurationSeconds} IS NULL OR ${table.actualDurationSeconds} >= 0`,
     ),
+    check("chk_draft_seq_nonneg", sql`${table.draftSeq} IS NULL OR ${table.draftSeq} >= 0`),
   ],
 );
 

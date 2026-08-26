@@ -33,6 +33,90 @@ export class WorkoutSessionAuthorizationError extends Error {
   }
 }
 
+// [Workout set draft autosave — Phase 12 session authorization]
+// Neither logSet() nor the new saveSetDraft() may trust a client-
+// supplied (workoutSessionId, workoutTemplateExerciseId, setNumber)
+// tuple merely because the UI emitted it — a tampered or stale client
+// could send another client's session id, an arbitrary exercise id, or
+// a set number past what was ever prescribed. This is the ONE shared
+// check both writers use, reused rather than duplicated:
+//   1. workoutSessionId + clientId are looked up together (never
+//      trust a pre-checked authorization elsewhere — this repo's route
+//      layer already calls authorizeWorkoutSession() before reaching
+//      either service function, but that guard only returns a 404
+//      response or null, never the session row itself, and a service
+//      function should never assume its caller re-validated ownership
+//      correctly). A miss (wrong client, or no such session) throws —
+//      cross-client and arbitrary-session-id attempts are rejected
+//      identically, so a response can't be used to probe which case
+//      occurred.
+//   2. workoutTemplateExerciseId must appear in the session's own
+//      FROZEN workoutSnapshot (never the live, editable
+//      workout_template_exercises table — the snapshot is what this
+//      session actually prescribed at start time, and is the only
+//      thing an execution write may be validated against). Note the
+//      snapshot's own field for this is `id` (see buildWorkoutSnapshot
+//      in client-program-service.ts) — `workoutTemplateExerciseId` is
+//      the name used everywhere set-logging code refers to that same
+//      value, not a field name inside the snapshot's own JSON.
+//   3. setNumber must fall within 1..(exercise.sets ?? 1) as prescribed
+//      by that same frozen snapshot entry — an out-of-range set number
+//      (e.g. set 99 of a 3-set exercise) is rejected the same way.
+// Returns the full session row (so callers that also need `status` —
+// saveSetDraft's Phase 14 completed-session guard — don't need a
+// second query) rather than a bare boolean.
+async function validateSetIdentity(
+  db: Database,
+  params: {
+    workoutSessionId: string;
+    clientId: string;
+    workoutTemplateExerciseId: string;
+    setNumber: number;
+  },
+): Promise<WorkoutSession> {
+  const [session] = await db
+    .select()
+    .from(workoutSessions)
+    .where(
+      and(
+        eq(workoutSessions.id, params.workoutSessionId),
+        eq(workoutSessions.clientId, params.clientId),
+      ),
+    )
+    .limit(1);
+
+  if (!session) {
+    throw new WorkoutSessionAuthorizationError(
+      "Workout session not found or not owned by this client.",
+    );
+  }
+
+  const snapshot = session.workoutSnapshot as {
+    sections?: { exercises?: { id: string; sets: number | null }[] }[];
+    unsectioned?: { id: string; sets: number | null }[];
+  } | null;
+
+  const allExercises = [
+    ...(snapshot?.sections?.flatMap((s) => s.exercises ?? []) ?? []),
+    ...(snapshot?.unsectioned ?? []),
+  ];
+  const exercise = allExercises.find((e) => e.id === params.workoutTemplateExerciseId);
+  if (!exercise) {
+    throw new WorkoutSessionAuthorizationError(
+      "This exercise is not part of this workout session's prescribed structure.",
+    );
+  }
+
+  const totalSets = exercise.sets ?? 1;
+  if (params.setNumber < 1 || params.setNumber > totalSets) {
+    throw new WorkoutSessionAuthorizationError(
+      "This set number is not part of this exercise's prescription.",
+    );
+  }
+
+  return session;
+}
+
 // Bounded recovery constants for the 40001 (serialization_failure)
 // path in createWorkoutSession() below — see that catch block's own
 // comment for why this is a small, fixed number of attempts rather
@@ -311,6 +395,7 @@ export async function updateWorkoutSession(
 
 export async function logSet(input: {
   workoutSessionId: string;
+  clientId: string;
   workoutTemplateExerciseId: string;
   setNumber: number;
   actualReps?: number | null;
@@ -324,7 +409,28 @@ export async function logSet(input: {
   // Wrap insert + completion update in one transaction so the set log
   // row and the updated completionPercent are always consistent.
   return db.transaction(async (tx) => {
-    // ON CONFLICT DO UPDATE (idempotent: re-tapping a set updates it)
+    // [Workout set draft autosave — Phase 12] Validate BEFORE ever
+    // writing — see validateSetIdentity's own comment. Run inside this
+    // same transaction so the identity check and the write it gates
+    // share one consistent snapshot.
+    await validateSetIdentity(tx as unknown as Database, {
+      workoutSessionId: input.workoutSessionId,
+      clientId: input.clientId,
+      workoutTemplateExerciseId: input.workoutTemplateExerciseId,
+      setNumber: input.setNumber,
+    });
+
+    // ON CONFLICT DO UPDATE (idempotent: re-tapping a set updates it).
+    // [Workout set draft autosave] status:'logged' is written
+    // unconditionally on BOTH the insert and update branches — Log is
+    // the one authoritative completion boundary, and always wins
+    // regardless of whatever draft state (if any) previously occupied
+    // this row. draftSeq is cleared to null on the update branch: once
+    // a row is logged, draftSeq no longer has any active meaning (the
+    // draft-vs-logged guard in saveSetDraft's setWhere already refuses
+    // to touch a status='logged' row regardless of draftSeq's value),
+    // so leaving a stale number there would only be confusing, not
+    // unsafe.
     const [row] = await tx
       .insert(workoutSetLogs)
       .values({
@@ -337,6 +443,7 @@ export async function logSet(input: {
         actualDurationSeconds: input.actualDurationSeconds ?? null,
         actualRpe: input.actualRpe ?? null,
         notes: input.notes ?? null,
+        status: "logged",
       })
       .onConflictDoUpdate({
         target: [
@@ -351,6 +458,8 @@ export async function logSet(input: {
           actualDurationSeconds: input.actualDurationSeconds ?? null,
           actualRpe: input.actualRpe ?? null,
           notes: input.notes ?? null,
+          status: "logged",
+          draftSeq: null,
         },
       })
       .returning();
@@ -363,6 +472,105 @@ export async function logSet(input: {
 
     return row;
   });
+}
+
+// [Workout set draft autosave]
+// Persists what the client TYPED, not what they LOGGED — status is
+// always written as 'draft', and this function never touches
+// completionPercent or workoutSessions (Phase 5's explicit "autosave
+// alone must not increment completion, mark a set done, or trigger
+// completion/history semantics"). Distinguished from logSet in three
+// load-bearing ways:
+//   1. Never wrapped in the completionPercent-updating transaction.
+//   2. The upsert's setWhere guard (status='draft' AND draft_seq <
+//      incoming) makes it structurally impossible for this function to
+//      ever downgrade an already-logged row, or to apply an
+//      out-of-order/stale write — see the column's own comment in
+//      schema-program.ts for the full design rationale. This is
+//      enforced by Postgres itself inside one statement, not by any
+//      read-then-write check on the application side that a race could
+//      slip between.
+//   3. Rejects (as a normal, non-error outcome — see SaveSetDraftResult)
+//      once the session is no longer 'in_progress' — Phase 14's "a
+//      completed workout cannot be reopened by a late draft write."
+//      This is checked explicitly here rather than left to the upsert
+//      guard alone because an exercise/set that was NEVER autosaved
+//      before Finish would otherwise have no existing row for the
+//      conflict guard to protect — a late draft on a never-touched set
+//      could insert a fresh 'draft' row into an already-finished
+//      session if this check didn't exist.
+export interface SaveSetDraftResult {
+  applied: boolean;
+  reason?: "stale" | "session-not-active";
+  row: WorkoutSetLog | null;
+}
+
+export async function saveSetDraft(input: {
+  workoutSessionId: string;
+  clientId: string;
+  workoutTemplateExerciseId: string;
+  setNumber: number;
+  actualReps?: number | null;
+  actualWeightKg?: string | null;
+  actualDurationSeconds?: number | null;
+  actualRpe?: string | null;
+  draftSeq: number;
+}): Promise<SaveSetDraftResult> {
+  const db = getDb();
+
+  const session = await validateSetIdentity(db, {
+    workoutSessionId: input.workoutSessionId,
+    clientId: input.clientId,
+    workoutTemplateExerciseId: input.workoutTemplateExerciseId,
+    setNumber: input.setNumber,
+  });
+
+  if (session.status !== "in_progress") {
+    return { applied: false, reason: "session-not-active", row: null };
+  }
+
+  const [row] = await db
+    .insert(workoutSetLogs)
+    .values({
+      workoutSessionId: input.workoutSessionId,
+      workoutTemplateExerciseId: input.workoutTemplateExerciseId,
+      setNumber: input.setNumber,
+      status: "draft",
+      draftSeq: input.draftSeq,
+      actualReps: input.actualReps ?? null,
+      actualWeightKg: input.actualWeightKg ?? null,
+      actualDurationSeconds: input.actualDurationSeconds ?? null,
+      actualRpe: input.actualRpe ?? null,
+    })
+    .onConflictDoUpdate({
+      target: [
+        workoutSetLogs.workoutSessionId,
+        workoutSetLogs.workoutTemplateExerciseId,
+        workoutSetLogs.setNumber,
+      ],
+      set: {
+        status: "draft",
+        draftSeq: input.draftSeq,
+        actualReps: input.actualReps ?? null,
+        actualWeightKg: input.actualWeightKg ?? null,
+        actualDurationSeconds: input.actualDurationSeconds ?? null,
+        actualRpe: input.actualRpe ?? null,
+      },
+      setWhere: sql`${workoutSetLogs.status} = 'draft' AND (${workoutSetLogs.draftSeq} IS NULL OR ${workoutSetLogs.draftSeq} < ${input.draftSeq})`,
+    })
+    .returning();
+
+  if (!row) {
+    // The conflict guard rejected the update: either the existing row
+    // is already status='logged' (never touched, by design), or a
+    // draftSeq >= this write's already won (out-of-order arrival, or a
+    // second tab's newer edit). Either way the newest true value is
+    // already durably persisted — this is a silent no-op, not a
+    // failure, from this write's point of view.
+    return { applied: false, reason: "stale", row: null };
+  }
+
+  return { applied: true, row };
 }
 
 export async function deleteSet(
@@ -427,11 +635,22 @@ async function computeCompletionPercent(
   const totalSets = prescribed.reduce((s, p) => s + (p.sets ?? 1), 0);
   if (totalSets === 0) return 0;
 
-  // Count completed set logs
+  // Count completed set logs. [Workout set draft autosave] Explicitly
+  // filtered to status='logged' — a draft row (client typed values but
+  // never tapped Log) must never count toward completion. Before the
+  // status column existed, row existence alone meant "logged" and this
+  // filter was unnecessary; now that saveSetDraft() can insert 'draft'
+  // rows into this same table, omitting this filter would silently
+  // inflate completionPercent from unfinished input.
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(workoutSetLogs)
-    .where(eq(workoutSetLogs.workoutSessionId, sessionId));
+    .where(
+      and(
+        eq(workoutSetLogs.workoutSessionId, sessionId),
+        eq(workoutSetLogs.status, "logged"),
+      ),
+    );
 
   return Math.min(100, Math.round((count / totalSets) * 100));
 }
@@ -508,7 +727,12 @@ export async function getWorkoutHistory(
         exerciseCount: sql<number>`count(distinct ${workoutSetLogs.workoutTemplateExerciseId})::int`,
       })
       .from(workoutSetLogs)
-      .where(inArray(workoutSetLogs.workoutSessionId, needsFallback))
+      .where(
+        and(
+          inArray(workoutSetLogs.workoutSessionId, needsFallback),
+          eq(workoutSetLogs.status, "logged"),
+        ),
+      )
       .groupBy(workoutSetLogs.workoutSessionId);
 
     const fallbackMap = new Map(fallbackRows.map((r) => [r.sessionId, r.exerciseCount]));
@@ -574,10 +798,19 @@ export async function getHistoricalSessionDetail(
 
   if (!row) return null;
 
+  // [Workout set draft autosave] History is a record of what the
+  // client actually completed — a lingering 'draft' row (values typed
+  // but never logged before the session finished) must not appear
+  // here as if it were a completed set.
   const setRows = await db
     .select()
     .from(workoutSetLogs)
-    .where(eq(workoutSetLogs.workoutSessionId, sessionId))
+    .where(
+      and(
+        eq(workoutSetLogs.workoutSessionId, sessionId),
+        eq(workoutSetLogs.status, "logged"),
+      ),
+    )
     .orderBy(
       asc(workoutSetLogs.workoutTemplateExerciseId),
       asc(workoutSetLogs.setNumber),

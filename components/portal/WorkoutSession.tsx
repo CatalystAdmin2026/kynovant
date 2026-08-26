@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { lbsToKg, kgToLbs } from "@/lib/portal/units";
 
 // ─────────────────────────────────────────────────────────────
@@ -53,6 +53,15 @@ export interface Props {
 
 type SetStatus = "idle" | "pending" | "done" | "editing" | "error";
 
+// [Workout set draft autosave] Distinct from `status` on purpose —
+// "Logged" (status) means the set is officially complete; "Saved"
+// (saveState) only means the typed-but-not-yet-logged values are
+// durable on the server. Only ever meaningful while status === "idle"
+// (pre-Log): once a set is "done"/"pending"/"editing", saveState is
+// irrelevant and the UI never renders it (Phase 17's explicit "must
+// remain obvious" distinction).
+type DraftSaveState = "idle" | "saving" | "saved" | "error";
+
 interface SetData {
   status: SetStatus;
   weightLbs: string;
@@ -64,6 +73,7 @@ interface SetData {
   loggedDuration: number | null;
   loggedRpe: number | null;
   errorMsg: string;
+  saveState: DraftSaveState;
 }
 
 interface RestTimer {
@@ -84,7 +94,14 @@ const DEFAULT_SET: SetData = {
   loggedDuration: null,
   loggedRpe: null,
   errorMsg: "",
+  saveState: "idle",
 };
+
+// [Workout set draft autosave] Debounce window between the last edit
+// and the autosave write — short enough to feel responsive, long
+// enough that a client typing "1", "10", "100" doesn't fire three
+// requests (Phase 3/16's "do NOT write on every keystroke").
+const DRAFT_AUTOSAVE_DEBOUNCE_MS = 800;
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
@@ -105,6 +122,17 @@ function repRange(ex: ExerciseItem): string {
   if (ex.repsMin) return `${ex.repsMin}`;
   if (ex.repsMax) return `${ex.repsMax}`;
   return "—";
+}
+
+// Shared by handleLog and the draft-autosave flush so both paths parse
+// the same four editable fields identically.
+function parseSetNumbers(data: SetData) {
+  return {
+    weightNum: data.weightLbs ? parseFloat(data.weightLbs) : null,
+    repsNum: data.reps ? parseInt(data.reps, 10) : null,
+    durationNum: data.duration ? parseInt(data.duration, 10) : null,
+    rpeNum: data.rpe ? parseFloat(data.rpe) : null,
+  };
 }
 
 function validateSetData(data: SetData): string | null {
@@ -308,6 +336,7 @@ function SetRow({
   onUpdate,
   onLog,
   onCorrect,
+  onRetryDraft,
   rm,
 }: {
   setNum: number;
@@ -316,6 +345,7 @@ function SetRow({
   onUpdate: (patch: Partial<SetData>) => void;
   onLog: () => void;
   onCorrect: () => void;
+  onRetryDraft: () => void;
   rm: boolean;
 }) {
   const isPending = data.status === "pending";
@@ -413,6 +443,25 @@ function SetRow({
           {data.errorMsg}
         </p>
       )}
+
+      {/* [Workout set draft autosave] Deliberately separate from
+          errorMsg (Log failure) and from the "Logged"/"Promise Kept"
+          treatment above — this only ever describes whether TYPED,
+          not-yet-logged values are durable. Only rendered pre-Log. */}
+      {data.status === "idle" && data.saveState !== "idle" && (
+        <p className="text-[9px] mt-1 pl-14 tracking-wide" aria-live="polite">
+          {data.saveState === "saving" && <span className="text-gray-500">Saving…</span>}
+          {data.saveState === "saved" && <span className="text-gray-500">Saved</span>}
+          {data.saveState === "error" && (
+            <button
+              onClick={onRetryDraft}
+              className="text-amber-500 hover:text-amber-400 underline underline-offset-2"
+            >
+              Not saved — retry
+            </button>
+          )}
+        </p>
+      )}
     </div>
   );
 }
@@ -427,6 +476,7 @@ function ExerciseRow({
   onUpdate,
   onLog,
   onCorrect,
+  onRetryDraft,
   rm,
 }: {
   exercise: ExerciseItem;
@@ -434,6 +484,7 @@ function ExerciseRow({
   onUpdate: (exerciseId: string, setNum: number, patch: Partial<SetData>) => void;
   onLog: (exerciseId: string, setNum: number) => void;
   onCorrect: (exerciseId: string, setNum: number) => void;
+  onRetryDraft: (exerciseId: string, setNum: number) => void;
   rm: boolean;
 }) {
   const totalSets = exercise.sets ?? 1;
@@ -501,6 +552,7 @@ function ExerciseRow({
             onUpdate={(patch) => onUpdate(exercise.id, setNum, patch)}
             onLog={() => onLog(exercise.id, setNum)}
             onCorrect={() => onCorrect(exercise.id, setNum)}
+            onRetryDraft={() => onRetryDraft(exercise.id, setNum)}
             rm={rm}
           />
         ))}
@@ -519,6 +571,7 @@ function SectionBlock({
   onUpdate,
   onLog,
   onCorrect,
+  onRetryDraft,
   rm,
 }: {
   section: SectionItem;
@@ -526,6 +579,7 @@ function SectionBlock({
   onUpdate: (exerciseId: string, setNum: number, patch: Partial<SetData>) => void;
   onLog: (exerciseId: string, setNum: number) => void;
   onCorrect: (exerciseId: string, setNum: number) => void;
+  onRetryDraft: (exerciseId: string, setNum: number) => void;
   rm: boolean;
 }) {
   const sortedExercises = [...section.exercises].sort((a, b) => a.orderIndex - b.orderIndex);
@@ -549,6 +603,7 @@ function SectionBlock({
           onUpdate={onUpdate}
           onLog={onLog}
           onCorrect={onCorrect}
+          onRetryDraft={onRetryDraft}
           rm={rm}
         />
       ))}
@@ -588,6 +643,38 @@ export default function WorkoutSession({
 
   // Capture session start time on mount
   const [startedAt] = useState<Date>(() => new Date());
+
+  // [Workout set draft autosave]
+  // setStatesRef mirrors setStates so the debounced timer callback in
+  // flushDraft always reads the LATEST typed values, never a stale
+  // closure from the render that scheduled it — the timer can fire
+  // several keystrokes after it was set, and Phase 7's "the newest
+  // user input must win" applies just as much to what the client sends
+  // as to how the server resolves conflicting writes.
+  const setStatesRef = useRef<Map<string, SetData>>(setStates);
+  useEffect(() => {
+    setStatesRef.current = setStates;
+  }, [setStates]);
+
+  // draftTimers: the pending debounce timeout per set key (Phase 3 —
+  //   per-set, not a single global debounce, so editing one set never
+  //   delays or blocks another's autosave).
+  // draftSeq: the seq (Date.now() at edit time) of the LATEST edit per
+  //   key — sent as draftSeq with every autosave write so the server
+  //   can enforce "newest input wins" (Phase 7) regardless of network
+  //   arrival order.
+  // draftInFlight: the seq of the most recently SENT autosave request
+  //   per key — lets flushDraft's response handler ignore a response
+  //   that's no longer the latest one in flight, so an old response
+  //   arriving late can never regress the Saving/Saved/error indicator
+  //   past what a newer request has already reported.
+  // draftTargets: (exerciseId, setNum) for every key with a live timer
+  //   — read back by the visibilitychange/pagehide flush below so it
+  //   never needs to parse sKey's string format.
+  const draftTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const draftSeq = useRef<Map<string, number>>(new Map());
+  const draftInFlight = useRef<Map<string, number>>(new Map());
+  const draftTargets = useRef<Map<string, { exerciseId: string; setNum: number }>>(new Map());
 
   const allExercises = useMemo(
     () => [
@@ -659,6 +746,13 @@ export default function WorkoutSession({
             actualWeightKg: string | null;
             actualDurationSeconds: number | null;
             actualRpe: string | null;
+            // [Workout set draft autosave] Present on every row now
+            // that the schema distinguishes them — see the branch
+            // below. Optional in the type only so this effect doesn't
+            // hard-fail against an old cached response shape; treated
+            // as "logged" if somehow absent (the pre-existing, safe
+            // default for any row this old).
+            status?: "draft" | "logged";
           }>;
         }) => {
           if (cancelled) return;
@@ -671,18 +765,43 @@ export default function WorkoutSession({
                 const key = sKey(s.workoutTemplateExerciseId, s.setNumber);
                 if (next.has(key)) continue; // never overwrite newer local state
                 changed = true;
-                next.set(key, {
-                  status: "done",
-                  weightLbs: "",
-                  reps: "",
-                  duration: "",
-                  rpe: "",
-                  loggedWeightLbs: s.actualWeightKg !== null ? kgToLbs(parseFloat(s.actualWeightKg)) : null,
-                  loggedReps: s.actualReps,
-                  loggedDuration: s.actualDurationSeconds,
-                  loggedRpe: s.actualRpe !== null ? parseFloat(s.actualRpe) : null,
-                  errorMsg: "",
-                });
+                if (s.status === "draft") {
+                  // [Workout set draft autosave — Phase 6] Restore the
+                  // TYPED values into the editable fields, not the
+                  // logged/done display — this set is still visibly
+                  // unlogged and stays fully editable. saveState
+                  // "saved" is accurate, not aspirational: these values
+                  // are already durable on the server, which is
+                  // exactly what "Saved" (as opposed to "Logged")
+                  // promises.
+                  next.set(key, {
+                    status: "idle",
+                    weightLbs: s.actualWeightKg !== null ? String(kgToLbs(parseFloat(s.actualWeightKg))) : "",
+                    reps: s.actualReps !== null ? String(s.actualReps) : "",
+                    duration: s.actualDurationSeconds !== null ? String(s.actualDurationSeconds) : "",
+                    rpe: s.actualRpe !== null ? String(parseFloat(s.actualRpe)) : "",
+                    loggedWeightLbs: null,
+                    loggedReps: null,
+                    loggedDuration: null,
+                    loggedRpe: null,
+                    errorMsg: "",
+                    saveState: "saved",
+                  });
+                } else {
+                  next.set(key, {
+                    status: "done",
+                    weightLbs: "",
+                    reps: "",
+                    duration: "",
+                    rpe: "",
+                    loggedWeightLbs: s.actualWeightKg !== null ? kgToLbs(parseFloat(s.actualWeightKg)) : null,
+                    loggedReps: s.actualReps,
+                    loggedDuration: s.actualDurationSeconds,
+                    loggedRpe: s.actualRpe !== null ? parseFloat(s.actualRpe) : null,
+                    errorMsg: "",
+                    saveState: "idle",
+                  });
+                }
               }
               return changed ? next : prev;
             });
@@ -722,6 +841,64 @@ export default function WorkoutSession({
     return () => clearTimeout(id);
   }, [timerDone]);
 
+  // ── Draft autosave: best-effort flush on backgrounding/navigation ──
+  // [Workout set draft autosave — Phase 8] The debounced autosave
+  // above is the PRIMARY durability mechanism — this is explicitly a
+  // last line of defense for a client who backgrounds the tab, gets
+  // the PWA killed by iOS, or navigates away mid-debounce-window,
+  // never the thing this feature relies on for ordinary durability.
+  // Deliberately NOT beforeunload (unreliable on mobile Safari/iOS
+  // PWAs and not fired on backgrounding at all) — visibilitychange
+  // fires on backgrounding (tab switch, iOS app-switch) while the page
+  // may still resume, so that path uses a normal fetch and can still
+  // update the Saving/Saved indicator; pagehide fires when the page is
+  // actually being torn down, so that path uses `keepalive: true`
+  // (fetch's modern, JSON-capable replacement for sendBeacon) so the
+  // browser can complete the request after the page itself is gone.
+  // Neither path is guaranteed to complete — this is explicitly
+  // "attempt", not "guarantee" (Phase 8's own instruction).
+  useEffect(() => {
+    function flushAllPending(keepalive: boolean) {
+      for (const [key, timer] of draftTimers.current) {
+        clearTimeout(timer);
+        draftTimers.current.delete(key);
+        const target = draftTargets.current.get(key);
+        draftTargets.current.delete(key);
+        if (target) void flushDraft(target.exerciseId, target.setNum, { keepalive });
+      }
+    }
+    function onVisibilityChange() {
+      if (document.visibilityState === "hidden") flushAllPending(false);
+    }
+    function onPageHide() {
+      flushAllPending(true);
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", onPageHide);
+    // Unmount cleanup reads these same ref objects (not a DOM node, so
+    // there's no risk of the ref being reassigned to something else by
+    // the time cleanup runs — refs holding plain Maps for this
+    // component's own lifetime, not React-managed nodes).
+    const timers = draftTimers.current;
+    const targets = draftTargets.current;
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", onPageHide);
+      // Unmount cleanup: don't leave dangling timers referencing a
+      // component that's gone.
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+      targets.clear();
+    };
+    // flushDraft intentionally omitted from deps: it reads current
+    // values via refs (setStatesRef, draftSeq, draftInFlight), not via
+    // closure over props/state, so it does not need to be a reactive
+    // dependency — registering these listeners once for the
+    // component's lifetime (not re-subscribing per render) is
+    // deliberate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
   // ── State helpers ────────────────────────────────────────
   function updateSetState(exerciseId: string, setNum: number, patch: Partial<SetData>) {
     const key = sKey(exerciseId, setNum);
@@ -732,8 +909,147 @@ export default function WorkoutSession({
     });
   }
 
+  // [Workout set draft autosave] Cancels any pending debounce timer and
+  // forgets this key's seq bookkeeping — called the instant Log begins
+  // (Phase 5's "flush any pending autosave for that set" — here,
+  // "flush" means the authoritative Log write supersedes it entirely,
+  // so the draft is simply abandoned rather than raced against) and
+  // defensively when entering Correct. After this, any draft-autosave
+  // network response that still arrives late for this key is
+  // guaranteed to see draftInFlight not matching its own seq and will
+  // be ignored — see flushDraft's response handling below.
+  function clearDraftTracking(exerciseId: string, setNum: number) {
+    const key = sKey(exerciseId, setNum);
+    const timer = draftTimers.current.get(key);
+    if (timer) clearTimeout(timer);
+    draftTimers.current.delete(key);
+    draftTargets.current.delete(key);
+    draftSeq.current.delete(key);
+    draftInFlight.current.delete(key);
+  }
+
+  // [Workout set draft autosave]
+  // Sends the CURRENT typed values for one set as a draft. Guards:
+  //   - only while status is still "idle" — if Log/Finish/Correct
+  //     already moved this set on since the timer was scheduled, there
+  //     is nothing to autosave (Log's own write is authoritative).
+  //   - skips entirely if every field is blank (nothing typed).
+  //   - after the response (or a network failure) resolves, only
+  //     updates the Saving/Saved/error indicator if this request is
+  //     STILL the most recent one sent for this key — an older
+  //     response arriving after a newer request was already sent must
+  //     never regress the indicator (client-side mirror of the same
+  //     "newest wins" contract the server enforces on the actual data).
+  async function flushDraft(exerciseId: string, setNum: number, opts?: { keepalive?: boolean }) {
+    const key = sKey(exerciseId, setNum);
+    const data = setStatesRef.current.get(key) ?? DEFAULT_SET;
+    if (data.status !== "idle") return;
+    if (!data.weightLbs && !data.reps && !data.duration && !data.rpe) return;
+
+    const seq = draftSeq.current.get(key);
+    if (seq === undefined) return;
+
+    const { weightNum, repsNum, durationNum, rpeNum } = parseSetNumbers(data);
+    draftInFlight.current.set(key, seq);
+
+    try {
+      const res = await fetch(`/api/portal/workout-session/${sessionId}/sets/draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workoutTemplateExerciseId: exerciseId,
+          setNumber: setNum,
+          actualReps: repsNum,
+          actualWeightKg: weightNum !== null ? lbsToKg(weightNum).toFixed(4) : null,
+          actualDurationSeconds: durationNum,
+          actualRpe: rpeNum !== null ? String(rpeNum) : null,
+          draftSeq: seq,
+        }),
+        keepalive: opts?.keepalive,
+      });
+
+      if (draftInFlight.current.get(key) !== seq) return; // superseded — ignore
+
+      const json = (await res.json().catch(() => null)) as { ok?: boolean; applied?: boolean } | null;
+
+      if (json?.ok && json.applied) {
+        updateSetState(exerciseId, setNum, { saveState: "saved" });
+      } else if (!json?.ok) {
+        // Genuine failure (validation/auth/server error) — the only
+        // case Phase 9 asks to surface. `ok:true, applied:false` is a
+        // normal, silent race (superseded/session no longer active),
+        // never shown as an error.
+        updateSetState(exerciseId, setNum, { saveState: "error" });
+      }
+    } catch {
+      if (draftInFlight.current.get(key) !== seq) return;
+      updateSetState(exerciseId, setNum, { saveState: "error" });
+    }
+  }
+
+  // [Workout set draft autosave]
+  // Wraps every editable-field onChange: applies the edit as before,
+  // then — only while the set is still in its pre-Log "idle" state —
+  // (re)schedules a debounced autosave. Deliberately excludes
+  // "editing" (post-Correct): re-editing an already-logged set is out
+  // of this feature's scope; Log remains that flow's own persistence
+  // path. Per-set debounce (Phase 3): editing one set's timer never
+  // touches another set's.
+  function handleFieldChange(exerciseId: string, setNum: number, patch: Partial<SetData>) {
+    const key = sKey(exerciseId, setNum);
+    const current = setStatesRef.current.get(key) ?? DEFAULT_SET;
+    const next = { ...current, ...patch };
+    updateSetState(exerciseId, setNum, patch);
+
+    if (next.status !== "idle") return;
+
+    const existingTimer = draftTimers.current.get(key);
+    if (existingTimer) clearTimeout(existingTimer);
+
+    if (!next.weightLbs && !next.reps && !next.duration && !next.rpe) {
+      // Cleared back to blank — nothing worth persisting; don't show a
+      // stale Saving/Saved indicator for empty input.
+      draftTimers.current.delete(key);
+      draftTargets.current.delete(key);
+      draftSeq.current.delete(key);
+      updateSetState(exerciseId, setNum, { saveState: "idle" });
+      return;
+    }
+
+    draftSeq.current.set(key, Date.now());
+    draftTargets.current.set(key, { exerciseId, setNum });
+    updateSetState(exerciseId, setNum, { saveState: "saving" });
+    draftTimers.current.set(
+      key,
+      setTimeout(() => {
+        draftTimers.current.delete(key);
+        draftTargets.current.delete(key);
+        void flushDraft(exerciseId, setNum);
+      }, DRAFT_AUTOSAVE_DEBOUNCE_MS),
+    );
+  }
+
+  // [Workout set draft autosave] Manual retry after a failed autosave
+  // (Phase 9's "user can retry"). Bumps the seq so this attempt is
+  // unambiguously the newest even if a stale automatic one is still
+  // technically in flight.
+  function handleRetryDraft(exerciseId: string, setNum: number) {
+    const key = sKey(exerciseId, setNum);
+    const data = setStatesRef.current.get(key) ?? DEFAULT_SET;
+    if (data.status !== "idle") return;
+    draftSeq.current.set(key, Date.now());
+    updateSetState(exerciseId, setNum, { saveState: "saving" });
+    void flushDraft(exerciseId, setNum);
+  }
+
   // ── Log a set ────────────────────────────────────────────
   async function handleLog(exerciseId: string, setNum: number) {
+    // [Workout set draft autosave] Log is the one authoritative
+    // completion write — abandon any pending/in-flight draft for this
+    // key first so a late draft response can never touch this set's
+    // state after it's been logged.
+    clearDraftTracking(exerciseId, setNum);
+
     const data = setStates.get(sKey(exerciseId, setNum)) ?? DEFAULT_SET;
 
     const err = validateSetData(data);
@@ -742,10 +1058,7 @@ export default function WorkoutSession({
       return;
     }
 
-    const weightNum = data.weightLbs ? parseFloat(data.weightLbs) : null;
-    const repsNum = data.reps ? parseInt(data.reps, 10) : null;
-    const durationNum = data.duration ? parseInt(data.duration, 10) : null;
-    const rpeNum = data.rpe ? parseFloat(data.rpe) : null;
+    const { weightNum, repsNum, durationNum, rpeNum } = parseSetNumbers(data);
 
     updateSetState(exerciseId, setNum, { status: "pending", errorMsg: "" });
 
@@ -780,6 +1093,7 @@ export default function WorkoutSession({
         loggedDuration: durationNum,
         loggedRpe: rpeNum,
         errorMsg: "",
+        saveState: "idle",
       });
 
       // Start rest timer if this exercise has a prescribed rest period
@@ -801,6 +1115,11 @@ export default function WorkoutSession({
   }
 
   function handleCorrect(exerciseId: string, setNum: number) {
+    // [Workout set draft autosave] Defensive: a logged set should never
+    // have a live draft timer (autosave only ever runs while status is
+    // "idle"), but clear tracking anyway rather than rely on that
+    // invariant holding forever.
+    clearDraftTracking(exerciseId, setNum);
     const data = setStates.get(sKey(exerciseId, setNum)) ?? DEFAULT_SET;
     updateSetState(exerciseId, setNum, {
       status: "editing",
@@ -809,6 +1128,7 @@ export default function WorkoutSession({
       duration: data.loggedDuration !== null ? String(data.loggedDuration) : "",
       rpe: data.loggedRpe !== null ? String(data.loggedRpe) : "",
       errorMsg: "",
+      saveState: "idle",
     });
   }
 
@@ -925,9 +1245,10 @@ export default function WorkoutSession({
             key={sec.id}
             section={sec}
             setStates={setStates}
-            onUpdate={updateSetState}
+            onUpdate={handleFieldChange}
             onLog={handleLog}
             onCorrect={handleCorrect}
+            onRetryDraft={handleRetryDraft}
             rm={rm}
           />
         ))}
@@ -940,9 +1261,10 @@ export default function WorkoutSession({
                 key={ex.id}
                 exercise={ex}
                 setStates={setStates}
-                onUpdate={updateSetState}
+                onUpdate={handleFieldChange}
                 onLog={handleLog}
                 onCorrect={handleCorrect}
+                onRetryDraft={handleRetryDraft}
                 rm={rm}
               />
             ))}

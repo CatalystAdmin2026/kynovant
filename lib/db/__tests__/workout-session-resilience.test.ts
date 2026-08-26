@@ -290,8 +290,8 @@ describe("A/H — persisted set hydration data (server-side contract WorkoutSess
     sessionIds.push(session.id);
     const exId = await getExerciseRowId(wtId);
 
-    await logSet({ workoutSessionId: session.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 8, actualWeightKg: "61.2350", actualDurationSeconds: 45, actualRpe: "7.5" });
-    await logSet({ workoutSessionId: session.id, workoutTemplateExerciseId: exId, setNumber: 2, actualReps: 10, actualWeightKg: "58.9670", actualDurationSeconds: null, actualRpe: "8" });
+    await logSet({ workoutSessionId: session.id, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 8, actualWeightKg: "61.2350", actualDurationSeconds: 45, actualRpe: "7.5" });
+    await logSet({ workoutSessionId: session.id, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 2, actualReps: 10, actualWeightKg: "58.9670", actualDurationSeconds: null, actualRpe: "8" });
 
     const result = await getWorkoutSession(session.id, clientA.id);
     expect(result).not.toBeNull();
@@ -318,8 +318,8 @@ describe("I — no duplicate set logs on re-log (upsert identity)", () => {
     sessionIds.push(session.id);
     const exId = await getExerciseRowId(wtId);
 
-    await logSet({ workoutSessionId: session.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 8, actualWeightKg: "50.00" });
-    await logSet({ workoutSessionId: session.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 9, actualWeightKg: "52.50" });
+    await logSet({ workoutSessionId: session.id, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 8, actualWeightKg: "50.00" });
+    await logSet({ workoutSessionId: session.id, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 9, actualWeightKg: "52.50" });
 
     const result = await getWorkoutSession(session.id, clientA.id);
     expect(result!.sets).toHaveLength(1);
@@ -653,7 +653,7 @@ describe("M — historical completed sessions are unchanged", () => {
     vi.useRealTimers();
     sessionIds.push(session.id);
     const exId = await getExerciseRowId(wtId);
-    await logSet({ workoutSessionId: session.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 8, actualWeightKg: "50.00" });
+    await logSet({ workoutSessionId: session.id, clientId: clientA.id, workoutTemplateExerciseId: exId, setNumber: 1, actualReps: 8, actualWeightKg: "50.00" });
     await updateWorkoutSession(session.id, clientA.id, { status: "completed" });
 
     const before = await getWorkoutSession(session.id, clientA.id);
