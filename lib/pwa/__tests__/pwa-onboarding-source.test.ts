@@ -27,6 +27,7 @@ function source(file: string) {
 }
 
 const HOOK = "lib/pwa/use-install-state.ts";
+const STORE = "lib/pwa/install-store.ts";
 const INSTALL_KYNOVANT = "components/pwa/InstallKynovant.tsx";
 const PORTAL_ONBOARDING = "components/pwa/PortalInstallOnboarding.tsx";
 const PORTAL_SHELL = "components/portal/PortalShell.tsx";
@@ -34,15 +35,20 @@ const INSTALL_INSTRUCTIONS = "components/pwa/InstallInstructions.tsx";
 
 describe("usePwaInstallState — installed/standalone hides everything", () => {
   const hook = source(HOOK);
+  const store = source(STORE);
 
-  it("resolves surface via resolveInstallSurface, which returns 'installed' before checking any prompt/iOS branch", () => {
+  it("derives surface via resolveInstallSurface, letting 'installed' win before any prompt/iOS branch", () => {
     expect(hook).toContain('import { isMobileDevice, resolveInstallSurface, type InstallSurface } from "./install"');
-    expect(hook).toContain("setSurface(resolveInstallSurface(getEnvironment(Boolean(nextPrompt))))");
+    expect(hook).toContain("if (isInstalledSignal()) return \"installed\";");
+    expect(hook).toContain("return resolveInstallSurface(getEnvironment(hasNativePrompt()));");
   });
 
-  it("re-derives surface on a standalone display-mode change (e.g. installed mid-session) via matchMedia's change listener", () => {
-    expect(hook).toContain('window.matchMedia?.("(display-mode: standalone)")');
-    expect(hook).toContain('standaloneQuery?.addEventListener?.("change", onStandaloneChange)');
+  it("re-derives surface on a standalone display-mode change — the matchMedia change listener now lives in the singleton store", () => {
+    expect(store).toContain('window.matchMedia?.("(display-mode: standalone)")');
+    expect(store).toContain('standaloneQuery?.addEventListener?.("change", onStandaloneChange)');
+    // The hook recomputes surface whenever the store's version bumps.
+    expect(hook).toContain("useSyncExternalStore(");
+    expect(hook).toContain("[mounted, storeVersion]");
   });
 });
 
@@ -141,9 +147,11 @@ describe("InstallKynovant — refactored onto the shared hook without changing i
   const component = source(INSTALL_KYNOVANT);
 
   it("still hides for installed/unsupported, and (card variant only) once dismissed — same early-return contract as before", () => {
-    expect(component).toContain(
-      'if (!mounted || surface === "installed" || surface === "unsupported" || (variant === "card" && dismissed)) {',
-    );
+    // installed / unsupported → render nothing, always.
+    expect(component).toContain('if (!mounted || surface === "installed" || surface === "unsupported") {');
+    // card variant → still nothing once dismissed (and never for the
+    // passive hint surfaces).
+    expect(component).toContain('if (variant === "card" && (dismissed || isHint)) {');
   });
 
   it("uses the shared hook and shared InstallInstructions, not its own duplicated event wiring", () => {
@@ -157,18 +165,25 @@ describe("InstallKynovant — refactored onto the shared hook without changing i
   });
 });
 
-describe("usePwaInstallState.install() — no unhandled promise rejection on a stale prompt event", () => {
-  const hook = source(HOOK);
+describe("consumeNativePrompt() — no unhandled promise rejection on a stale prompt event", () => {
+  const store = source(STORE);
 
   it("wraps prompt()/userChoice in try/catch and resolves to 'unavailable' on rejection, rather than throwing", () => {
-    const fnStart = hook.indexOf("const install = useCallback(async");
-    const fnEnd = hook.indexOf("const dismiss = useCallback");
-    const fnBody = hook.slice(fnStart, fnEnd);
+    const fnStart = store.indexOf("export async function consumeNativePrompt");
+    const fnEnd = store.indexOf("export function __resetInstallStoreForTests");
+    const fnBody = store.slice(fnStart, fnEnd);
     expect(fnBody).toContain("try {");
-    expect(fnBody).toContain("await promptEvent.prompt();");
-    expect(fnBody).toContain("await promptEvent.userChoice;");
+    expect(fnBody).toContain("await event.prompt();");
+    expect(fnBody).toContain("await event.userChoice;");
     expect(fnBody).toContain("} catch {");
     expect(fnBody).toContain('return "unavailable";');
+  });
+
+  it("the hook's install() delegates to it and never invokes a prompt automatically", () => {
+    const hook = source(HOOK);
+    expect(hook).toContain("const outcome = await consumeNativePrompt();");
+    // No automatic prompt() call anywhere in the hook.
+    expect(hook).not.toMatch(/\.prompt\(\)/);
   });
 });
 
@@ -192,17 +207,18 @@ describe("Dismissal persistence — device-local only, never a new DB table", ()
   // firing as "user hasn't decided yet" and unconditionally wiped the
   // persisted dismissal, so a coach's explicit dismiss() was erased by
   // the very next navigation's beforeinstallprompt event.
-  it("a fresh beforeinstallprompt firing does NOT clear a prior dismissal — only an explicit dismiss()/install() call changes dismissal state", () => {
-    const hook = source(HOOK);
-    const fnStart = hook.indexOf("function onBeforeInstallPrompt");
-    const fnEnd = hook.indexOf("function onAppInstalled");
-    const fnBody = hook.slice(fnStart, fnEnd);
-    expect(fnBody).not.toContain("setDismissed(false)");
-    expect(fnBody).not.toContain("writeDismissed(");
-    // It still captures the event and re-derives surface — only the
-    // dismissal side effect was removed, not the event handling itself.
-    expect(fnBody).toContain("setPromptEvent(installEvent);");
-    expect(fnBody).toContain("update(installEvent);");
+  it("a fresh beforeinstallprompt firing does NOT touch dismissal — the singleton store has no concept of it", () => {
+    const store = source(STORE);
+    const fnStart = store.indexOf("function onBeforeInstallPrompt");
+    const fnEnd = store.indexOf("function onAppInstalled");
+    const fnBody = store.slice(fnStart, fnEnd);
+    // Dismissal is a use-install-state concern; the store never reads or
+    // writes it, so re-firing beforeinstallprompt can't erase it.
+    expect(fnBody).not.toMatch(/writeDismissed|setDismissed|localStorage/);
+    // It still captures the event and notifies subscribers.
+    expect(fnBody).toContain("promptEvent = event as BeforeInstallPromptEvent;");
+    expect(fnBody).toContain("emit();");
+    expect(fnBody).toContain("event.preventDefault();");
   });
 
   it("dismiss() and a real native-prompt 'dismissed' outcome are the ONLY two places dismissal is ever written", () => {
@@ -212,12 +228,14 @@ describe("Dismissal persistence — device-local only, never a new DB table", ()
     expect(writeCallSites.length).toBe(2);
   });
 
-  it("appinstalled immediately flips surface to 'installed', independent of the dismissed flag", () => {
-    const hook = source(HOOK);
-    const fnStart = hook.indexOf("function onAppInstalled");
-    const fnEnd = hook.indexOf("const initTimer");
-    const fnBody = hook.slice(fnStart, fnEnd);
-    expect(fnBody).toContain('setSurface("installed");');
+  it("appinstalled immediately drives surface to 'installed', independent of the dismissed flag", () => {
+    const store = source(STORE);
+    const fnStart = store.indexOf("function onAppInstalled");
+    const fnEnd = store.indexOf("function onStandaloneChange");
+    const fnBody = store.slice(fnStart, fnEnd);
+    expect(fnBody).toContain("installed = true;");
+    // ...and the hook honours that signal before any other branch.
+    expect(source(HOOK)).toContain('if (isInstalledSignal()) return "installed";');
   });
 });
 

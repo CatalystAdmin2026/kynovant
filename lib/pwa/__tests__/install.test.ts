@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isActionableInstallSurface,
+  isAndroidDevice,
   isAppleMobileDevice,
   isMobileDevice,
   isSafariFamily,
@@ -30,11 +32,38 @@ describe("PWA install surface detection", () => {
     expect(resolveInstallSurface({ userAgent: ANDROID_CHROME, hasNativePrompt: true })).toBe("native_prompt");
   });
 
-  it("offers instructions for iPhone and iPad Safari only", () => {
+  it("offers Add-to-Home-Screen instructions for iPhone and iPad Safari only", () => {
     expect(isAppleMobileDevice({ userAgent: IPHONE_SAFARI })).toBe(true);
     expect(isSafariFamily(IPHONE_SAFARI)).toBe(true);
     expect(resolveInstallSurface({ userAgent: IPHONE_SAFARI })).toBe("ios_instructions");
-    expect(resolveInstallSurface({ userAgent: IOS_CHROME })).toBe("unsupported");
+  });
+
+  it("tells iOS non-Safari browsers to open in Safari, instead of silently rendering nothing", () => {
+    expect(isSafariFamily(IOS_CHROME)).toBe(false);
+    expect(resolveInstallSurface({ userAgent: IOS_CHROME })).toBe("ios_open_in_safari");
+  });
+
+  it("gives Android a manual-install hint when no live beforeinstallprompt is held", () => {
+    expect(isAndroidDevice(ANDROID_CHROME)).toBe(true);
+    expect(resolveInstallSurface({ userAgent: ANDROID_CHROME })).toBe("android_manual");
+    // ...but a live native prompt still wins over the hint.
+    expect(resolveInstallSurface({ userAgent: ANDROID_CHROME, hasNativePrompt: true })).toBe("native_prompt");
+    // ...and an installed Android PWA offers nothing.
+    expect(resolveInstallSurface({ userAgent: ANDROID_CHROME, displayModeStandalone: true })).toBe("installed");
+  });
+
+  it("still reports a genuine dead end as 'unsupported' (desktop Firefox, no prompt)", () => {
+    expect(resolveInstallSurface({ userAgent: DESKTOP_FIREFOX, platform: "Win32", maxTouchPoints: 0 })).toBe("unsupported");
+    expect(isAndroidDevice(DESKTOP_FIREFOX)).toBe(false);
+  });
+
+  it("marks only native_prompt and ios_instructions as actionable (the hint surfaces are passive)", () => {
+    expect(isActionableInstallSurface("native_prompt")).toBe(true);
+    expect(isActionableInstallSurface("ios_instructions")).toBe(true);
+    expect(isActionableInstallSurface("ios_open_in_safari")).toBe(false);
+    expect(isActionableInstallSurface("android_manual")).toBe(false);
+    expect(isActionableInstallSurface("installed")).toBe(false);
+    expect(isActionableInstallSurface("unsupported")).toBe(false);
   });
 
   it("detects modern iPadOS Safari reporting a Mac platform", () => {
@@ -85,8 +114,11 @@ describe("shouldShowPortalInstallOnboarding — the single decision point for th
     expect(shouldShowPortalInstallOnboarding({ userAgent: IPHONE_SAFARI, navigatorStandalone: true })).toBe(false);
   });
 
-  it("never shows for an unsupported mobile browser (e.g. Chrome on iOS, no native prompt, not Safari)", () => {
+  it("never shows for a non-actionable mobile surface — the passive hint surfaces are not first-run-sheet material", () => {
+    // Chrome on iOS -> ios_open_in_safari (a hint, not actionable).
     expect(shouldShowPortalInstallOnboarding({ userAgent: IOS_CHROME })).toBe(false);
+    // Android with no live prompt -> android_manual (a hint, not actionable).
+    expect(shouldShowPortalInstallOnboarding({ userAgent: ANDROID_CHROME })).toBe(false);
   });
 
   it("never shows on desktop Firefox, which offers neither a native prompt nor iOS instructions", () => {

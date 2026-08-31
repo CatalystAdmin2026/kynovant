@@ -16,6 +16,13 @@ import type { MetadataRoute } from "next";
 // than bouncing out to a normal browser tab on internal navigation.
 export default function manifest(): MetadataRoute.Manifest {
   return {
+    // Stable app identity, pinned independently of start_url. Without an
+    // explicit id the browser derives identity from start_url — so the
+    // earlier start_url change ("/" -> "/app") already moved it once.
+    // Pinning it to the current value ("/app") means any FUTURE start_url
+    // change will not orphan already-installed instances. Resolved
+    // relative to the manifest origin; never fetched — an identity key only.
+    id: "/app",
     name: "Kynovant",
     short_name: "Kynovant",
     description:

@@ -1,30 +1,45 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────
-// Shared PWA install state — event wiring extracted from
-// components/pwa/InstallKynovant.tsx so a second consumer
-// (components/pwa/PortalInstallOnboarding.tsx) can react to the same
-// beforeinstallprompt/appinstalled lifecycle without a second, divergent
-// copy of this logic. The pure decision functions this hook is built on
-// (resolveInstallSurface, isMobileDevice, ...) still live in
-// lib/pwa/install.ts and stay directly unit-testable there; this file is
-// only the stateful glue around them.
+// Shared PWA install state.
 //
-// SSR-safe by construction: every window/localStorage access happens
-// inside useEffect or an event-driven callback, never during render —
-// `mounted` starts false and only flips true after the mount effect
-// runs, so server-rendered output and the pre-effect client render both
-// render nothing, avoiding a hydration mismatch (same pattern
-// InstallKynovant.tsx already used before this extraction).
+// The browser event lifecycle (beforeinstallprompt / appinstalled /
+// display-mode: standalone) is NOT owned here any more — it lives in a
+// module-level singleton, lib/pwa/install-store.ts, that is started once
+// at the persistent root boundary (components/pwa/PwaInstallBoot.tsx in
+// app/layout.tsx) and never torn down. That is the fix for "the install
+// affordance disappears after Portal navigation": beforeinstallprompt
+// fires once per page load and is not re-fired on SPA navigation, so a
+// component that captured it in its own useState lost it forever on
+// remount. The singleton holds it for the lifetime of the tab, so every
+// consumer — however many times it remounts — sees the same live event.
+//
+// This hook is now a thin per-consumer view over that store, plus the
+// two pieces of state that ARE genuinely per-consumer:
+//   - `dismissed`: device-local, per-scope (three localStorage keys),
+//     exactly as before this refactor.
+//   - `isMobile`: a cheap UA/touch check, read once on mount.
+//
+// SSR-safe by construction: `mounted` starts false and only flips true
+// after the mount effect runs; the store's snapshot uses a stable server
+// value; every window/localStorage access is inside an effect or an
+// event-driven callback.
 // ─────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { isMobileDevice, resolveInstallSurface, type InstallSurface } from "./install";
+import {
+  consumeNativePrompt,
+  ensureInstallStoreStarted,
+  getInstallStoreServerVersion,
+  getInstallStoreVersion,
+  hasNativePrompt,
+  isInstalledSignal,
+  subscribeInstallStore,
+} from "./install-store";
 
-export interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
-}
+// Re-exported for backwards compatibility — the type now lives in the store.
+export type { BeforeInstallPromptEvent } from "./install-store";
 
 // Scoped dismissal storage — HQ and the client Portal each get their own
 // key, distinct from the public marketing site's ("default", unscoped —
@@ -63,7 +78,7 @@ function writeDismissed(scope: InstallScope, value: boolean) {
   }
 }
 
-function getEnvironment(hasNativePrompt: boolean) {
+function getEnvironment(nativePromptHeld: boolean) {
   const standaloneQuery = window.matchMedia?.("(display-mode: standalone)");
   return {
     userAgent: window.navigator.userAgent,
@@ -71,7 +86,7 @@ function getEnvironment(hasNativePrompt: boolean) {
     maxTouchPoints: window.navigator.maxTouchPoints,
     displayModeStandalone: Boolean(standaloneQuery?.matches),
     navigatorStandalone: Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone),
-    hasNativePrompt,
+    hasNativePrompt: nativePromptHeld,
   };
 }
 
@@ -86,96 +101,63 @@ export interface UsePwaInstallStateResult {
    * "ios_instructions" so the caller can show InstallInstructions
    * itself — this hook never renders UI. Never throws: a stale/expired
    * beforeinstallprompt event rejecting prompt()/userChoice resolves to
-   * "unavailable" instead of an unhandled rejection. */
+   * "unavailable" instead of an unhandled rejection (handled in the
+   * store's consumeNativePrompt). */
   install: () => Promise<InstallOutcome>;
   dismiss: () => void;
 }
 
 export function usePwaInstallState(scope: InstallScope = "default"): UsePwaInstallStateResult {
+  // Subscribes to the singleton browser-event store and re-renders on any
+  // change (prompt captured, appinstalled, display-mode flip). The server
+  // snapshot is a stable constant, so SSR and the pre-mount client render
+  // agree.
+  const storeVersion = useSyncExternalStore(
+    subscribeInstallStore,
+    getInstallStoreVersion,
+    getInstallStoreServerVersion,
+  );
+
   const [mounted, setMounted] = useState(false);
-  const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
-  const [surface, setSurface] = useState<InstallSurface>("unsupported");
   const [dismissed, setDismissed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    function update(nextPrompt: BeforeInstallPromptEvent | null = null) {
-      setSurface(resolveInstallSurface(getEnvironment(Boolean(nextPrompt))));
-    }
-
-    function onBeforeInstallPrompt(event: Event) {
-      event.preventDefault();
-      const installEvent = event as BeforeInstallPromptEvent;
-      setPromptEvent(installEvent);
-      // Deliberately does NOT touch dismissal state. Chromium re-fires
-      // beforeinstallprompt on essentially every qualifying page load —
-      // not just once ever, and not only after an uninstall — so this
-      // handler runs on nearly every navigation while the app isn't
-      // installed. The previous version called
-      // set the dismissed flag back to false here unconditionally,
-      // silently wiping out an explicit prior dismissal on every single
-      // navigation — the exact root cause of "Install Kynovant reappears
-      // after every route change" in Coach HQ. Dismissal must only ever
-      // change in response to a real user action (dismiss()/install()
-      // below), never as a side effect of the browser re-offering the
-      // same install opportunity.
-      update(installEvent);
-    }
-
-    function onAppInstalled() {
-      setPromptEvent(null);
-      setSurface("installed");
-    }
-
-    const initTimer = window.setTimeout(() => {
-      setMounted(true);
-      setDismissed(readDismissed(scope));
-      setIsMobile(
-        isMobileDevice({
-          userAgent: window.navigator.userAgent,
-          platform: window.navigator.platform,
-          maxTouchPoints: window.navigator.maxTouchPoints,
-        }),
-      );
-      update(null);
-    }, 0);
-
-    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
-    window.addEventListener("appinstalled", onAppInstalled);
-
-    const standaloneQuery = window.matchMedia?.("(display-mode: standalone)");
-    const onStandaloneChange = () => update(null);
-    standaloneQuery?.addEventListener?.("change", onStandaloneChange);
-
-    return () => {
-      window.clearTimeout(initTimer);
-      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
-      window.removeEventListener("appinstalled", onAppInstalled);
-      standaloneQuery?.removeEventListener?.("change", onStandaloneChange);
-    };
+    // Belt-and-suspenders: PwaInstallBoot (app/layout.tsx) already starts
+    // the store, and useSyncExternalStore's subscribe starts it too; this
+    // just guarantees it for any consumer that somehow renders first.
+    ensureInstallStoreStarted();
+    setMounted(true);
+    setDismissed(readDismissed(scope));
+    setIsMobile(
+      isMobileDevice({
+        userAgent: window.navigator.userAgent,
+        platform: window.navigator.platform,
+        maxTouchPoints: window.navigator.maxTouchPoints,
+      }),
+    );
   }, [scope]);
+
+  const surface: InstallSurface = useMemo(() => {
+    if (!mounted) return "unsupported";
+    // An appinstalled event this session wins even before display-mode
+    // has flipped to standalone (the old hook special-cased this too).
+    if (isInstalledSignal()) return "installed";
+    return resolveInstallSurface(getEnvironment(hasNativePrompt()));
+    // storeVersion is the dependency that makes this recompute when the
+    // store changes; mounted gates the first real read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, storeVersion]);
 
   const install = useCallback(async (): Promise<InstallOutcome> => {
     if (surface === "ios_instructions") return "ios_instructions";
-    if (!promptEvent) return "unavailable";
-    try {
-      await promptEvent.prompt();
-      const choice = await promptEvent.userChoice;
-      setPromptEvent(null);
-      if (choice.outcome === "dismissed") {
-        setDismissed(true);
-        writeDismissed(scope, true);
-      }
-      setSurface(resolveInstallSurface(getEnvironment(false)));
-      return choice.outcome;
-    } catch {
-      // A stale/expired prompt event (already consumed, or the browser
-      // revoked it) can reject prompt()/userChoice — fail closed rather
-      // than let it surface as an unhandled rejection.
-      setPromptEvent(null);
-      return "unavailable";
+    const outcome = await consumeNativePrompt();
+    if (outcome === "dismissed") {
+      setDismissed(true);
+      writeDismissed(scope, true);
     }
-  }, [surface, promptEvent, scope]);
+    return outcome;
+  }, [surface, scope]);
 
   const dismiss = useCallback(() => {
     setDismissed(true);

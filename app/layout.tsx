@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
 import { Barlow_Condensed } from "next/font/google";
 import "./globals.css";
+import PwaInstallBoot from "@/components/pwa/PwaInstallBoot";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -64,6 +65,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${geist.variable} ${barlowCondensed.variable} antialiased`}>
+        <PwaInstallBoot />
         {children}
       </body>
     </html>

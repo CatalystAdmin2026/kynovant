@@ -29,7 +29,16 @@ export default function InstallKynovant({ variant = "nav", className = "", scope
     return "Install Kynovant";
   }, [surface]);
 
-  if (!mounted || surface === "installed" || surface === "unsupported" || (variant === "card" && dismissed)) {
+  // ios_open_in_safari / android_manual: no actionable control exists —
+  // just an accurate, browser-neutral hint. Shown only in the always-
+  // available affordances (nav/menu), never as the prominent "card"
+  // (which stays exactly as before: actionable surfaces only).
+  const isHint = surface === "ios_open_in_safari" || surface === "android_manual";
+
+  if (!mounted || surface === "installed" || surface === "unsupported") {
+    return null;
+  }
+  if (variant === "card" && (dismissed || isHint)) {
     return null;
   }
 
@@ -41,6 +50,25 @@ export default function InstallKynovant({ variant = "nav", className = "", scope
   function handleDismiss() {
     setInstructionsOpen(false);
     dismiss();
+  }
+
+  if (isHint) {
+    const hintText =
+      surface === "ios_open_in_safari"
+        ? "Open in Safari, then Share → Add to Home Screen."
+        : "Open your browser menu, then “Add to Home screen.”";
+    return (
+      <p
+        className={
+          variant === "menu"
+            ? `flex w-full items-center gap-2 px-1 py-2 text-xs leading-relaxed text-white/40 ${className}`
+            : `inline-flex items-center gap-2 text-xs leading-relaxed text-white/40 ${className}`
+        }
+      >
+        <Download size={13} className="shrink-0 text-white/25" aria-hidden />
+        {hintText}
+      </p>
+    );
   }
 
   if (variant === "card") {
