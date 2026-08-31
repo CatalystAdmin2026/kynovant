@@ -3,6 +3,7 @@ import { Geist } from "next/font/google";
 import { Barlow_Condensed } from "next/font/google";
 import "./globals.css";
 import PwaInstallBoot from "@/components/pwa/PwaInstallBoot";
+import ServiceWorkerBoot from "@/components/pwa/ServiceWorkerBoot";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -66,6 +67,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${geist.variable} ${barlowCondensed.variable} antialiased`}>
         <PwaInstallBoot />
+        <ServiceWorkerBoot />
         {children}
       </body>
     </html>
