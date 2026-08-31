@@ -52,14 +52,19 @@ function toInitials(name: string): string {
 export default function PortalMobileHeader({ clientName }: Props) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
   const firstItemRef = useRef<HTMLAnchorElement>(null);
   const panelId = useId();
 
   const close = useCallback(() => setOpen(false), []);
 
-  // Escape closes and returns focus to the trigger; outside pointer
-  // interaction closes. Both only while the popover is open.
+  // Escape closes and returns focus to the trigger. Outside-tap
+  // dismissal is owned by the full-viewport backdrop element below (its
+  // onClick), NOT a document-level pointerdown listener: a pointerdown
+  // handler fires before `click`, so calling setOpen(false) there
+  // unmounts the backdrop before the pointer's own click is dispatched,
+  // and that click can then land on — and activate — whatever Portal
+  // content now sits under the pointer. Letting the backdrop receive the
+  // click keeps the whole interaction absorbed by the backdrop itself.
   useEffect(() => {
     if (!open) return;
 
@@ -70,19 +75,9 @@ export default function PortalMobileHeader({ clientName }: Props) {
       }
     }
 
-    function onPointerDown(event: PointerEvent) {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (panelRef.current?.contains(target)) return;
-      if (triggerRef.current?.contains(target)) return;
-      setOpen(false);
-    }
-
     document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("pointerdown", onPointerDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("pointerdown", onPointerDown);
     };
   }, [open]);
 
@@ -134,16 +129,18 @@ export default function PortalMobileHeader({ clientName }: Props) {
 
       {open && (
         <>
-          {/* Non-visual outside-click catcher below the panel. Pointer
-              handling above already closes on outside interaction; this
-              keeps the tap from also hitting Portal content underneath. */}
+          {/* Full-viewport backdrop — sits above all Portal content (the
+              header is a z-50 stacking context; this is z-40 within it,
+              the panel z-50 above it). It OWNS outside-tap dismissal: its
+              own onClick fires while it is still mounted and receives the
+              click, so the same physical tap can never fall through to —
+              or activate — Portal content underneath. */}
           <div
             className="fixed inset-0 z-40 lg:hidden"
             aria-hidden
             onClick={close}
           />
           <div
-            ref={panelRef}
             id={panelId}
             className="fixed right-3 top-[calc(3.25rem+env(safe-area-inset-top))] z-50 w-[calc(100vw-1.5rem)] max-w-xs rounded-xl border border-white/[0.08] bg-[#0b0c0d] p-2 shadow-2xl lg:hidden"
           >

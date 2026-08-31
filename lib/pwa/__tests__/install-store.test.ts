@@ -58,6 +58,27 @@ function makePromptEvent(outcome: "accepted" | "dismissed" | "reject") {
   return ev;
 }
 
+// A prompt event whose prompt() call is observable and does NOT settle
+// until the test releases it — the only way to interleave two consume
+// calls while the first is still awaiting.
+function makeDeferredPromptEvent() {
+  let releasePrompt!: () => void;
+  const promptSettled = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  const state = { promptCalls: 0 };
+  const ev = new Event("beforeinstallprompt") as Event & {
+    prompt: () => Promise<void>;
+    userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+  };
+  ev.prompt = () => {
+    state.promptCalls += 1;
+    return promptSettled;
+  };
+  ev.userChoice = promptSettled.then(() => ({ outcome: "accepted" as const, platform: "web" }));
+  return { ev, releasePrompt, state };
+}
+
 let fakeWindow: FakeWindow;
 
 beforeEach(() => {
@@ -191,6 +212,93 @@ describe("consumeNativePrompt — single-use, gesture-driven, never throws", () 
     fakeWindow.dispatchEvent(makePromptEvent("reject"));
     await expect(consumeNativePrompt()).resolves.toBe("unavailable");
     expect(hasNativePrompt()).toBe(false);
+  });
+});
+
+describe("consumeNativePrompt — a captured event is a single-CONSUMER resource (P2 regression)", () => {
+  beforeEach(() => {
+    ensureInstallStoreStarted();
+  });
+
+  it("two concurrent consume calls invoke the browser prompt exactly once; the second gets 'unavailable'", async () => {
+    const { ev, releasePrompt, state } = makeDeferredPromptEvent();
+    fakeWindow.dispatchEvent(ev);
+    expect(hasNativePrompt()).toBe(true);
+
+    // Both start before the first prompt() settles.
+    const callA = consumeNativePrompt();
+    const callB = consumeNativePrompt();
+
+    // Let microtasks run up to (but not past) the pending prompt().
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // BEFORE releasing the first prompt: exactly one prompt() invocation,
+    // and the event is already reserved (no longer advertised).
+    expect(state.promptCalls).toBe(1);
+    expect(hasNativePrompt()).toBe(false);
+
+    releasePrompt();
+    const [outcomeA, outcomeB] = await Promise.all([callA, callB]);
+
+    // First caller consumed it; second caller never could.
+    expect(outcomeA).toBe("accepted");
+    expect(outcomeB).toBe("unavailable");
+    // Still exactly one invocation after everything settles.
+    expect(state.promptCalls).toBe(1);
+  });
+
+  it("the reservation is per captured event — a NEW beforeinstallprompt is still consumable exactly once", async () => {
+    // Event A: concurrent consume, one prompt call.
+    const a = makeDeferredPromptEvent();
+    fakeWindow.dispatchEvent(a.ev);
+    const a1 = consumeNativePrompt();
+    const a2 = consumeNativePrompt();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(a.state.promptCalls).toBe(1);
+    a.releasePrompt();
+    await Promise.all([a1, a2]);
+    expect(hasNativePrompt()).toBe(false);
+
+    // Event B fires later — the store is NOT permanently locked.
+    const b = makeDeferredPromptEvent();
+    fakeWindow.dispatchEvent(b.ev);
+    expect(hasNativePrompt()).toBe(true);
+
+    const b1 = consumeNativePrompt();
+    const b2 = consumeNativePrompt();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(b.state.promptCalls).toBe(1);
+    b.releasePrompt();
+    const [rb1, rb2] = await Promise.all([b1, b2]);
+    expect(rb1).toBe("accepted");
+    expect(rb2).toBe("unavailable");
+    expect(b.state.promptCalls).toBe(1);
+  });
+
+  it("subscribers are notified synchronously on reservation, so UI stops advertising the event", async () => {
+    const listener = vi.fn();
+    subscribeInstallStore(listener);
+    const { ev, releasePrompt } = makeDeferredPromptEvent();
+    fakeWindow.dispatchEvent(ev); // capture -> notify #1
+    listener.mockClear();
+
+    const call = consumeNativePrompt(); // reserve -> notify #2, before any await settles
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(hasNativePrompt()).toBe(false);
+
+    releasePrompt();
+    await call;
+  });
+
+  it("a rejecting event, once reserved, never becomes actionable again", async () => {
+    fakeWindow.dispatchEvent(makePromptEvent("reject"));
+    await expect(consumeNativePrompt()).resolves.toBe("unavailable");
+    expect(hasNativePrompt()).toBe(false);
+    // Retry after rejection: still nothing to consume.
+    await expect(consumeNativePrompt()).resolves.toBe("unavailable");
   });
 });
 

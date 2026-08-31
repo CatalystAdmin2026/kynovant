@@ -118,24 +118,42 @@ export function isInstalledSignal(): boolean {
 
 /**
  * Fire the native install prompt from a user gesture and report the
- * outcome. A beforeinstallprompt event is single-use: it is cleared
- * whether the user accepts or dismisses, and whether prompt()/userChoice
- * resolves or rejects (a stale/revoked event can reject — fail closed to
- * "unavailable" rather than surface an unhandled rejection). Never
- * invoked automatically; there is no silent-install path.
+ * outcome. A captured beforeinstallprompt event is a single-CONSUMER
+ * resource: exactly one consumeNativePrompt() call may ever drive the
+ * browser prompt for a given captured event.
+ *
+ * The reservation is SYNCHRONOUS and happens before the first await:
+ * the caller reads promptEvent, and if it is non-null, immediately nulls
+ * it and notifies subscribers. Any second caller — a double tap, a
+ * second mounted InstallKynovant, a directly concurrent call, or React
+ * interleaving — then observes promptEvent === null and returns
+ * "unavailable" without ever driving the browser prompt. This is the
+ * correctness boundary; UI button disabling is not relied on.
+ *
+ * The reservation is per captured event, not a permanent lock: a NEW
+ * beforeinstallprompt event later re-populates promptEvent and is
+ * consumable normally.
+ *
+ * A stale/revoked event can still reject once driven — fail closed to
+ * "unavailable" rather than surface an unhandled rejection. The event is
+ * already reserved (nulled) by then, so it never becomes actionable
+ * again. Never invoked automatically; there is no silent-install path.
  */
 export async function consumeNativePrompt(): Promise<PromptConsumeOutcome> {
   const event = promptEvent;
   if (!event) return "unavailable";
+
+  // Reserve synchronously — before any await/yield — so a concurrent
+  // caller cannot read the same event. Notify subscribers immediately so
+  // the UI stops advertising a prompt that is already being consumed.
+  promptEvent = null;
+  emit();
+
   try {
     await event.prompt();
     const choice = await event.userChoice;
-    promptEvent = null;
-    emit();
     return choice.outcome;
   } catch {
-    promptEvent = null;
-    emit();
     return "unavailable";
   }
 }

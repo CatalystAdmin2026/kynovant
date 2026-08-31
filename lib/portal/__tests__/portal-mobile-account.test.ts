@@ -120,9 +120,14 @@ describe("PortalMobileHeader — accessibility & mobile viewport behaviour", () 
     expect(header).toContain("triggerRef.current?.focus()");
   });
 
-  it("closes on outside pointer interaction", () => {
-    expect(header).toContain('document.addEventListener("pointerdown", onPointerDown)');
-    expect(header).toContain("onClick={close}"); // backdrop catcher
+  it("closes on outside tap via the full-viewport backdrop, NOT a document pointerdown listener", () => {
+    // A document-level pointerdown handler fires before `click` and would
+    // unmount the backdrop before the pointer's own click dispatched,
+    // letting that click land on underlying Portal content. The backdrop
+    // owns dismissal so the tap is absorbed by the backdrop itself.
+    expect(header).not.toMatch(/addEventListener\(\s*["']pointerdown["']/);
+    expect(header).not.toMatch(/addEventListener\(\s*["']mousedown["']/);
+    expect(header).toMatch(/className="fixed inset-0 z-40 lg:hidden"[\s\S]*?onClick=\{close\}/);
   });
 
   it("moves focus into the panel when it opens", () => {
