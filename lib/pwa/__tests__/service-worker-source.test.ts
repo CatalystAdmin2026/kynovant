@@ -92,8 +92,18 @@ describe("public/sw-kill.js — the emergency tombstone", () => {
   it("navigates controlled window clients once to shed the dead controller (no loop)", () => {
     expect(SW_KILL).toMatch(/self\.clients\s*\.\s*matchAll\(\s*\{\s*type:\s*["']window["']\s*\}\s*\)/);
     expect(SW_KILL).toMatch(/\.navigate\(\s*[a-zA-Z]+\.url\s*\)/);
-    // one navigate call, inside a bounded for-of — no setInterval / recursion
+    // exactly one navigate CALL SITE (prose may mention it), no timers
+    expect((SW_KILL.match(/\.navigate\(\s*client\.url\s*\)/g) ?? []).length).toBe(1);
     expect(SW_KILL).not.toMatch(/setInterval|setTimeout/);
+  });
+
+  it("P3-1: contains navigation rejections via Promise.allSettled (no unhandled rejection, no unawaited navigate)", () => {
+    expect(SW_KILL).toMatch(/await\s+Promise\.allSettled\(/);
+    // no bare unawaited `client.navigate(...)` statement
+    expect(SW_KILL).not.toMatch(/^\s*[a-zA-Z]+\.navigate\(/m);
+    // navigation containment must not swallow the cleanup: unregister
+    // still runs unconditionally before the navigate step
+    expect(SW_KILL.indexOf("unregister")).toBeLessThan(SW_KILL.indexOf("allSettled"));
   });
 
   it("has its own version marker distinct from the real worker", () => {

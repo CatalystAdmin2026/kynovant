@@ -122,6 +122,62 @@ describe("Vercel Preview (*.vercel.app)", () => {
   });
 });
 
+describe("trailing DNS dot — the fully-qualified form classifies identically", () => {
+  const previewDot = "kynovant-rebrand-app-git-feature-x-catalystadmin2026.vercel.app.";
+
+  it("www.kynovant.com. (secure, supported) → register", () => {
+    expect(decide({ hostname: "www.kynovant.com." })).toBe("register");
+  });
+
+  it("kynovant.com. → register", () => {
+    expect(decide({ hostname: "kynovant.com." })).toBe("register");
+  });
+
+  it("WWW.KYNOVANT.COM. and www.kynovant.com.:443 (dot + casing + port) → register", () => {
+    expect(decide({ hostname: "WWW.KYNOVANT.COM." })).toBe("register");
+    expect(decide({ hostname: "www.kynovant.com.:443" })).toBe("register");
+  });
+
+  it("*.vercel.app. + ?__sw=1 (secure, supported) → register", () => {
+    expect(decide({ hostname: previewDot, search: "?__sw=1" })).toBe("register");
+  });
+
+  it("*.vercel.app. WITHOUT ?__sw=1 → noop", () => {
+    expect(decide({ hostname: previewDot })).toBe("noop");
+  });
+
+  it("keptperformance.com. → noop", () => {
+    expect(decide({ hostname: "keptperformance.com." })).toBe("noop");
+  });
+
+  it("catalystcoachingelite.com. → noop", () => {
+    expect(decide({ hostname: "catalystcoachingelite.com." })).toBe("noop");
+  });
+
+  it("localhost. → noop (even with ?__sw=1)", () => {
+    expect(decide({ hostname: "localhost." })).toBe("noop");
+    expect(decide({ hostname: "localhost.", search: "?__sw=1" })).toBe("noop");
+  });
+
+  it("evil.example. → noop", () => {
+    expect(decide({ hostname: "evil.example.", search: "?__sw=1" })).toBe("noop");
+  });
+
+  it("the dot does NOT weaken lookalike rejection", () => {
+    expect(decide({ hostname: "evilvercel.app", search: "?__sw=1" })).toBe("noop");
+    expect(decide({ hostname: "evilvercel.app.", search: "?__sw=1" })).toBe("noop");
+    expect(decide({ hostname: "vercel.app.evil.com", search: "?__sw=1" })).toBe("noop");
+    expect(decide({ hostname: "vercel.app.evil.com.", search: "?__sw=1" })).toBe("noop");
+    expect(decide({ hostname: "foo.vercel.app.evil.com", search: "?__sw=1" })).toBe("noop");
+    expect(decide({ hostname: "foo.vercel.app.evil.com.", search: "?__sw=1" })).toBe("noop");
+  });
+
+  it("a doubled trailing dot is not FQDN-valid and is still rejected", () => {
+    // Only a SINGLE trailing dot is normalized; "..": still unrecognized.
+    expect(decide({ hostname: "www.kynovant.com.." })).toBe("noop");
+  });
+});
+
 describe("capability gates", () => {
   it("serviceWorker unsupported → noop, even on a production host", () => {
     expect(decide({ serviceWorkerSupported: false })).toBe("noop");

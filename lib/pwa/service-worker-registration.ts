@@ -55,12 +55,20 @@ export interface ServiceWorkerEnvironment {
 const PREVIEW_HOST_SUFFIX = ".vercel.app";
 const PREVIEW_OPT_IN_PARAM = "__sw";
 
+/**
+ * Lower-case, strip any explicit :port, and strip a single trailing DNS
+ * dot ("www.kynovant.com." is the valid fully-qualified form of
+ * "www.kynovant.com" and must classify identically). Does NOT broaden
+ * acceptance: a lookalike such as "vercel.app.evil.com." still fails the
+ * `.vercel.app` suffix check after the dot is removed.
+ */
 function normalizeHost(hostname: string): string {
-  return hostname.toLowerCase().split(":")[0];
+  return hostname.toLowerCase().split(":")[0].replace(/\.$/, "");
 }
 
-function isVercelPreviewHost(hostname: string): boolean {
-  return normalizeHost(hostname).endsWith(PREVIEW_HOST_SUFFIX);
+/** `host` is expected to already be normalized (see normalizeHost). */
+function isVercelPreviewHost(host: string): boolean {
+  return host.endsWith(PREVIEW_HOST_SUFFIX);
 }
 
 function hasPreviewOptIn(search: string): boolean {
@@ -82,8 +90,9 @@ function hasPreviewOptIn(search: string): boolean {
  *     browser that can't run a worker has nothing to register OR clean
  *     up.
  *  3. Host classification via the repo's existing domain-routing
- *     primitive: Kynovant production hosts register; Kept/Catalyst
- *     hosts never do.
+ *     primitive, on a normalized hostname (lower-case, no :port, no
+ *     trailing DNS dot): Kynovant production hosts register; Kept/
+ *     Catalyst hosts never do.
  *  4. Unrecognized hosts (localhost, 127.0.0.1, *.vercel.app previews)
  *     are noop — EXCEPT an isolated *.vercel.app preview origin may opt
  *     in via ?__sw=1. localhost NEVER registers, even with ?__sw=1.
@@ -104,11 +113,15 @@ export function resolveServiceWorkerRegistrationDecision(
   if (!env.serviceWorkerSupported) return "noop";
   if (!env.isSecureContext) return "noop";
 
-  const brand = hostBrand(env.hostname);
+  // Normalize ONCE, before any classification, so hostBrand() and the
+  // preview check both see the same canonical hostname.
+  const hostname = normalizeHost(env.hostname);
+
+  const brand = hostBrand(hostname);
   if (brand === "kynovant") return "register";
   if (brand === "catalyst") return "noop";
 
-  if (isVercelPreviewHost(env.hostname) && hasPreviewOptIn(env.search)) {
+  if (isVercelPreviewHost(hostname) && hasPreviewOptIn(env.search)) {
     return "register";
   }
 

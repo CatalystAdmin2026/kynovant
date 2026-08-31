@@ -18,7 +18,9 @@
  *             -> unregister this registration
  *             -> navigate each controlled window client ONCE so it
  *                sheds the now-dead controller. Bounded: one navigate
- *                per client, no re-arm, no loop.
+ *                per client via Promise.allSettled, no re-arm, no loop,
+ *                and a single client.navigate() rejection can never
+ *                become an unhandled rejection or block the others.
  *
  * Rollback is NOT "delete /sw.js": a 404 on the worker URL leaves
  * existing clients on their last successfully installed worker
@@ -43,10 +45,13 @@ self.addEventListener("activate", (event) => {
       const windowClients = await self.clients
         .matchAll({ type: "window" })
         .catch(() => []);
-      for (const client of windowClients) {
-        // One navigate per client — sheds the dead controller. No loop.
-        client.navigate(client.url);
-      }
+      // One navigate per client — sheds the dead controller. allSettled
+      // so a single client.navigate() rejection is contained locally,
+      // never becomes an unhandled rejection, and never prevents the
+      // other clients from being navigated. No retry, no timer, no loop.
+      await Promise.allSettled(
+        windowClients.map((client) => client.navigate(client.url)),
+      );
 
       console.info("[kynovant-sw] tombstone activated", SW_VERSION);
     })(),
