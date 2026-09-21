@@ -90,7 +90,9 @@ import { generateObject, NoObjectGeneratedError } from "ai";
 import type { z } from "zod";
 import {
   MuscleGroupSchema,
+  MovementPatternSchema,
   SHELL_MAX_TARGET_MUSCLE_GROUPS,
+  SHELL_MAX_FINISHER_MUSCLE_GROUPS,
   ProgramShellSchema,
   ModelWeekDraftSchema,
   ModelDayDraftSchema,
@@ -558,6 +560,35 @@ export function repairShellOutput(raw: unknown, notes: string[]): unknown {
           notes.push(`days[${i}].targetMuscleGroups:canonicalized`);
         }
       }
+    }
+    // Finisher requirements: same "exact canonical value or absent" rule
+    // for their optional structured hints. Only the hints are ever
+    // removed — description and exerciseCount (the coach's actual
+    // requirement) are never touched.
+    if (Array.isArray(day.finishers)) {
+      day.finishers = day.finishers.map((rawFinisher: unknown, j: number) => {
+        if (!rawFinisher || typeof rawFinisher !== "object" || Array.isArray(rawFinisher)) return rawFinisher;
+        const finisher = { ...(rawFinisher as Record<string, unknown>) };
+        if (Array.isArray(finisher.targetMuscleGroups)) {
+          const canonical = (finisher.targetMuscleGroups as unknown[]).map(canonicalizeMuscleGroup);
+          const deduped = [...new Set(canonical.filter((c): c is string => c !== null))];
+          if (canonical.some((c) => c === null) || deduped.length === 0 || deduped.length > SHELL_MAX_FINISHER_MUSCLE_GROUPS) {
+            delete finisher.targetMuscleGroups;
+            notes.push(`days[${i}].finishers[${j}].targetMuscleGroups:removed`);
+          } else if (
+            deduped.length !== finisher.targetMuscleGroups.length ||
+            deduped.some((g, k) => g !== (finisher.targetMuscleGroups as unknown[])[k])
+          ) {
+            finisher.targetMuscleGroups = deduped;
+            notes.push(`days[${i}].finishers[${j}].targetMuscleGroups:canonicalized`);
+          }
+        }
+        if (finisher.movementPattern !== undefined && !MovementPatternSchema.safeParse(finisher.movementPattern).success) {
+          delete finisher.movementPattern;
+          notes.push(`days[${i}].finishers[${j}].movementPattern:removed_invalid_value`);
+        }
+        return finisher;
+      });
     }
     return day;
   });

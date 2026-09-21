@@ -29,6 +29,11 @@ import type {
 } from "./contracts";
 import {
   MuscleGroupSchema,
+  MovementPatternSchema,
+  SHELL_MAX_FINISHERS_PER_DAY,
+  SHELL_MAX_FINISHER_EXERCISES,
+  SHELL_MAX_FINISHER_MUSCLE_GROUPS,
+  SHELL_MAX_FINISHER_DESCRIPTION_LENGTH,
   SHELL_MAX_TARGET_MUSCLE_GROUPS,
   SHELL_MAX_PHASES,
   SHELL_MAX_LABEL_LENGTH,
@@ -185,6 +190,31 @@ export interface DayBlueprintIntent {
   siblingAllocationSummary: string | null;
 }
 
+// Coach-stated requirements for work AFTER the day's primary work (see
+// contracts.ts's ProgramShellFinisherSchema). Empty for a day without any
+// — such a day's prompt is unchanged.
+export function formatFinishersSection(shellDay: ProgramShellDay): string[] {
+  const finishers = shellDay.finishers ?? [];
+  if (finishers.length === 0) return [];
+  const total = finishers.reduce((n, f) => n + f.exerciseCount, 0);
+  const lines = finishers.map((f, i) => {
+    const criteria = [
+      f.targetMuscleGroups?.length ? `muscles: ${f.targetMuscleGroups.join(", ")}` : null,
+      f.movementPattern ? `movement pattern: ${f.movementPattern}` : null,
+    ].filter(Boolean);
+    return `${i + 1}. EXACTLY ${f.exerciseCount} exercise${f.exerciseCount === 1 ? "" : "s"} — "${f.description}"${criteria.length ? ` (${criteria.join("; ")})` : ""}`;
+  });
+  return [
+    "## Required Finishing Work (the coach's explicit instruction for this day)",
+    "The coach asked for the following to come AFTER this day's primary work:",
+    ...lines,
+    `- Primary work first: build the day's primary work as the brief describes. Any per-day exercise count in the brief or coach instructions (for example "6-8 exercises per day") applies to the PRIMARY work only. The finishing exercises above are ADDITIONAL — ${total} more exercise${total === 1 ? "" : "s"} on top of the primary count, not part of it.`,
+    "- Placement: put the finishing exercises in their own final section (sectionType \"finisher\") with the highest orderIndex of the day's training sections, in the order listed above. Only a cooldown section may come after them. Nothing from the primary work may come after them.",
+    "- Select them from the catalog like every other exercise.",
+    "",
+  ];
+}
+
 export function buildDayGenerationPrompt(
   brief: ProgramGenerationBrief,
   clientContext: ClientContextSummary | null,
@@ -219,6 +249,7 @@ export function buildDayGenerationPrompt(
     "## This Day",
     `Week ${weekNumber} of ${shell.totalWeeks} — dayOfWeek ${shellDay.dayOfWeek}, label "${shellDay.label}"${shellDay.focus ? `, focus: ${shellDay.focus}` : ""}. Your output's dayOfWeek and label MUST match these exactly.`,
     formatPhase(phase, weekNumber),
+    ...formatFinishersSection(shellDay),
     // [Expanded-week labeling remediation] Name the workout (the
     // "name" field on your output's workout object) after its training
     // focus/content only — e.g. "Glutes & Lower Body", "Upper Push",
@@ -390,6 +421,7 @@ export function buildShellGenerationPrompt(
     "- dayOfWeek must be an integer from 0 to 6 inclusive — 7 is never valid — and every day must use a different dayOfWeek value. A Monday-first week that trains all seven days is exactly 1, 2, 3, 4, 5, 6, 0 (Sunday last, as 0). If the brief names specific weekdays, use exactly those days.",
     `- Each day's label is at most ${SHELL_MAX_LABEL_LENGTH} characters. Each day's optional focus (at most ${SHELL_MAX_FOCUS_LENGTH} characters) should capture what the coach asked for that day in their own terms (e.g. "Upper body and arms"). If the brief's freeform instructions describe the split day by day, follow that split exactly and reflect it in each day's label/focus.`,
     `- targetMuscleGroups (optional, per day) narrows which library exercises are offered for that day. Use at most ${SHELL_MAX_TARGET_MUSCLE_GROUPS} distinct values, each copied exactly from this list: ${MuscleGroupSchema.options.join(", ")}. Pick the groups that carry that day's main work. If a day is broader than ${SHELL_MAX_TARGET_MUSCLE_GROUPS} groups (for example "upper body", "upper body and arms", or "full body"), OMIT targetMuscleGroups for that day and describe the day in its label/focus instead — the application derives the exercise pool from that text. Never list more than ${SHELL_MAX_TARGET_MUSCLE_GROUPS}.`,
+    `- finishers (optional, per day) records work the coach EXPLICITLY asked to be done at the end of / after a day's primary work — e.g. "finish every day with 2 ab exercises", "end lower days with calves", "finish with a loaded carry". Add it only to the days the coach's instructions apply it to ("every day" means every day) and never invent one the coach did not ask for. Each entry: description (the coach's requirement in their own words, at most ${SHELL_MAX_FINISHER_DESCRIPTION_LENGTH} characters), exerciseCount (1-${SHELL_MAX_FINISHER_EXERCISES}: the number of exercises requested for it — these are IN ADDITION to the day's primary exercises, never part of a per-day primary count like "6-8 exercises"), and optionally targetMuscleGroups (at most ${SHELL_MAX_FINISHER_MUSCLE_GROUPS}, from the muscle list above) and/or movementPattern (one of: ${MovementPatternSchema.options.join(", ")}) that identify what kind of exercise it is. At most ${SHELL_MAX_FINISHERS_PER_DAY} finishers per day. A day's label/focus still describes its primary work; finishers do not replace it, and finisher muscle groups do NOT count toward that day's targetMuscleGroups limit.`,
     `- phases must divide the program into logical progression blocks (e.g. accumulation, intensification, a deload), at most ${SHELL_MAX_PHASES} phases. phaseNumber values must be unique (number them 1, 2, 3, … in order). Every phase needs weekStart <= weekEnd, both between 1 and totalWeeks. Phase week ranges must not overlap and together must cover every week from 1 to totalWeeks with no gaps. Mark deload/lighter weeks explicitly via isDeload. Each phase's progressionTarget should describe concretely what should increase or change across weeks in that phase (e.g. \"add 1 rep per set each week, then increase load\").`,
     "- globalConstraints should compactly restate any injury, exclusion, or equipment limitations from the brief above that every week's generation must continue to honor.",
     "Do not include any exercises, sets, reps, or workout content — that comes later, one week at a time.",

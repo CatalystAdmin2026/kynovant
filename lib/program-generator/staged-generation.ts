@@ -89,6 +89,7 @@ import { summarizeDayForPrompt, summarizeWeekSoFarForPrompt } from "./prompt";
 import { resolveProgramDraftExercises } from "./exercise-resolution";
 import { validateGeneratedDraft, catalogGapFindings, type ValidationFinding } from "./validation";
 import { validateWeekCrossDay } from "./week-cross-day-validation";
+import { validateDayFinishers } from "./day-requirements";
 import {
   buildExerciseCandidateSet,
   narrowCandidatesForDay,
@@ -1500,6 +1501,9 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     // uses at finalization — the SAME coach review/acknowledgement UI,
     // no new findings pipeline.
     crossDayFindings.push(...validateWeekCrossDay(assembly.week, params.brief, candidatesById));
+    // Explicit coach-stated finishing requirements (shell day
+    // `finishers`) — same warning pipeline, see day-requirements.ts.
+    crossDayFindings.push(...validateDayFinishers(assembly.week, shell, candidatesById));
 
     await saveGenerationWeek(params.draftId, weekNumber, { status: "completed", weekJson: assembly.week });
     allWeeks.set(weekNumber, assembly.week);

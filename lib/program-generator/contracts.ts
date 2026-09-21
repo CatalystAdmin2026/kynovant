@@ -57,6 +57,7 @@ import {
   setTechniqueEnum,
   substitutionPolicyEnum,
   muscleGroupEnum,
+  movementPatternEnum,
 } from "@/lib/db/schema-exercise";
 
 // ─────────────────────────────────────────────────────────────
@@ -69,6 +70,7 @@ export const WorkoutSectionTypeSchema = z.enum(workoutSectionTypeEnum.enumValues
 export const SetTechniqueSchema = z.enum(setTechniqueEnum.enumValues);
 export const SubstitutionPolicySchema = z.enum(substitutionPolicyEnum.enumValues);
 export const MuscleGroupSchema = z.enum(muscleGroupEnum.enumValues);
+export const MovementPatternSchema = z.enum(movementPatternEnum.enumValues);
 
 // Generation-input-only concepts — not real DB enums, never persisted as
 // enum columns anywhere. Fixed here (not free text) so the prompt/
@@ -355,6 +357,32 @@ export const SHELL_MAX_PHASES = 8;
 export const SHELL_MAX_LABEL_LENGTH = 100;
 export const SHELL_MAX_FOCUS_LENGTH = 200;
 
+// A per-day requirement the coach stated explicitly for work that goes
+// AFTER the day's primary work ("finish every day with 2 ab exercises",
+// "end lower days with calves", "finish with a loaded carry"). This is
+// the one general mechanism for such requirements — the model records the
+// coach's own words plus a machine-usable shape; nothing about abs (or any
+// other category) is special-cased in code.
+//   exerciseCount        — exactly how many exercises, IN ADDITION to the
+//                          primary work (never part of a "6-8 per day"
+//                          style primary count).
+//   targetMuscleGroups / movementPattern — optional structured criteria
+//                          used to guarantee the day's candidate pool
+//                          contains matching exercises and to verify the
+//                          result. Neither is required: a finisher with
+//                          only a description still reaches the prompt.
+export const SHELL_MAX_FINISHERS_PER_DAY = 3;
+export const SHELL_MAX_FINISHER_EXERCISES = 6;
+export const SHELL_MAX_FINISHER_MUSCLE_GROUPS = 3;
+export const SHELL_MAX_FINISHER_DESCRIPTION_LENGTH = 160;
+
+export const ProgramShellFinisherSchema = z.object({
+  description: z.string().min(1).max(SHELL_MAX_FINISHER_DESCRIPTION_LENGTH),
+  exerciseCount: z.number().int().min(1).max(SHELL_MAX_FINISHER_EXERCISES),
+  targetMuscleGroups: z.array(MuscleGroupSchema).max(SHELL_MAX_FINISHER_MUSCLE_GROUPS).optional(),
+  movementPattern: MovementPatternSchema.optional(),
+});
+
 export const ProgramShellDaySchema = z.object({
   dayOfWeek: z.number().int().min(0).max(6),
   label: z.string().min(1).max(SHELL_MAX_LABEL_LENGTH),
@@ -372,6 +400,9 @@ export const ProgramShellDaySchema = z.object({
   // narrowed candidate pool. A day broader than that (upper body, full
   // body) omits the field and narrowing infers from label/focus instead.
   targetMuscleGroups: z.array(MuscleGroupSchema).max(SHELL_MAX_TARGET_MUSCLE_GROUPS).optional(),
+  // Optional for backward compatibility — every already-saved shell omits
+  // it and behaves exactly as before.
+  finishers: z.array(ProgramShellFinisherSchema).max(SHELL_MAX_FINISHERS_PER_DAY).optional(),
 });
 
 export const ProgramShellPhaseSchema = z.object({
@@ -416,6 +447,7 @@ export const ProgramShellSchema = z.object({
   { message: "Every phase's week range must fall within totalWeeks.", path: ["phases"] },
 );
 
+export type ProgramShellFinisher = z.infer<typeof ProgramShellFinisherSchema>;
 export type ProgramShellDay = z.infer<typeof ProgramShellDaySchema>;
 export type ProgramShellPhase = z.infer<typeof ProgramShellPhaseSchema>;
 export type ProgramShell = z.infer<typeof ProgramShellSchema>;

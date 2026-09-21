@@ -43,6 +43,7 @@ import type {
   ModelProgramDraft,
   ModelPrescription,
   ProgramShellDay,
+  ProgramShellFinisher,
 } from "./contracts";
 
 // ─────────────────────────────────────────────────────────────
@@ -525,7 +526,60 @@ const MAX_CARDIO_CANDIDATES_DAY = 6;
 // a much larger allowance of exactly that category.
 const MAX_CANDIDATES_FOR_OWN_DAY_TYPE = 60;
 
+// Muscle groups a finisher requirement targets: its structured groups if
+// the shell gave any, else the same label/focus keyword inference the day
+// itself uses (applied to the finisher's own description) — reuse of the
+// existing mechanism, not a new keyword list.
+export function finisherMuscleGroups(finisher: ProgramShellFinisher): MuscleGroup[] {
+  if (finisher.targetMuscleGroups && finisher.targetMuscleGroups.length > 0) return finisher.targetMuscleGroups;
+  return inferMuscleGroupsFromDayText(finisher.description, undefined);
+}
+
+// True when the candidate satisfies the finisher's structured criteria
+// (primary muscle in its groups, OR the movement pattern). A finisher
+// with no derivable criteria matches nothing — it cannot be verified.
+export function candidateMatchesFinisher(candidate: ExerciseCandidate, finisher: ProgramShellFinisher): boolean {
+  if (finisher.movementPattern && candidate.movementPattern === finisher.movementPattern) return true;
+  const groups = finisherMuscleGroups(finisher);
+  return candidate.primaryMuscleGroup != null && groups.includes(candidate.primaryMuscleGroup);
+}
+
+// Enough matching candidates that the model can pick exerciseCount
+// distinct exercises with real choice.
+const FINISHER_CANDIDATES_MIN = 8;
+const FINISHER_CANDIDATES_PER_EXERCISE = 4;
+
+// targetMuscleGroups is a bounded narrowing HINT, not the whole of the
+// coach's intent: a day the coach also asked to finish with (say) two ab
+// exercises must still be offered ab candidates even though its hint —
+// or its label/focus inference — covers only the primary muscles. So the
+// narrowed pool is always UNIONED with candidates matching each of the
+// day's explicit finisher requirements. The union only ever draws from
+// candidateSet.candidates (already tenant-visible, active, equipment-
+// and level-filtered, canonical ids), never from anywhere else.
 export function narrowCandidatesForDay(
+  candidateSet: ExerciseCandidateSet,
+  shellDay: ProgramShellDay,
+  musclePriorities: readonly MuscleGroup[],
+): ExerciseCandidate[] {
+  const base = narrowCandidatesForDayBase(candidateSet, shellDay, musclePriorities);
+  const finishers = shellDay.finishers ?? [];
+  // Unnarrowed (full pool) already contains everything.
+  if (finishers.length === 0 || base === candidateSet.candidates) return base;
+
+  const byId = new Map(base.map((c) => [c.id, c]));
+  for (const finisher of finishers) {
+    const cap = Math.max(FINISHER_CANDIDATES_MIN, finisher.exerciseCount * FINISHER_CANDIDATES_PER_EXERCISE);
+    const matches = candidateSet.candidates
+      .filter((c) => candidateMatchesFinisher(c, finisher))
+      .sort(sortCandidates)
+      .slice(0, cap);
+    for (const c of matches) byId.set(c.id, c);
+  }
+  return Array.from(byId.values()).sort(sortCandidates);
+}
+
+function narrowCandidatesForDayBase(
   candidateSet: ExerciseCandidateSet,
   shellDay: ProgramShellDay,
   musclePriorities: readonly MuscleGroup[],
