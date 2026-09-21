@@ -109,6 +109,14 @@ export interface GenerationFailureLog {
   quotaClaimed?: boolean;
   quotaReleased?: boolean;
   validation?: OutputValidationDiagnostics;
+  // Deterministic repairs applied before the failure (kinds/paths and
+  // structural metadata only; never model text).
+  repairs?: string[];
+}
+
+function serializeRepairs(repairs: string[] | undefined): string[] | undefined {
+  if (!repairs || repairs.length === 0) return undefined;
+  return repairs.slice(0, 20).map((r) => sanitizeErrorMessage(String(r)).slice(0, 160));
 }
 
 // Rebuilt field by field so nothing beyond the allowlist can pass
@@ -153,6 +161,7 @@ export function logGenerationFailure(fields: GenerationFailureLog): void {
       quotaClaimed: fields.quotaClaimed,
       quotaReleased: fields.quotaReleased,
       validation: serializeValidation(fields.validation),
+      repairs: serializeRepairs(fields.repairs),
     }),
   );
 }
@@ -188,9 +197,7 @@ export function logProviderSuccess(fields: ProviderSuccessLog): void {
       model: fields.model,
       elapsedMs: fields.elapsedMs,
       candidateCount: fields.candidateCount,
-      repairs: fields.repairs && fields.repairs.length > 0
-        ? fields.repairs.slice(0, 20).map((r) => sanitizeErrorMessage(String(r)).slice(0, 80))
-        : undefined,
+      repairs: serializeRepairs(fields.repairs),
     }),
   );
 }

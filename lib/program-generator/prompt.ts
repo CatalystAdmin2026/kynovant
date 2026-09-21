@@ -238,6 +238,12 @@ function finisherStartingPoints(finishers: readonly ProgramShellFinisher[], cand
 // Light composition guidance for one day. Deliberately short and general —
 // it never names an exercise and never overrides an explicit coach
 // instruction, exclusion, finisher requirement, or the catalog rule.
+// Day-prompt-only catalog clarification (kept short; the shared output
+// contract above already states the general rule).
+export const DAY_CATALOG_CLARIFICATION = [
+  "- Every exercise in every section — including warmup and activation — must come from the catalog above: copy its exact id and name. If no appropriate catalog exercise exists for an optional warmup or activation item, omit that item (or that whole optional section) rather than inventing an exercise or an id.",
+].join("\n");
+
 export const SESSION_COMPOSITION_GUIDANCE: string[] = [
   "## Session Composition",
   "- Choose exercises that together form a coherent session: avoid stacking near-identical movements when the catalog offers meaningfully different options, and cover the distinct movement patterns appropriate to this day's muscle groups (each catalog line shows its pattern).",
@@ -338,6 +344,7 @@ export function buildDayGenerationPrompt(
     "",
     "## Output Contract",
     OUTPUT_CONTRACT_NOTES,
+    DAY_CATALOG_CLARIFICATION,
   ].join("\n");
 }
 

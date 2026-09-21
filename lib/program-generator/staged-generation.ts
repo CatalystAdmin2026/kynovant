@@ -1275,6 +1275,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
         // batch failed (see mapWithConcurrency's own header for why
         // this is safe: generateProgramDay never throws for an
         // ordinary provider failure, it returns one).
+        const batchSuccessCount = batchResults.filter((r) => r.dayOutcome.ok).length;
         let batchFailure: { dayIndex: number; shellDay: ProgramShellDay; errorMessage: string } | null = null;
         for (const { dayIndex, shellDay, dayCandidates, dayOutcome } of batchResults) {
           if (!dayOutcome.ok) {
@@ -1298,12 +1299,16 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
               elapsedMs: dayOutcome.elapsedMs,
               timeoutMs: dayOutcome.timeoutMs,
               isRetryOrResume: params.isResume,
-              completedDays: completedDaysThisWeek.size,
+              // Includes sibling days from THIS batch that succeed and are
+              // persisted later in this same loop, so the failure event does
+              // not misleadingly report zero completed siblings.
+              completedDays: completedDaysThisWeek.size + batchSuccessCount,
               completedWeeks: allWeeks.size,
               candidateCount: dayCandidates.length,
               quotaClaimed: !!claimId,
               quotaReleased,
               validation: dayOutcome.validation,
+              repairs: dayOutcome.repairs,
             });
             await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
               status: "failed",
@@ -1328,6 +1333,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
             model: dayOutcome.model,
             elapsedMs: dayOutcome.elapsedMs,
             candidateCount: dayCandidates.length,
+            repairs: dayOutcome.repairs,
           });
 
           const { result: verifiedDay } = verifyDayAgainstCandidates(dayOutcome.day, dayCandidates);
@@ -1430,6 +1436,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
             quotaClaimed: !!claimId,
             quotaReleased,
             validation: dayOutcome.validation,
+            repairs: dayOutcome.repairs,
           });
           await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
             status: "failed",
@@ -1452,6 +1459,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
           model: dayOutcome.model,
           elapsedMs: dayOutcome.elapsedMs,
           candidateCount: dayCandidates.length,
+          repairs: dayOutcome.repairs,
         });
 
         // Never trust a returned exerciseId merely because the model

@@ -91,6 +91,8 @@ import type { z } from "zod";
 import {
   MuscleGroupSchema,
   MovementPatternSchema,
+  WorkoutSectionTypeSchema,
+  isValidUuid,
   SHELL_MAX_TARGET_MUSCLE_GROUPS,
   SHELL_MAX_FINISHER_MUSCLE_GROUPS,
   ProgramShellSchema,
@@ -146,6 +148,9 @@ export interface GenerationFailure {
   // answered but its output failed the structured-output contract.
   // Sanitized allowlist only — see extractOutputValidationDiagnostics().
   validation?: OutputValidationDiagnostics;
+  // Deterministic repairs that ran before the failure (kinds/paths only —
+  // never model text). Present only when at least one was applied.
+  repairs?: string[];
 }
 
 export interface ShellGenerationSuccess {
@@ -178,6 +183,9 @@ export interface DayGenerationSuccess {
   provider: string;
   model: string;
   elapsedMs: number;
+  // Malformed-exerciseId repairs applied before validation passed (see
+  // repairDayOutput). Empty when the model's output was valid as returned.
+  repairs?: string[];
 }
 export type DayGenerationOutcome = DayGenerationSuccess | GenerationFailure;
 
@@ -465,6 +473,7 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
         elapsedMs: Date.now() - startedAt,
         timeoutMs: params.timeoutMs,
         validation: extractOutputValidationDiagnostics(err),
+        ...(params.repairNotes && params.repairNotes.length > 0 ? { repairs: [...params.repairNotes] } : {}),
       };
     }
 
@@ -613,6 +622,99 @@ export function createShellRepair(): {
       }
       const before = notes.length;
       const repaired = repairShellOutput(parsed, notes);
+      return notes.length > before ? JSON.stringify(repaired) : null;
+    },
+  };
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// Day repair — the model's exerciseId is OPTIONAL and UNTRUSTED (see
+// contracts.ts's header): every returned id is verified against the exact
+// candidate set (exercise-candidates.ts's verifyDayAgainstCandidates) and
+// the name-based canonical resolver (exercise-resolution.ts) covers
+// whatever is left. But the model schema validates a PRESENT exerciseId as
+// a strict UUID, so one malformed id used to reject the whole day before
+// that recovery path could run.
+//
+// This repair — applied via the AI SDK's repairText hook only AFTER the
+// output already failed validation, and re-validated against the SAME
+// unchanged schema — does exactly one thing: when a prescription's
+// exerciseId is a STRING that fails the schema's own UUID predicate
+// (contracts.ts's isValidUuid), that key is omitted. It never invents,
+// derives, looks up, or transforms an id, never touches a valid UUID, and
+// never touches any other field. The prescription keeps its exerciseName
+// and continues down the existing path: verify against the candidate set
+// -> canonical name resolution -> tenant/active visibility -> unresolved
+// findings block approval. An invented or off-catalog name therefore
+// resolves to nothing exactly as before; removing the bad id grants it no
+// standing. Any OTHER schema violation still fails the day.
+//
+// Notes carry structure only — section/prescription index, the section
+// type when it is a known enum value, the malformed id's length, whether
+// it has hyphens, and a coarse shape class — never the value.
+// ─────────────────────────────────────────────────────────────
+
+const KNOWN_SECTION_TYPES: ReadonlySet<string> = new Set(WorkoutSectionTypeSchema.options);
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type MalformedIdShape = "empty" | "uuid_like_invalid" | "slug_like" | "hex_fragment" | "other";
+
+export function classifyMalformedId(value: string): MalformedIdShape {
+  if (value.trim() === "") return "empty";
+  if (UUID_SHAPE.test(value)) return "uuid_like_invalid"; // right shape, fails RFC version/variant
+  if (/^[0-9a-f-]+$/i.test(value)) return "hex_fragment"; // hex and hyphens only, not a full uuid
+  if (/^[a-z][a-z0-9]*([-_][a-z0-9]+)*$/i.test(value)) return "slug_like";
+  return "other";
+}
+
+export function repairDayOutput(raw: unknown, notes: string[]): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const day = raw as { workout?: unknown };
+  const workout = day.workout;
+  if (!workout || typeof workout !== "object" || Array.isArray(workout)) return raw;
+  const sections = (workout as { sections?: unknown }).sections;
+  if (!Array.isArray(sections)) return raw;
+
+  const repairedSections = sections.map((rawSection, si) => {
+    if (!rawSection || typeof rawSection !== "object" || Array.isArray(rawSection)) return rawSection;
+    const section = rawSection as Record<string, unknown>;
+    if (!Array.isArray(section.prescriptions)) return rawSection;
+    const sectionType = typeof section.sectionType === "string" && KNOWN_SECTION_TYPES.has(section.sectionType) ? section.sectionType : "unknown";
+
+    const prescriptions = section.prescriptions.map((rawP: unknown, pi: number) => {
+      if (!rawP || typeof rawP !== "object" || Array.isArray(rawP)) return rawP;
+      const p = rawP as Record<string, unknown>;
+      if (typeof p.exerciseId !== "string" || isValidUuid(p.exerciseId)) return rawP;
+      const { exerciseId: malformed, ...rest } = p;
+      const id = malformed as string;
+      notes.push(
+        `sections[${si}].prescriptions[${pi}].exerciseId:removed_malformed(section=${sectionType},len=${id.length},hyphens=${id.includes("-")},shape=${classifyMalformedId(id)})`,
+      );
+      return rest;
+    });
+    return { ...section, prescriptions };
+  });
+
+  return { ...(raw as Record<string, unknown>), workout: { ...(workout as Record<string, unknown>), sections: repairedSections } };
+}
+
+export function createDayRepair(): {
+  repairText: NonNullable<CallProviderParams<unknown>["repairText"]>;
+  notes: string[];
+} {
+  const notes: string[] = [];
+  return {
+    notes,
+    repairText: async ({ text }) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return null; // unparseable JSON is not repaired here
+      }
+      const before = notes.length;
+      const repaired = repairDayOutput(parsed, notes);
       return notes.length > before ? JSON.stringify(repaired) : null;
     },
   };
@@ -887,14 +989,24 @@ export async function generateProgramDay(params: {
     params.candidates,
     params.blueprintIntent ?? null,
   );
+  const dayRepair = createDayRepair();
   const result = await callProvider({
     prompt,
     schema: ModelDayDraftSchema,
     timeoutMs: resolveTimeoutMs(DAY_DEFAULT_TIMEOUT_MS),
     maxOutputTokens: DAY_MAX_OUTPUT_TOKENS,
+    repairText: dayRepair.repairText,
+    repairNotes: dayRepair.notes,
   });
   if (!result.ok) return result;
-  return { ok: true, day: result.object, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
+  return {
+    ok: true,
+    day: result.object,
+    provider: result.provider,
+    model: result.model,
+    elapsedMs: result.elapsedMs,
+    repairs: result.repairs,
+  };
 }
 
 export async function generateProgramWeek(params: {

@@ -98,6 +98,15 @@ export const EquipmentAccessSchema = z.enum([
 
 const uuidSchema = z.string().uuid();
 
+// The ONE UUID predicate: exactly what the schemas above enforce (zod's
+// strict RFC version/variant check, not merely "looks like a UUID").
+// provider.ts's model-output repair uses this same function to decide
+// whether an untrusted exerciseId is malformed, so repair detection and
+// schema validation can never disagree.
+export function isValidUuid(value: string): boolean {
+  return uuidSchema.safeParse(value).success;
+}
+
 // ─────────────────────────────────────────────────────────────
 // EXERCISE RESOLUTION OUTCOME — see exercise-resolution.ts for the
 // matching logic itself. Defined here (not there) because it's part of
