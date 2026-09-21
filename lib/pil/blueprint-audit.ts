@@ -16,7 +16,7 @@ import { analyzeVolume } from "./modules/volume";
 import { analyzeFatigue } from "./modules/fatigue";
 import { analyzeMovement } from "./modules/movement";
 import { analyzeJointStress } from "./modules/joint-stress";
-import { analyzeRedundancy } from "./modules/redundancy";
+import { analyzeRedundancy, type RedundancyContext } from "./modules/redundancy";
 import { estimateDuration } from "./modules/duration";
 import { analyzeMuscleBalance } from "./modules/muscle-balance";
 import { generateRecommendations } from "./recommendations";
@@ -68,7 +68,13 @@ function deriveDimensionStatus(
   if (codes.has("JOINT_STRESS_MULTIPLE_HIGH") || codes.has("JOINT_STRESS_HIGH_CUMULATIVE")) jointStress = "elevated";
   if (codes.has("JOINT_STRESS_EXTREME_EXERCISE")) jointStress = "extreme";
 
-  const redundancy: BlueprintDimensionStatus["redundancy"] = codes.has("REDUNDANCY_PATTERN_MUSCLE")
+  // An info-level (low-magnitude) overlap is recorded but does not light
+  // the dimension; a caution-or-higher concentration or any exact
+  // duplicate does.
+  const redundancy: BlueprintDimensionStatus["redundancy"] = allFindings.some(
+    (f) =>
+      (f.code === "REDUNDANCY_PATTERN_MUSCLE" && f.severity !== "info") || f.code === "REDUNDANCY_EXACT_DUPLICATE",
+  )
     ? "detected"
     : "ok";
 
@@ -83,6 +89,7 @@ function deriveDimensionStatus(
 
 export function orchestrateBlueprint(
   blueprint: EnrichedBlueprint,
+  options?: { redundancyContext?: RedundancyContext },
 ): BlueprintAuditResult {
   const validationResult = validatePrescriptions(blueprint);
   const completenessReport = assessCompleteness(blueprint);
@@ -90,7 +97,7 @@ export function orchestrateBlueprint(
   const fatigueAnalysis = analyzeFatigue(blueprint);
   const movementAnalysis = analyzeMovement(blueprint);
   const jointStressAnalysis = analyzeJointStress(blueprint);
-  const redundancyAnalysis = analyzeRedundancy(blueprint);
+  const redundancyAnalysis = analyzeRedundancy(blueprint, options?.redundancyContext);
   const durationEstimate = estimateDuration(blueprint);
   const muscleBalanceAnalysis = analyzeMuscleBalance(volumeAnalysis);
 

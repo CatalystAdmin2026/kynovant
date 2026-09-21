@@ -153,6 +153,42 @@ export function sortCandidates(a: ExerciseCandidate, b: ExerciseCandidate): numb
   return a.name.localeCompare(b.name);
 }
 
+// Capped buckets (per muscle group) used to take the first N of a
+// compound-first ALPHABETICAL list, so one alphabetically early movement
+// pattern (say, a dozen vertical-pull variants) could fill the whole cap
+// and silently remove every other pattern for that muscle from the day's
+// choice set. This is candidate REPRESENTATION, not a programming rule:
+// when the bucket fits under the cap nothing changes at all; when it does
+// not, patterns are taken in turn (round-robin, in each pattern's own
+// sorted order, patterns ordered by their best-ranked member) so every
+// available pattern is represented before any pattern gets a second slot.
+// Nothing is excluded for sharing a pattern, no pattern is limited to
+// one, and a coach's specialization brief can still be served — the model
+// simply is no longer handed an artificially homogeneous set.
+export function selectPatternBalanced<T extends ExerciseCandidate>(sorted: readonly T[], cap: number): T[] {
+  if (sorted.length <= cap) return [...sorted];
+  const queues = new Map<string, T[]>();
+  for (const c of sorted) {
+    const q = queues.get(c.movementPattern);
+    if (q) q.push(c);
+    else queues.set(c.movementPattern, [c]);
+  }
+  const lists = Array.from(queues.values());
+  const out: T[] = [];
+  for (let round = 0; out.length < cap; round++) {
+    let took = false;
+    for (const list of lists) {
+      if (out.length >= cap) break;
+      if (round < list.length) {
+        out.push(list[round]);
+        took = true;
+      }
+    }
+    if (!took) break;
+  }
+  return out;
+}
+
 const JOINTS = [
   { key: "jointStressShoulder", label: "shoulder" },
   { key: "jointStressElbow", label: "elbow" },
@@ -272,10 +308,10 @@ export function selectCandidatesFromPool(
 
   for (const mg of targetMuscleGroups) {
     const cap = musclePriorities.includes(mg) ? MAX_PER_MUSCLE_GROUP_PRIORITY : MAX_PER_MUSCLE_GROUP;
-    const matches = allCandidates
-      .filter((c) => c.primaryMuscleGroup === mg)
-      .sort(sortCandidates)
-      .slice(0, cap);
+    const matches = selectPatternBalanced(
+      allCandidates.filter((c) => c.primaryMuscleGroup === mg).sort(sortCandidates),
+      cap,
+    );
     if (matches.length === 0) {
       gaps.push({
         category: mg,
@@ -544,10 +580,25 @@ export function candidateMatchesFinisher(candidate: ExerciseCandidate, finisher:
   return candidate.primaryMuscleGroup != null && groups.includes(candidate.primaryMuscleGroup);
 }
 
-// Enough matching candidates that the model can pick exerciseCount
-// distinct exercises with real choice.
-const FINISHER_CANDIDATES_MIN = 8;
-const FINISHER_CANDIDATES_PER_EXERCISE = 4;
+// Enough matching candidates that the model has real breadth of choice —
+// deliberately generous: rotation (below) changes ORDER/preference, not
+// what is available.
+const FINISHER_CANDIDATES_MIN = 12;
+const FINISHER_CANDIDATES_PER_EXERCISE = 6;
+
+// Deterministic per-day rotation of a finisher's matching list (no
+// randomness; a pure function of dayOfWeek, the finisher's position, and
+// the list length). Days that generate concurrently otherwise all see the
+// same list in the same order — so the model tends to pick the same
+// first-ranked exercises every day. The stride spreads a week's days
+// across the list; day 0 of any week keeps the natural order.
+export function rotateForDay<T>(list: readonly T[], dayOfWeek: number, finisherIndex: number): T[] {
+  const n = list.length;
+  if (n <= 1) return [...list];
+  const stride = Math.max(1, Math.floor(n / 7));
+  const offset = (((dayOfWeek % 7) + 7) % 7 * stride + finisherIndex) % n;
+  return [...list.slice(offset), ...list.slice(0, offset)];
+}
 
 // targetMuscleGroups is a bounded narrowing HINT, not the whole of the
 // coach's intent: a day the coach also asked to finish with (say) two ab
@@ -557,6 +608,12 @@ const FINISHER_CANDIDATES_PER_EXERCISE = 4;
 // day's explicit finisher requirements. The union only ever draws from
 // candidateSet.candidates (already tenant-visible, active, equipment-
 // and level-filtered, canonical ids), never from anywhere else.
+//
+// Order: the returned list is the usual sortCandidates order, EXCEPT that
+// within each finisher's matching candidates the sequence is rotated per
+// day (rotateForDay) so concurrent days do not all lead with the same
+// finisher options. The set of candidates is unchanged by rotation; the
+// day prompt names the first few of them as soft starting points.
 export function narrowCandidatesForDay(
   candidateSet: ExerciseCandidateSet,
   shellDay: ProgramShellDay,
@@ -568,15 +625,49 @@ export function narrowCandidatesForDay(
   if (finishers.length === 0 || base === candidateSet.candidates) return base;
 
   const byId = new Map(base.map((c) => [c.id, c]));
+  const matchLists: ExerciseCandidate[][] = [];
   for (const finisher of finishers) {
     const cap = Math.max(FINISHER_CANDIDATES_MIN, finisher.exerciseCount * FINISHER_CANDIDATES_PER_EXERCISE);
-    const matches = candidateSet.candidates
-      .filter((c) => candidateMatchesFinisher(c, finisher))
-      .sort(sortCandidates)
-      .slice(0, cap);
+    const matches = selectPatternBalanced(
+      candidateSet.candidates.filter((c) => candidateMatchesFinisher(c, finisher)).sort(sortCandidates),
+      cap,
+    ).sort(sortCandidates);
     for (const c of matches) byId.set(c.id, c);
+    matchLists.push(matches);
   }
-  return Array.from(byId.values()).sort(sortCandidates);
+  const sorted = Array.from(byId.values()).sort(sortCandidates);
+
+  // Rotate each finisher's matching candidates within the slots they
+  // already occupy in the sorted list.
+  matchLists.forEach((matches, finisherIndex) => {
+    const rotated = rotateForDay(matches, shellDay.dayOfWeek, finisherIndex);
+    const ids = new Set(matches.map((c) => c.id));
+    let next = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      if (ids.has(sorted[i].id)) sorted[i] = rotated[next++];
+    }
+  });
+  return sorted;
+}
+
+// Per-day pattern support for blueprint.ts's muscle-aware emphasis:
+// movementPattern -> count of this day's compound candidates whose primary
+// muscle is one of the day's target muscles (structured hint, else the
+// same label/focus inference narrowing uses). Empty when the day has no
+// identifiable target muscles (no emphasis is then assigned).
+export function patternAffinityForDay(candidates: readonly ExerciseCandidate[], shellDay: ProgramShellDay): Map<string, number> {
+  const groups = shellDay.targetMuscleGroups?.length
+    ? shellDay.targetMuscleGroups
+    : inferMuscleGroupsFromDayText(shellDay.label, shellDay.focus);
+  const affinity = new Map<string, number>();
+  if (groups.length === 0) return affinity;
+  const groupSet = new Set<string>(groups);
+  for (const c of candidates) {
+    if (c.classification !== "compound" || c.isMobility || c.isCardio) continue;
+    if (!c.primaryMuscleGroup || !groupSet.has(c.primaryMuscleGroup)) continue;
+    affinity.set(c.movementPattern, (affinity.get(c.movementPattern) ?? 0) + 1);
+  }
+  return affinity;
 }
 
 function narrowCandidatesForDayBase(
@@ -617,8 +708,12 @@ function narrowCandidatesForDayBase(
   for (const group of targetGroupSet) {
     const cap = priorityGroupsForThisDay.includes(group) ? MAX_PER_MUSCLE_GROUP_DAY_PRIORITY : MAX_PER_MUSCLE_GROUP_DAY;
     const matches = candidateSet.candidates.filter((c) => c.primaryMuscleGroup === group);
-    for (const c of matches.slice(0, cap)) targeted.set(c.id, c);
-    overflow.push(...matches.slice(cap)); // capped-out primary matches — preferred top-up material
+    // Pattern-balanced (see selectPatternBalanced) rather than the first
+    // `cap` of the alphabetical list; everything not taken is overflow.
+    const taken = selectPatternBalanced(matches, cap);
+    const takenIds = new Set(taken.map((c) => c.id));
+    for (const c of taken) targeted.set(c.id, c);
+    overflow.push(...matches.filter((c) => !takenIds.has(c.id))); // capped-out primary matches — preferred top-up material
   }
 
   // Secondary-muscle relevance: an exercise whose SECONDARY target

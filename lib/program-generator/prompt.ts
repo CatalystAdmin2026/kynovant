@@ -23,6 +23,7 @@ import type {
   GeneratedProgramDraft,
   ProgramShell,
   ProgramShellDay,
+  ProgramShellFinisher,
   ProgramShellPhase,
   ModelWeekDraft,
   ModelDayDraft,
@@ -40,7 +41,7 @@ import {
   SHELL_MAX_FOCUS_LENGTH,
 } from "./contracts";
 import type { ClientContextSummary } from "./client-context";
-import { formatCandidatesForPrompt, type ExerciseCandidate, type ExerciseCandidateSet } from "./exercise-candidates";
+import { candidateMatchesFinisher, formatCandidatesForPrompt, type ExerciseCandidate, type ExerciseCandidateSet } from "./exercise-candidates";
 
 function formatBriefSection(brief: ProgramGenerationBrief): string {
   const lines: string[] = [
@@ -193,7 +194,12 @@ export interface DayBlueprintIntent {
 // Coach-stated requirements for work AFTER the day's primary work (see
 // contracts.ts's ProgramShellFinisherSchema). Empty for a day without any
 // — such a day's prompt is unchanged.
-export function formatFinishersSection(shellDay: ProgramShellDay): string[] {
+// How many of a finisher's matching catalog exercises (in this day's
+// catalog order — see exercise-candidates.ts's per-day rotation) are named
+// as soft starting points.
+const FINISHER_STARTING_POINTS = 6;
+
+export function formatFinishersSection(shellDay: ProgramShellDay, candidates: readonly ExerciseCandidate[] = []): string[] {
   const finishers = shellDay.finishers ?? [];
   if (finishers.length === 0) return [];
   const total = finishers.reduce((n, f) => n + f.exerciseCount, 0);
@@ -211,9 +217,34 @@ export function formatFinishersSection(shellDay: ProgramShellDay): string[] {
     `- Primary work first: build the day's primary work as the brief describes. Any per-day exercise count in the brief or coach instructions (for example "6-8 exercises per day") applies to the PRIMARY work only. The finishing exercises above are ADDITIONAL — ${total} more exercise${total === 1 ? "" : "s"} on top of the primary count, not part of it.`,
     "- Placement: put the finishing exercises in their own final section (sectionType \"finisher\") with the highest orderIndex of the day's training sections, in the order listed above. Only a cooldown section may come after them. Nothing from the primary work may come after them.",
     "- Select them from the catalog like every other exercise.",
+    ...finisherStartingPoints(finishers, candidates),
     "",
   ];
 }
+
+// Soft preference, never a restriction: names the first few catalog
+// exercises matching each finisher, in this day's (deterministically
+// rotated) catalog order, so days that generate concurrently do not all
+// lead with the same options. Any matching catalog exercise is still fine.
+function finisherStartingPoints(finishers: readonly ProgramShellFinisher[], candidates: readonly ExerciseCandidate[]): string[] {
+  const lines: string[] = [];
+  finishers.forEach((f, i) => {
+    const names = candidates.filter((c) => candidateMatchesFinisher(c, f)).slice(0, FINISHER_STARTING_POINTS).map((c) => c.name);
+    if (names.length > 1) lines.push(`- Suggested starting points for finisher ${i + 1} (a preference, not a restriction — any matching catalog exercise is allowed): ${names.join("; ")}.`);
+  });
+  return lines;
+}
+
+// Light composition guidance for one day. Deliberately short and general —
+// it never names an exercise and never overrides an explicit coach
+// instruction, exclusion, finisher requirement, or the catalog rule.
+export const SESSION_COMPOSITION_GUIDANCE: string[] = [
+  "## Session Composition",
+  "- Choose exercises that together form a coherent session: avoid stacking near-identical movements when the catalog offers meaningfully different options, and cover the distinct movement patterns appropriate to this day's muscle groups (each catalog line shows its pattern).",
+  "- Concentration and repetition are allowed when the brief calls for them — a stated priority or specialization, a movement the coach asked to repeat, or key compounds kept for progression. Explicit coach instructions always take precedence over this guidance.",
+  "- Accessory and finisher choices may differ from other days of the week when that does not conflict with what the coach asked for; do not reuse a movement out of habit.",
+  "",
+];
 
 export function buildDayGenerationPrompt(
   brief: ProgramGenerationBrief,
@@ -249,7 +280,8 @@ export function buildDayGenerationPrompt(
     "## This Day",
     `Week ${weekNumber} of ${shell.totalWeeks} — dayOfWeek ${shellDay.dayOfWeek}, label "${shellDay.label}"${shellDay.focus ? `, focus: ${shellDay.focus}` : ""}. Your output's dayOfWeek and label MUST match these exactly.`,
     formatPhase(phase, weekNumber),
-    ...formatFinishersSection(shellDay),
+    ...formatFinishersSection(shellDay, candidates),
+    ...SESSION_COMPOSITION_GUIDANCE,
     // [Expanded-week labeling remediation] Name the workout (the
     // "name" field on your output's workout object) after its training
     // focus/content only — e.g. "Glutes & Lower Body", "Upper Push",

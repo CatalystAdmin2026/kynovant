@@ -174,10 +174,60 @@ function deriveTechniqueEligibility(
   return TECHNIQUE_ELIGIBILITY_POOL[(blockNumber - 1 + dayIndex) % TECHNIQUE_ELIGIBILITY_POOL.length];
 }
 
+// Muscle-aware pattern assignment for one group of overlapping days.
+//
+// affinity: per dayOfWeek, movementPattern -> how many of that day's own
+// compound candidates (primary muscle inside the day's target muscles)
+// use that pattern (exercise-candidates.ts's patternAffinityForDay()).
+// A pattern is only ever assigned to a day that actually has candidate
+// support for it (count > 0); pairs are taken greedily from the strongest
+// (day, pattern) affinity down, each day and each pattern used at most
+// once, so sibling days are still pushed onto DIFFERENT patterns — but
+// which pattern goes to which day now follows the muscles, not the day
+// order. A day with no unclaimed supported pattern simply gets null
+// (the permissive default): never an unavailable or incompatible pattern,
+// never a forced duplicate. Ties break on PATTERN_CYCLE order, then the
+// pattern name, then day order — fully deterministic.
+function assignPatternsByAffinity(
+  group: BlueprintShellDay[],
+  affinityByDay: ReadonlyMap<number, ReadonlyMap<string, number>>,
+): Map<number, string | null> {
+  const result = new Map<number, string | null>(group.map((d) => [d.dayOfWeek, null]));
+  const cycleRank = (pattern: string) => {
+    const i = (PATTERN_CYCLE as readonly string[]).indexOf(pattern);
+    return i === -1 ? PATTERN_CYCLE.length : i;
+  };
+  const entries: Array<{ dayIdx: number; dayOfWeek: number; pattern: string; count: number }> = [];
+  group.forEach((day, dayIdx) => {
+    for (const [pattern, count] of affinityByDay.get(day.dayOfWeek) ?? []) {
+      if (count > 0) entries.push({ dayIdx, dayOfWeek: day.dayOfWeek, pattern, count });
+    }
+  });
+  entries.sort(
+    (a, b) =>
+      b.count - a.count ||
+      cycleRank(a.pattern) - cycleRank(b.pattern) ||
+      a.pattern.localeCompare(b.pattern) ||
+      a.dayIdx - b.dayIdx,
+  );
+  const usedPatterns = new Set<string>();
+  for (const e of entries) {
+    if (result.get(e.dayOfWeek) !== null || usedPatterns.has(e.pattern)) continue;
+    result.set(e.dayOfWeek, e.pattern);
+    usedPatterns.add(e.pattern);
+  }
+  return result;
+}
+
+// patternAffinityByDay is OPTIONAL. Omitted (older callers/tests) keeps
+// the original day-order PATTERN_CYCLE behavior byte-for-byte; the staged
+// generator always supplies it so emphasis follows each day's muscles and
+// available candidates.
 export function deriveCanonicalWeekBlueprint(
   block: BlockPlan,
   shellDays: BlueprintShellDay[],
   experienceLevel: ExperienceLevel,
+  patternAffinityByDay?: ReadonlyMap<number, ReadonlyMap<string, number>>,
 ): CanonicalWeekBlueprint {
   const groups = groupOverlappingDays(shellDays);
 
@@ -187,6 +237,12 @@ export function deriveCanonicalWeekBlueprint(
       // No sibling-overlap risk — no constraint needed (the permissive
       // default; see groupOverlappingDays's own comment).
       for (const day of group) patternByDayOfWeek.set(day.dayOfWeek, null);
+      continue;
+    }
+    if (patternAffinityByDay) {
+      for (const [dow, pattern] of assignPatternsByAffinity(group, patternAffinityByDay)) {
+        patternByDayOfWeek.set(dow, pattern);
+      }
       continue;
     }
     group.forEach((day, i) => {

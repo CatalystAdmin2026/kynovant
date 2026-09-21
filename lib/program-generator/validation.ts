@@ -47,6 +47,7 @@ import { getDb } from "@/lib/db/client";
 import { exercises, exerciseMuscles, exerciseCoachOverrides } from "@/lib/db/schema-exercise";
 import { assembleBlueprint, type RawBlueprintData } from "@/lib/pil/enrichment";
 import { orchestrateBlueprint } from "@/lib/pil/blueprint-audit";
+import type { RedundancyContext } from "@/lib/pil/modules/redundancy";
 import type { BlueprintAuditResult, PilAffectedEntity, PilFinding, PilSeverity } from "@/lib/pil/types";
 import type {
   GeneratedProgramDraft,
@@ -55,7 +56,7 @@ import type {
   ExerciseResolutionCandidate,
   ExerciseResolutionRecord,
 } from "./contracts";
-import { EQUIPMENT_ACCESS_ALLOWED_RESISTANCE, type CandidateCoverageGap } from "./exercise-candidates";
+import { EQUIPMENT_ACCESS_ALLOWED_RESISTANCE, inferMuscleGroupsFromDayText, type CandidateCoverageGap } from "./exercise-candidates";
 
 // ─────────────────────────────────────────────────────────────
 // FINDING MODEL
@@ -374,7 +375,14 @@ export async function validateGeneratedDraft(
   for (const week of draft.weeks) {
     for (const day of week.days) {
       if (!day.workout) continue;
-      const audit = auditDraftBlueprint(day.workout, exerciseRows, muscleRows, overrideRows, coachId);
+      // Context for concentration severity: the brief's explicit muscle
+      // priorities, and the muscles this day was declared around (same
+      // label/focus inference day narrowing uses).
+      const redundancyContext: RedundancyContext = {
+        specializedMuscles: brief.musclePriorities,
+        dayTargetMuscles: inferMuscleGroupsFromDayText(day.label ?? day.workout.name, day.workout.primaryFocus),
+      };
+      const audit = auditDraftBlueprint(day.workout, exerciseRows, muscleRows, overrideRows, coachId, redundancyContext);
       blueprintAudits.push({
         weekId: week.id,
         dayId: day.id,
@@ -470,6 +478,7 @@ function auditDraftBlueprint(
   muscleRows: (typeof exerciseMuscles.$inferSelect)[],
   overrideRows: (typeof exerciseCoachOverrides.$inferSelect)[],
   coachId: string,
+  redundancyContext?: RedundancyContext,
 ): BlueprintAuditResult {
   void coachId;
 
@@ -535,5 +544,5 @@ function auditDraftBlueprint(
   };
 
   const enriched = assembleBlueprint(rawData);
-  return orchestrateBlueprint(enriched);
+  return orchestrateBlueprint(enriched, { redundancyContext });
 }

@@ -93,6 +93,7 @@ import { validateDayFinishers } from "./day-requirements";
 import {
   buildExerciseCandidateSet,
   narrowCandidatesForDay,
+  patternAffinityForDay,
   verifyDayAgainstCandidates,
   type ExerciseCandidate,
   type ExerciseCandidateSet,
@@ -424,12 +425,25 @@ export async function runAndSaveValidation(
 ): Promise<void> {
   try {
     const result = await validateGeneratedDraft(draft, brief, coachId);
+    // Extra findings are routed by their own severity: "warning" ones need
+    // the coach's acknowledgement exactly as before; lower-severity
+    // (info) ones — e.g. a mild coherence note — are shown but never gate
+    // approval. Every pre-existing extra finding is a warning, so their
+    // behavior is unchanged.
+    const extraAsWarnings = extraWarnings.filter((f) => f.severity !== "info");
+    const extraAsInfo = extraWarnings.filter((f) => f.severity === "info");
     const merged =
       extraWarnings.length > 0
         ? {
             ...result,
-            warnings: [...result.warnings, ...extraWarnings],
-            status: result.status === "blocked" ? ("blocked" as const) : ("warnings" as const),
+            warnings: [...result.warnings, ...extraAsWarnings],
+            info: [...result.info, ...extraAsInfo],
+            status:
+              result.status === "blocked"
+                ? ("blocked" as const)
+                : result.warnings.length + extraAsWarnings.length > 0
+                  ? ("warnings" as const)
+                  : ("ready" as const),
           }
         : result;
     await saveValidationResult(draftId, merged);
@@ -1102,7 +1116,16 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
       // === "block" and this week is NOT the expansion branch above
       // (that always `continue`s), so this is necessarily a canonical
       // week within a real block. ──
-      const blueprint = deriveCanonicalWeekBlueprint(blockLookup!.block, shell.days, params.brief.experienceLevel);
+      // Muscle-aware pattern emphasis: each day's per-pattern support comes
+      // from its own narrowed candidate context (see blueprint.ts's
+      // assignPatternsByAffinity) — never day order alone.
+      const patternAffinityByDay = new Map(
+        shell.days.map((d) => [
+          d.dayOfWeek,
+          patternAffinityForDay(narrowCandidatesForDay(candidateSet, d, params.brief.musclePriorities), d),
+        ]),
+      );
+      const blueprint = deriveCanonicalWeekBlueprint(blockLookup!.block, shell.days, params.brief.experienceLevel, patternAffinityByDay);
       const blueprintValidation = validateCanonicalWeekBlueprint(blueprint, shell.days, params.brief.experienceLevel);
       if (!blueprintValidation.ok) {
         logGenerationFailure({
@@ -1500,7 +1523,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
     // the same extraWarnings mechanism catalogGapFindings() already
     // uses at finalization — the SAME coach review/acknowledgement UI,
     // no new findings pipeline.
-    crossDayFindings.push(...validateWeekCrossDay(assembly.week, params.brief, candidatesById));
+    crossDayFindings.push(...validateWeekCrossDay(assembly.week, params.brief, candidatesById, shell));
     // Explicit coach-stated finishing requirements (shell day
     // `finishers`) — same warning pipeline, see day-requirements.ts.
     crossDayFindings.push(...validateDayFinishers(assembly.week, shell, candidatesById));
