@@ -27,6 +27,13 @@ import type {
   ModelWeekDraft,
   ModelDayDraft,
 } from "./contracts";
+import {
+  MuscleGroupSchema,
+  SHELL_MAX_TARGET_MUSCLE_GROUPS,
+  SHELL_MAX_PHASES,
+  SHELL_MAX_LABEL_LENGTH,
+  SHELL_MAX_FOCUS_LENGTH,
+} from "./contracts";
 import type { ClientContextSummary } from "./client-context";
 import { formatCandidatesForPrompt, type ExerciseCandidate, type ExerciseCandidateSet } from "./exercise-candidates";
 
@@ -380,7 +387,10 @@ export function buildShellGenerationPrompt(
     // provider.ts's normalizeAmbiguousShellSchedule() is the
     // deterministic backstop for when the model doesn't comply.
     "- dayOfWeek uses this application's fixed convention: 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday. Unless the brief or its Additional Notes explicitly requests a different schedule (e.g. specific named days, weekends, or a non-Monday start), the training week should begin on Monday (dayOfWeek=1) and use consecutive days from there.",
-    "- phases must divide the program into logical progression blocks (e.g. accumulation, intensification, a deload) with non-overlapping week ranges that together cover every week from 1 to totalWeeks. Mark deload/lighter weeks explicitly via isDeload. Each phase's progressionTarget should describe concretely what should increase or change across weeks in that phase (e.g. \"add 1 rep per set each week, then increase load\").",
+    "- dayOfWeek must be an integer from 0 to 6 inclusive — 7 is never valid — and every day must use a different dayOfWeek value. A Monday-first week that trains all seven days is exactly 1, 2, 3, 4, 5, 6, 0 (Sunday last, as 0). If the brief names specific weekdays, use exactly those days.",
+    `- Each day's label is at most ${SHELL_MAX_LABEL_LENGTH} characters. Each day's optional focus (at most ${SHELL_MAX_FOCUS_LENGTH} characters) should capture what the coach asked for that day in their own terms (e.g. "Upper body and arms"). If the brief's freeform instructions describe the split day by day, follow that split exactly and reflect it in each day's label/focus.`,
+    `- targetMuscleGroups (optional, per day) narrows which library exercises are offered for that day. Use at most ${SHELL_MAX_TARGET_MUSCLE_GROUPS} distinct values, each copied exactly from this list: ${MuscleGroupSchema.options.join(", ")}. Pick the groups that carry that day's main work. If a day is broader than ${SHELL_MAX_TARGET_MUSCLE_GROUPS} groups (for example "upper body", "upper body and arms", or "full body"), OMIT targetMuscleGroups for that day and describe the day in its label/focus instead — the application derives the exercise pool from that text. Never list more than ${SHELL_MAX_TARGET_MUSCLE_GROUPS}.`,
+    `- phases must divide the program into logical progression blocks (e.g. accumulation, intensification, a deload), at most ${SHELL_MAX_PHASES} phases. phaseNumber values must be unique (number them 1, 2, 3, … in order). Every phase needs weekStart <= weekEnd, both between 1 and totalWeeks. Phase week ranges must not overlap and together must cover every week from 1 to totalWeeks with no gaps. Mark deload/lighter weeks explicitly via isDeload. Each phase's progressionTarget should describe concretely what should increase or change across weeks in that phase (e.g. \"add 1 rep per set each week, then increase load\").`,
     "- globalConstraints should compactly restate any injury, exclusion, or equipment limitations from the brief above that every week's generation must continue to honor.",
     "Do not include any exercises, sets, reps, or workout content — that comes later, one week at a time.",
   ].join("\n");

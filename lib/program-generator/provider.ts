@@ -89,6 +89,8 @@ import "server-only";
 import { generateObject, NoObjectGeneratedError } from "ai";
 import type { z } from "zod";
 import {
+  MuscleGroupSchema,
+  SHELL_MAX_TARGET_MUSCLE_GROUPS,
   ProgramShellSchema,
   ModelWeekDraftSchema,
   ModelDayDraftSchema,
@@ -150,6 +152,10 @@ export interface ShellGenerationSuccess {
   provider: string;
   model: string;
   elapsedMs: number;
+  // Deterministic repairs applied to the model's shell before it passed
+  // validation (see repairShellOutput). Empty when the model's output was
+  // valid as returned. Kinds/paths only — never model text.
+  repairs?: string[];
 }
 export type ShellGenerationOutcome = ShellGenerationSuccess | GenerationFailure;
 
@@ -369,10 +375,18 @@ interface CallProviderParams<T> {
   schema: z.ZodType<T>;
   timeoutMs: number;
   maxOutputTokens: number;
+  // Optional AI SDK repairText hook. The SDK calls it only after the
+  // output already failed JSON parsing or schema validation, then
+  // re-validates the returned text against the SAME schema — so a repair
+  // can never make invalid output pass, only fix a known-safe shape.
+  repairText?: (options: { text: string; error: unknown }) => Promise<string | null>;
+  // The array the repairText hook appends to; surfaced on success so the
+  // caller can log which repairs (if any) were applied.
+  repairNotes?: string[];
 }
 
 type CallProviderResult<T> =
-  | { ok: true; object: T; provider: string; model: string; elapsedMs: number }
+  | { ok: true; object: T; provider: string; model: string; elapsedMs: number; repairs: string[] }
   | GenerationFailure;
 
 async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProviderResult<T>> {
@@ -404,10 +418,18 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
       abortSignal: controller.signal,
       maxOutputTokens: params.maxOutputTokens,
       maxRetries: PROVIDER_MAX_RETRIES,
+      ...(params.repairText ? { repairText: params.repairText } : {}),
     });
     clearTimeout(timer);
 
-    return { ok: true, object: result.object, provider: "vercel-ai-gateway", model, elapsedMs: Date.now() - startedAt };
+    return {
+      ok: true,
+      object: result.object,
+      provider: "vercel-ai-gateway",
+      model,
+      elapsedMs: Date.now() - startedAt,
+      repairs: params.repairNotes ? [...params.repairNotes] : [],
+    };
   } catch (err) {
     clearTimeout(timer);
 
@@ -463,6 +485,106 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
       timeoutMs: params.timeoutMs,
     };
   }
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// Shell repair — deterministic, narrow, applied via the AI SDK's
+// repairText hook ONLY after the model's shell already failed
+// validation. ProgramShellSchema stays the authoritative contract: the
+// SDK re-validates the repaired text against it, so this can only fix the
+// two known-safe shapes below, never make a genuinely invalid shell pass.
+//
+//   1. dayOfWeek === 7 -> 0. Seven is exactly "the day after Saturday"
+//      in a Monday-first week (1,2,...,6,0); the mapping is lossless.
+//   2. targetMuscleGroups is only a candidate-narrowing hint
+//      (exercise-candidates.ts's narrowCandidatesForDay(), which falls
+//      back to label/focus keyword inference, then the full pool, when
+//      the field is absent). So per day the result is either
+//        - the model's own list, canonicalized (trim/lowercase/space or
+//          hyphen -> underscore) and de-duplicated, if every entry is a
+//          valid MuscleGroup and there are at most
+//          SHELL_MAX_TARGET_MUSCLE_GROUPS; or
+//        - the field REMOVED, which widens the pool — never narrows it.
+//      The list is deliberately never sliced to the maximum: dropping an
+//      arbitrary seventh group would silently change what the coach asked
+//      for, whereas omitting the hint defers to the day's label/focus.
+//
+// Every applied repair is recorded in `notes` (paths/kinds only, no model
+// text) so callers can log it — a repair is never silent.
+// ─────────────────────────────────────────────────────────────
+
+const VALID_MUSCLE_GROUPS: ReadonlySet<string> = new Set(MuscleGroupSchema.options);
+
+function canonicalizeMuscleGroup(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const canonical = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return VALID_MUSCLE_GROUPS.has(canonical) ? canonical : null;
+}
+
+export function repairShellOutput(raw: unknown, notes: string[]): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const shell = raw as { days?: unknown };
+  if (!Array.isArray(shell.days)) return raw;
+
+  const days = shell.days.map((rawDay, i) => {
+    if (!rawDay || typeof rawDay !== "object" || Array.isArray(rawDay)) return rawDay;
+    const day = { ...(rawDay as Record<string, unknown>) };
+
+    if (day.dayOfWeek === 7) {
+      day.dayOfWeek = 0;
+      notes.push(`days[${i}].dayOfWeek:wrapped_7_to_0`);
+    }
+
+    if (Array.isArray(day.targetMuscleGroups)) {
+      const original: unknown[] = day.targetMuscleGroups;
+      const canonical = original.map(canonicalizeMuscleGroup);
+      if (canonical.some((c) => c === null)) {
+        delete day.targetMuscleGroups;
+        notes.push(`days[${i}].targetMuscleGroups:removed_invalid_value`);
+      } else {
+        const deduped = [...new Set(canonical as string[])];
+        if (deduped.length > SHELL_MAX_TARGET_MUSCLE_GROUPS) {
+          delete day.targetMuscleGroups;
+          notes.push(`days[${i}].targetMuscleGroups:removed_over_max`);
+        } else if (deduped.length === 0) {
+          delete day.targetMuscleGroups;
+          notes.push(`days[${i}].targetMuscleGroups:removed_empty`);
+        } else if (
+          deduped.length !== original.length ||
+          deduped.some((g, k) => g !== original[k])
+        ) {
+          day.targetMuscleGroups = deduped;
+          notes.push(`days[${i}].targetMuscleGroups:canonicalized`);
+        }
+      }
+    }
+    return day;
+  });
+
+  return { ...(raw as Record<string, unknown>), days };
+}
+
+// Builds the repairText hook plus the notes array it appends to.
+export function createShellRepair(): {
+  repairText: NonNullable<CallProviderParams<unknown>["repairText"]>;
+  notes: string[];
+} {
+  const notes: string[] = [];
+  return {
+    notes,
+    repairText: async ({ text }) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return null; // unparseable JSON is not repaired here
+      }
+      const before = notes.length;
+      const repaired = repairShellOutput(parsed, notes);
+      return notes.length > before ? JSON.stringify(repaired) : null;
+    },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -677,15 +799,25 @@ export async function generateProgramShell(
   }
 
   const prompt = buildShellGenerationPrompt(brief, clientContext, candidateSet);
+  const shellRepair = createShellRepair();
   const result = await callProvider({
     prompt,
     schema: ProgramShellSchema,
     timeoutMs: resolveTimeoutMs(SHELL_DEFAULT_TIMEOUT_MS),
     maxOutputTokens: SHELL_MAX_OUTPUT_TOKENS,
+    repairText: shellRepair.repairText,
+    repairNotes: shellRepair.notes,
   });
   if (!result.ok) return result;
   const shell = { ...result.object, days: normalizeAmbiguousShellSchedule(result.object.days, brief.freeformInstructions) };
-  return { ok: true, shell, provider: result.provider, model: result.model, elapsedMs: result.elapsedMs };
+  return {
+    ok: true,
+    shell,
+    provider: result.provider,
+    model: result.model,
+    elapsedMs: result.elapsedMs,
+    repairs: result.repairs,
+  };
 }
 
 // The staged path's actual per-call unit — see this file's header

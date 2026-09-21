@@ -167,6 +167,10 @@ export interface ProviderSuccessLog {
   elapsedMs: number;
   // stage "day" only — see GenerationFailureLog's own field comment.
   candidateCount?: number;
+  // stage "shell" only — deterministic repairs applied to the model's
+  // output before it validated (kind/path strings like
+  // "days[4].targetMuscleGroups:removed_over_max"; never model text).
+  repairs?: string[];
 }
 
 // One line per provider call, not per token/exercise — see this
@@ -184,6 +188,9 @@ export function logProviderSuccess(fields: ProviderSuccessLog): void {
       model: fields.model,
       elapsedMs: fields.elapsedMs,
       candidateCount: fields.candidateCount,
+      repairs: fields.repairs && fields.repairs.length > 0
+        ? fields.repairs.slice(0, 20).map((r) => sanitizeErrorMessage(String(r)).slice(0, 80))
+        : undefined,
     }),
   );
 }

@@ -345,10 +345,20 @@ export type GeneratedProgramDraft = z.infer<typeof GeneratedProgramDraftSchema>;
 // 1 instead of reading as an unrelated program.
 // ─────────────────────────────────────────────────────────────
 
+// Shell bounds shared with prompt.ts's buildShellGenerationPrompt() so the
+// instructions given to the model and the schema enforcing them cannot
+// drift apart (a prompt/schema mismatch here was a production incident:
+// a "Friday: upper body and arms" day produced >6 targetMuscleGroups).
+export const SHELL_MAX_TARGET_MUSCLE_GROUPS = 6;
+export const SHELL_MAX_DAYS = 7;
+export const SHELL_MAX_PHASES = 8;
+export const SHELL_MAX_LABEL_LENGTH = 100;
+export const SHELL_MAX_FOCUS_LENGTH = 200;
+
 export const ProgramShellDaySchema = z.object({
   dayOfWeek: z.number().int().min(0).max(6),
-  label: z.string().min(1).max(100),
-  focus: z.string().max(200).optional(),
+  label: z.string().min(1).max(SHELL_MAX_LABEL_LENGTH),
+  focus: z.string().max(SHELL_MAX_FOCUS_LENGTH).optional(),
   // Day-level generation's candidate-narrowing input (see
   // exercise-candidates.ts's narrowCandidatesForDay()) — structured, not
   // parsed out of `label`/`focus` freeform text. Optional for backward
@@ -357,7 +367,11 @@ export const ProgramShellDaySchema = z.object({
   // keyword heuristic over label/focus, then to the full candidate set —
   // never a hard requirement, never a reason to fail or regenerate an
   // existing shell.
-  targetMuscleGroups: z.array(MuscleGroupSchema).max(6).optional(),
+  //
+  // Bounded at SHELL_MAX_TARGET_MUSCLE_GROUPS on purpose: it sizes the
+  // narrowed candidate pool. A day broader than that (upper body, full
+  // body) omits the field and narrowing infers from label/focus instead.
+  targetMuscleGroups: z.array(MuscleGroupSchema).max(SHELL_MAX_TARGET_MUSCLE_GROUPS).optional(),
 });
 
 export const ProgramShellPhaseSchema = z.object({
@@ -379,8 +393,8 @@ export const ProgramShellSchema = z.object({
   // Fixed weekly split — every week-generation call is instructed to
   // use these same dayOfWeek/label values (contracts.ts cannot enforce
   // this across separate generateObject() calls; prompt.ts does).
-  days: z.array(ProgramShellDaySchema).min(1).max(7),
-  phases: z.array(ProgramShellPhaseSchema).min(1).max(8),
+  days: z.array(ProgramShellDaySchema).min(1).max(SHELL_MAX_DAYS),
+  phases: z.array(ProgramShellPhaseSchema).min(1).max(SHELL_MAX_PHASES),
   // Freeform: injury/exclusion/equipment constraints the model derived
   // from the brief, restated compactly so every week's prompt can
   // include it without re-deriving it from the full brief each time.

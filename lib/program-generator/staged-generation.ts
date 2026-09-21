@@ -878,6 +878,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
       provider: shellOutcome.provider,
       model: shellOutcome.model,
       elapsedMs: shellOutcome.elapsedMs,
+      repairs: shellOutcome.repairs,
     });
     if (shellOutcome.shell.totalWeeks !== params.brief.weeks) {
       await failRun(
