@@ -59,6 +59,26 @@ export function sanitizeErrorMessage(raw: string): string {
 // provider errorCode.
 export type GenerationStage = "shell" | "week" | "day" | "day_regeneration" | "week_assembly";
 
+// Sanitized structured-output diagnostics for errorCode "invalid_output"
+// failures from the provider boundary (provider.ts's
+// extractOutputValidationDiagnostics()). Every field is explicit and
+// derived — path/code/message of each zod issue, finish reason, token
+// counts. Never the model's raw output, prompt, or an Error object.
+export interface ValidationIssueDiagnostic {
+  path: string;
+  code: string;
+  message: string;
+}
+
+export interface OutputValidationDiagnostics {
+  kind: "schema_validation" | "json_parse" | "no_output";
+  issueCount: number;
+  issues: ValidationIssueDiagnostic[];
+  finishReason?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface GenerationFailureLog {
   draftId: string;
   runId?: string;
@@ -88,6 +108,25 @@ export interface GenerationFailureLog {
   candidateCount?: number;
   quotaClaimed?: boolean;
   quotaReleased?: boolean;
+  validation?: OutputValidationDiagnostics;
+}
+
+// Rebuilt field by field so nothing beyond the allowlist can pass
+// through, even if a caller hands over an object with extra keys.
+function serializeValidation(v: OutputValidationDiagnostics | undefined) {
+  if (!v) return undefined;
+  return {
+    kind: v.kind,
+    issueCount: v.issueCount,
+    issues: v.issues.slice(0, 10).map((i) => ({
+      path: sanitizeErrorMessage(String(i.path)).slice(0, 120),
+      code: sanitizeErrorMessage(String(i.code)).slice(0, 40),
+      message: sanitizeErrorMessage(String(i.message)).slice(0, 200),
+    })),
+    finishReason: v.finishReason,
+    inputTokens: v.inputTokens,
+    outputTokens: v.outputTokens,
+  };
 }
 
 // console.error (not .log) — this is unambiguously a failure event, and
@@ -113,6 +152,7 @@ export function logGenerationFailure(fields: GenerationFailureLog): void {
       candidateCount: fields.candidateCount,
       quotaClaimed: fields.quotaClaimed,
       quotaReleased: fields.quotaReleased,
+      validation: serializeValidation(fields.validation),
     }),
   );
 }

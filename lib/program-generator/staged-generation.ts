@@ -865,6 +865,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
         completedWeeks: params.existingCompletedWeeks.size,
         quotaClaimed: !!claimId,
         quotaReleased,
+        validation: shellOutcome.validation,
       });
       await failRun(run.id, shellOutcome.errorMessage, { provider: shellOutcome.provider, model: shellOutcome.model });
       const failureReason = "Generation failed while designing the program structure. You can retry.";
@@ -1277,6 +1278,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
               candidateCount: dayCandidates.length,
               quotaClaimed: !!claimId,
               quotaReleased,
+              validation: dayOutcome.validation,
             });
             await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
               status: "failed",
@@ -1402,6 +1404,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
             candidateCount: dayCandidates.length,
             quotaClaimed: !!claimId,
             quotaReleased,
+            validation: dayOutcome.validation,
           });
           await saveGenerationDay(params.draftId, weekNumber, dayIndex, {
             status: "failed",

@@ -86,7 +86,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import "server-only";
-import { generateObject } from "ai";
+import { generateObject, NoObjectGeneratedError } from "ai";
 import type { z } from "zod";
 import {
   ProgramShellSchema,
@@ -116,6 +116,7 @@ import {
   buildFixtureProgramDay,
 } from "./fixture";
 import type { ExerciseCandidate, ExerciseCandidateSet } from "./exercise-candidates";
+import { sanitizeErrorMessage, type OutputValidationDiagnostics, type ValidationIssueDiagnostic } from "./observability";
 
 export type GenerationErrorCode =
   | "not_configured"
@@ -137,6 +138,10 @@ export interface GenerationFailure {
   model: string;
   elapsedMs: number;
   timeoutMs: number;
+  // Present only when errorCode is "invalid_output" because the model
+  // answered but its output failed the structured-output contract.
+  // Sanitized allowlist only — see extractOutputValidationDiagnostics().
+  validation?: OutputValidationDiagnostics;
 }
 
 export interface ShellGenerationSuccess {
@@ -275,6 +280,81 @@ function isFixtureModeEnabled(): boolean {
   return process.env.PROGRAM_GENERATOR_USE_FIXTURE === "true";
 }
 
+
+// ─────────────────────────────────────────────────────────────
+// Sanitized structured-output diagnostics. Walks the error's cause chain
+// only to find zod-style issues ({path, code, message}) and copies out
+// those three fields — never the issue's `input`, never the
+// TypeValidationError's `value`/message (both embed the model's raw
+// output), never err.text/err.response. Everything is length-capped.
+// ─────────────────────────────────────────────────────────────
+
+const MAX_DIAGNOSTIC_ISSUES = 10;
+const MAX_ISSUE_PATH_LENGTH = 120;
+const MAX_ISSUE_MESSAGE_LENGTH = 200;
+
+function formatIssuePath(path: unknown): string {
+  if (!Array.isArray(path)) return "(root)";
+  let out = "";
+  for (const seg of path) {
+    if (typeof seg === "number") out += `[${seg}]`;
+    else if (typeof seg === "string") out += out ? `.${seg}` : seg;
+    // symbols / anything else: skipped
+  }
+  return (out || "(root)").slice(0, MAX_ISSUE_PATH_LENGTH);
+}
+
+function collectIssues(err: unknown): unknown[] | null {
+  let cur: unknown = err;
+  for (let depth = 0; depth < 4 && cur != null; depth++) {
+    if (Array.isArray(cur)) return cur;
+    if (typeof cur !== "object") return null;
+    const issues = (cur as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) return issues;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+export function extractOutputValidationDiagnostics(err: NoObjectGeneratedError): OutputValidationDiagnostics {
+  const rawIssues = collectIssues(err.cause);
+  const issues: ValidationIssueDiagnostic[] = (rawIssues ?? []).slice(0, MAX_DIAGNOSTIC_ISSUES).map((raw) => {
+    const issue = (raw ?? {}) as { path?: unknown; code?: unknown; message?: unknown };
+    return {
+      path: formatIssuePath(issue.path),
+      code: typeof issue.code === "string" ? issue.code.slice(0, 40) : "unknown",
+      message:
+        typeof issue.message === "string"
+          ? sanitizeErrorMessage(issue.message).slice(0, MAX_ISSUE_MESSAGE_LENGTH)
+          : "",
+    };
+  });
+
+  const cause = err.cause as { name?: unknown } | undefined;
+  const causeName = typeof cause?.name === "string" ? cause.name : undefined;
+  const kind: OutputValidationDiagnostics["kind"] =
+    causeName === "AI_JSONParseError"
+      ? "json_parse"
+      : rawIssues
+        ? "schema_validation"
+        : causeName === "AI_TypeValidationError"
+          ? "schema_validation"
+          : "no_output";
+
+  return {
+    kind,
+    issueCount: rawIssues?.length ?? 0,
+    issues,
+    finishReason: typeof err.finishReason === "string" ? err.finishReason : undefined,
+    inputTokens: num(err.usage?.inputTokens),
+    outputTokens: num(err.usage?.outputTokens),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // REAL PROVIDER — Vercel AI Gateway via the `ai` package. Model is a
 // plain "provider/model" gateway string read from the environment; this
@@ -343,19 +423,36 @@ async function callProvider<T>(params: CallProviderParams<T>): Promise<CallProvi
       };
     }
 
-    // AI SDK throws a typed NoObjectGeneratedError (and similar) when
-    // the model's output doesn't conform to the schema — including when
-    // maxOutputTokens cuts generation off before a valid object is
-    // complete — or a provider/network error for transport failures. We
-    // don't discriminate further here — both are "the provider did not
-    // give us a usable result" and both must fail safely (locked rule:
-    // no partial persistence, safe failure state).
+    // A NoObjectGeneratedError means the provider DID answer but its
+    // output failed the structured-output contract (unparseable JSON,
+    // e.g. cut off by maxOutputTokens, or JSON that failed our zod
+    // schema). That is a contract failure, not an outage — classify it
+    // "invalid_output" and attach sanitized diagnostics. Same
+    // failure-safety rules apply (no partial persistence); only the
+    // label and the diagnostics differ. Quota behavior is keyed on
+    // errorCode === "timeout" only, so this does not make it refundable.
+    if (NoObjectGeneratedError.isInstance(err)) {
+      return {
+        ok: false,
+        errorCode: "invalid_output",
+        errorMessage: err.message,
+        provider: "vercel-ai-gateway",
+        model,
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs: params.timeoutMs,
+        validation: extractOutputValidationDiagnostics(err),
+      };
+    }
+
+    // Anything else is a provider/network/transport error.
     //
-    // err.message only — NEVER err.cause or (for NoObjectGeneratedError
-    // specifically) err.text, which can carry the model's raw generated
-    // output. This is the one place that boundary is enforced; see
-    // observability.ts's header comment for why it's still truncated
-    // again defensively before being logged.
+    // err.message only — NEVER err.cause or err.text (which, for
+    // NoObjectGeneratedError, can carry the model's raw generated
+    // output; a TypeValidationError's own message also embeds the full
+    // rejected value). Diagnostics for the invalid_output branch above
+    // are extracted field by field, never by serializing an Error. See
+    // observability.ts's header comment for why messages are still
+    // truncated again defensively before being logged.
     return {
       ok: false,
       errorCode: "provider_unavailable",

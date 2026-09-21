@@ -765,6 +765,7 @@ export async function regenerateDayAction(params: {
         isRetryOrResume: false,
         quotaClaimed: true,
         quotaReleased,
+        validation: result.validation,
       });
       await failRun(run.id, result.errorMessage, { provider: result.provider, model: result.model });
     } else {
