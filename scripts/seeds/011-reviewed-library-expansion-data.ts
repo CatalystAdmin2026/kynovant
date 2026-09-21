@@ -588,7 +588,8 @@ const FAMILIES: readonly FamilySeed[] = [
       ["kneeling-lat-pulldown", "Kneeling Lat Pulldown"],
       ["single-arm-kneeling-lat-pulldown", "Single-Arm Kneeling Lat Pulldown"],
       ["cross-body-lat-pulldown", "Cross-Body Lat Pulldown"],
-      ["bayesian-lat-pulldown", "Bayesian Lat Pulldown"],
+      // The Bayesian lat pulldown entry was removed: not a real exercise (see
+      // scripts/repairs/retired-system-exercises.ts). Do not re-add.
       ["machine-lat-pulldown-neutral-grip", "Machine Lat Pulldown Neutral Grip"],
       ["assisted-neutral-grip-pull-up", "Assisted Neutral-Grip Pull-Up"],
       ["band-assisted-pull-up", "Band-Assisted Pull-Up"],
