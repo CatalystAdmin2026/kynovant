@@ -18,7 +18,12 @@ import {
   type WorkoutSetLog,
 } from "./schema-program";
 import { workoutTemplateExercises } from "./schema-exercise";
-import { buildWorkoutSnapshot, getActiveWorkoutSession, getTodayWorkout } from "./client-program-service";
+import {
+  getActiveWorkoutSession,
+  getClientActiveProgram,
+  getReleasedWorkoutByDate,
+  getTodayWorkout,
+} from "./client-program-service";
 
 // [Independent review remediation — P2 start-session authorization]
 // Thrown when a session-start request's claimed workoutTemplateId does
@@ -263,29 +268,39 @@ export async function createWorkoutSession(input: {
         // between the two reads would be invisible to this one, and
         // this call could still attempt to insert a second row for the
         // same client.
-        const authoritative = await getTodayWorkout(input.clientId, tx);
-        if (authoritative.kind !== "workout") {
+        const assignment = await getClientActiveProgram(input.clientId, tx);
+        const releasedWorkout =
+          assignment?.workoutReleasePolicy === "weekly"
+            ? input.scheduledDate
+              ? await getReleasedWorkoutByDate(input.clientId, input.scheduledDate, tx)
+              : null
+            : null;
+        const dailyResult =
+          assignment?.workoutReleasePolicy === "weekly"
+            ? null
+            : await getTodayWorkout(input.clientId, tx);
+        const authoritative = releasedWorkout ??
+          (dailyResult?.kind === "workout" ? dailyResult.data : null);
+        if (!authoritative) {
           throw new WorkoutSessionAuthorizationError("No workout is currently scheduled for this client.");
         }
-        if (authoritative.data.workoutTemplateId !== input.workoutTemplateId) {
-          throw new WorkoutSessionAuthorizationError("The requested workout is not the one currently scheduled for this client.");
+        if (authoritative.workoutTemplateId !== input.workoutTemplateId) {
+          throw new WorkoutSessionAuthorizationError("The requested workout is not currently released for this client.");
         }
 
-        // Snapshot the workout structure at session-creation time —
-        // only actually needed when a new session is really being
-        // created, so this runs after both checks above, not before
-        // them.
-        const snapshot = await buildWorkoutSnapshot(authoritative.data.workoutTemplateId);
+        // The authoritative resolver built this snapshot from the same
+        // released, client-owned slot that passed authorization.
+        const snapshot = authoritative.snapshot;
 
         const [row] = await tx
           .insert(workoutSessions)
           .values({
             clientId: input.clientId,
-            clientProgramId: authoritative.data.clientProgramId || null,
-            workoutTemplateId: authoritative.data.workoutTemplateId,
-            programWeekNumber: authoritative.data.weekNumber,
-            programDayOfWeek: authoritative.data.dayOfWeek,
-            scheduledDate: authoritative.data.scheduledDate,
+            clientProgramId: authoritative.clientProgramId || null,
+            workoutTemplateId: authoritative.workoutTemplateId,
+            programWeekNumber: authoritative.weekNumber,
+            programDayOfWeek: authoritative.dayOfWeek,
+            scheduledDate: authoritative.scheduledDate,
             startedAt: new Date(),
             status: "in_progress",
             completionPercent: 0,

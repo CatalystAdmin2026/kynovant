@@ -1177,6 +1177,7 @@ export default async function ClientWorkspacePage({
           {/* Program Timeline replaces static program card */}
           <ProgramTimeline
             activeProgram={workspace.activeProgram}
+            clientId={clientId}
             programHistory={programHistory}
             emptyStateAction={
               <AssignProgramButton variant="primary" hasActiveProgram={false} />

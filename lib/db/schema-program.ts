@@ -62,6 +62,11 @@ export const workoutSessionStatusEnum = pgEnum("workout_session_status", [
   "skipped",
 ]);
 
+export const workoutReleasePolicyEnum = pgEnum("workout_release_policy", [
+  "daily",
+  "weekly",
+]);
+
 // [Workout set draft autosave] Before this, workout_set_logs had no
 // field distinguishing "the client typed something" from "the client
 // tapped Log" — a row's mere existence WAS the only signal, and
@@ -207,6 +212,9 @@ export const clientPrograms = pgTable(
       .notNull()
       .default(false),
     coachNotes: text("coach_notes"),
+    workoutReleasePolicy: workoutReleasePolicyEnum("workout_release_policy")
+      .notNull()
+      .default("daily"),
     // Lineage snapshot — frozen at assignment time so historical records
     // survive template renames and version increments.
     sourceTemplateName: text("source_template_name"),
@@ -547,3 +555,5 @@ export type ClientProgramStatus =
   (typeof clientProgramStatusEnum.enumValues)[number];
 export type WorkoutSessionStatus =
   (typeof workoutSessionStatusEnum.enumValues)[number];
+export type WorkoutReleasePolicy =
+  (typeof workoutReleasePolicyEnum.enumValues)[number];

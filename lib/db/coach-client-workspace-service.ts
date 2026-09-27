@@ -59,6 +59,7 @@ import {
 import type { HistorySession } from "./workout-session-service";
 import type { ProfileReadiness } from "./profile-readiness";
 import type { TrainingProfile, NutritionProfile, ClientPreference } from "./schema-profile";
+import type { WorkoutReleasePolicy } from "@/lib/workout-release-policy";
 
 // ─────────────────────────────────────────────────────────────
 // PUBLIC TYPES
@@ -149,6 +150,7 @@ export interface ActiveProgramInfo {
   daysRemaining: number | null;
   recommendedDaysPerWeek: number | null;
   programCompletionPct: number | null;
+  workoutReleasePolicy: WorkoutReleasePolicy;
   currentWeekSchedule: WeekDaySchedule[];
 }
 
@@ -315,6 +317,7 @@ export async function getCoachClientWorkspace(
           endDate: clientPrograms.endDate,
           totalWeeks: programTemplates.defaultDurationWeeks,
           recommendedDaysPerWeek: programTemplates.recommendedDaysPerWeek,
+          workoutReleasePolicy: clientPrograms.workoutReleasePolicy,
         })
         .from(clientPrograms)
         .innerJoin(programTemplates, eq(programTemplates.id, clientPrograms.programTemplateId))
@@ -521,6 +524,7 @@ export async function getCoachClientWorkspace(
       daysRemaining,
       recommendedDaysPerWeek: program.recommendedDaysPerWeek ?? null,
       programCompletionPct,
+      workoutReleasePolicy: program.workoutReleasePolicy,
       currentWeekSchedule: weekSchedule,
     };
   }

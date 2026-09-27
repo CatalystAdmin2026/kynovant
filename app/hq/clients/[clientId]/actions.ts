@@ -17,6 +17,9 @@ import { archiveAndAssignProgram } from "@/lib/db/coach-program-assignment-servi
 import { setClientSchedule, setPhotoPolicy } from "@/lib/db/check-in-schedule-service";
 import { validateScheduleWeekdays } from "@/lib/checkin/schedule";
 import type { CheckInPhotoRequirement } from "@/lib/db/schema-check-in";
+import { clientPrograms } from "@/lib/db/schema-program";
+import { updateClientProgram } from "@/lib/db/client-program-service";
+import { WORKOUT_RELEASE_POLICIES, type WorkoutReleasePolicy } from "@/lib/workout-release-policy";
 
 // ─────────────────────────────────────────────────────────────
 // AUTH HELPER
@@ -80,6 +83,39 @@ export async function assignProgramAction(data: {
   }
 
   return result.ok ? { ok: true } : { ok: false, error: result.error };
+}
+
+export async function setWorkoutReleasePolicyAction(data: {
+  clientId: string;
+  assignmentId: string;
+  policy: WorkoutReleasePolicy;
+}): Promise<{ ok: boolean; error?: string }> {
+  if (!data.clientId || !data.assignmentId || !WORKOUT_RELEASE_POLICIES.includes(data.policy)) {
+    return { ok: false, error: "Invalid workout release schedule." };
+  }
+
+  const auth = await assertCoachOwnsClientAction(data.clientId);
+  if (!auth.ok) return { ok: false, error: auth.error };
+
+  const db = getDb();
+  const [assignment] = await db
+    .select({ clientId: clientPrograms.clientId })
+    .from(clientPrograms)
+    .where(
+      and(
+        eq(clientPrograms.id, data.assignmentId),
+        eq(clientPrograms.clientId, data.clientId),
+        eq(clientPrograms.status, "active"),
+      ),
+    )
+    .limit(1);
+  if (!assignment) return { ok: false, error: "Active program not found." };
+
+  await updateClientProgram(data.assignmentId, { workoutReleasePolicy: data.policy });
+  revalidatePath(`/hq/clients/${data.clientId}`);
+  revalidatePath("/portal");
+  revalidatePath("/portal/program");
+  return { ok: true };
 }
 
 // ─────────────────────────────────────────────────────────────

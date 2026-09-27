@@ -16,6 +16,7 @@ import { Card, Badge, EmptyState } from "@/components/ui";
 import type { BadgeVariant } from "@/components/ui";
 import type { ActiveProgramInfo } from "@/lib/db/coach-client-workspace-service";
 import type { ProgramHistoryItem } from "@/lib/db/coach-program-assignment-service";
+import WorkoutReleaseScheduleControl from "./WorkoutReleaseScheduleControl";
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
@@ -161,9 +162,11 @@ function WeekRow({
 
 function ActiveTimeline({
   program,
+  clientId,
   replaceAction,
 }: {
   program: ActiveProgramInfo;
+  clientId: string;
   replaceAction: React.ReactNode;
 }) {
   const totalWeeks = program.totalWeeks ?? 0;
@@ -253,6 +256,11 @@ function ActiveTimeline({
             )}
           </div>
         )}
+        <WorkoutReleaseScheduleControl
+          clientId={clientId}
+          assignmentId={program.id}
+          initialPolicy={program.workoutReleasePolicy}
+        />
       </Card>
 
       {/* Week-by-week timeline */}
@@ -351,6 +359,7 @@ function ProgramHistory({ items }: { items: ProgramHistoryItem[] }) {
 
 interface Props {
   activeProgram: ActiveProgramInfo | null;
+  clientId: string;
   programHistory: ProgramHistoryItem[];
   emptyStateAction: React.ReactNode;
   replaceAction: React.ReactNode;
@@ -358,6 +367,7 @@ interface Props {
 
 export default function ProgramTimeline({
   activeProgram,
+  clientId,
   programHistory,
   emptyStateAction,
   replaceAction,
@@ -385,7 +395,7 @@ export default function ProgramTimeline({
 
   return (
     <div>
-      <ActiveTimeline program={activeProgram} replaceAction={replaceAction} />
+      <ActiveTimeline program={activeProgram} clientId={clientId} replaceAction={replaceAction} />
       <ProgramHistory items={historyItems} />
     </div>
   );

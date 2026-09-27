@@ -22,12 +22,24 @@ interface TodayWorkoutData {
 
 type TodayResult =
   | { kind: "workout"; data: TodayWorkoutData }
+  | {
+      kind: "week";
+      data: { startDate: string; endDate: string; workouts: TodayWorkoutData[] };
+    }
   | { kind: "rest_day" }
   | { kind: "no_program" }
   | { kind: "program_complete" }
   | { kind: "not_started"; data: { startDate: string; daysUntilStart: number; programName: string } };
 
 type View = "today" | "active_session" | "completed";
+
+function formatWorkoutDate(value: string): string {
+  return new Date(`${value}T12:00:00`).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
 
 // ─────────────────────────────────────────────────────────────
 // CARD SHELL — shared visual container for all states
@@ -368,6 +380,53 @@ function WorkoutCard({
   );
 }
 
+function WeeklyWorkoutList({
+  workouts,
+  startDate,
+  endDate,
+  onOpen,
+}: {
+  workouts: TodayWorkoutData[];
+  startDate: string;
+  endDate: string;
+  onOpen: (workout: TodayWorkoutData) => void;
+}) {
+  return (
+    <HeroCard accentGold>
+      <p className="text-[9px] text-[#c9a24d]/55 uppercase tracking-[0.45em] mb-2">
+        This Week
+      </p>
+      <p className="text-white/35 text-xs mb-6">
+        {formatWorkoutDate(startDate)} – {formatWorkoutDate(endDate)}
+      </p>
+      {workouts.length === 0 ? (
+        <p className="text-white/35 text-sm">No workouts are scheduled this week.</p>
+      ) : (
+        <div className="divide-y divide-white/[0.06]">
+          {workouts.map((workout) => (
+            <button
+              key={`${workout.scheduledDate}-${workout.workoutTemplateId}`}
+              type="button"
+              onClick={() => onOpen(workout)}
+              className="w-full py-4 flex items-center gap-4 text-left group"
+            >
+              <span className="w-20 shrink-0 text-[10px] uppercase tracking-[0.12em] text-white/35">
+                {formatWorkoutDate(workout.scheduledDate)}
+              </span>
+              <span className="flex-1 text-sm font-semibold text-white group-hover:text-[#c9a24d] transition-colors">
+                {workout.workoutName}
+              </span>
+              <span className="text-[10px] uppercase tracking-[0.2em] text-[#c9a24d]/60">
+                {workout.existingSessionStatus === "completed" ? "Complete" : "Open →"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </HeroCard>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // LOADING SKELETON
 // ─────────────────────────────────────────────────────────────
@@ -396,6 +455,7 @@ export default function TodayWorkout({ devPreviewState }: { devPreviewState?: st
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [completionPct, setCompletionPct] = useState<number | null>(null);
   const [workoutName, setWorkoutName] = useState<string | null>(null);
+  const [selectedWorkout, setSelectedWorkout] = useState<TodayWorkoutData | null>(null);
 
   useEffect(() => {
     // Dev-only: bypass API and render preview state directly
@@ -442,7 +502,18 @@ export default function TodayWorkout({ devPreviewState }: { devPreviewState?: st
 
   if (!result || result.kind === "rest_day") return <RestDayCard />;
 
-  if (result.kind !== "workout") {
+  if (result.kind === "week" && !selectedWorkout) {
+    return (
+      <WeeklyWorkoutList
+        workouts={result.data.workouts}
+        startDate={result.data.startDate}
+        endDate={result.data.endDate}
+        onOpen={setSelectedWorkout}
+      />
+    );
+  }
+
+  if (result.kind !== "workout" && result.kind !== "week") {
     return (
       <OnboardingCard
         kind={result.kind}
@@ -452,7 +523,7 @@ export default function TodayWorkout({ devPreviewState }: { devPreviewState?: st
     );
   }
 
-  const todayData = result.data;
+  const todayData = result.kind === "workout" ? result.data : selectedWorkout!;
 
   if (view === "active_session" && activeSessionId) {
     return (
@@ -467,7 +538,10 @@ export default function TodayWorkout({ devPreviewState }: { devPreviewState?: st
             setWorkoutName(todayData.workoutName);
             setView("completed");
           }}
-          onCancel={() => setView("today")}
+          onCancel={() => {
+            setView("today");
+            if (result.kind === "week") setSelectedWorkout(null);
+          }}
         />
       </div>
     );
@@ -500,30 +574,59 @@ export default function TodayWorkout({ devPreviewState }: { devPreviewState?: st
         <p className="text-white/22 text-xs leading-relaxed max-w-xs">
           Rest up, hit your targets, and come back stronger.
         </p>
+        {result.kind === "week" && (
+          <button
+            type="button"
+            onClick={() => {
+              setView("today");
+              setSelectedWorkout(null);
+              setActiveSessionId(null);
+              fetch("/api/portal/today-workout")
+                .then((response) => response.json())
+                .then((data: { ok: boolean; result?: TodayResult }) => {
+                  if (data.ok && data.result) setResult(data.result);
+                });
+            }}
+            className="mt-6 border border-[#c9a24d]/35 px-5 py-3 text-[10px] font-bold uppercase tracking-[0.25em] text-[#c9a24d] hover:bg-[#c9a24d]/10"
+          >
+            Back to This Week
+          </button>
+        )}
       </HeroCard>
     );
   }
 
   return (
-    <WorkoutCard
-      data={todayData}
-      onStartWorkout={() => {
-        fetch("/api/portal/today-workout")
-          .then((r) => r.json())
-          .then((d: { ok: boolean; result?: TodayResult }) => {
-            if (d.ok && d.result?.kind === "workout") {
-              const sid = d.result.data.existingSessionId;
-              if (sid) {
-                setActiveSessionId(sid);
-                setView("active_session");
+    <div className="space-y-3">
+      {result.kind === "week" && (
+        <button
+          type="button"
+          onClick={() => setSelectedWorkout(null)}
+          className="text-[10px] uppercase tracking-[0.25em] text-white/35 hover:text-[#c9a24d]"
+        >
+          ← This Week
+        </button>
+      )}
+      <WorkoutCard
+        data={todayData}
+        onStartWorkout={() => {
+          fetch("/api/portal/today-workout")
+            .then((r) => r.json())
+            .then((d: { ok: boolean; result?: TodayResult }) => {
+              if (d.ok && d.result?.kind === "workout") {
+                const sid = d.result.data.existingSessionId;
+                if (sid) {
+                  setActiveSessionId(sid);
+                  setView("active_session");
+                }
               }
-            }
-          });
-      }}
-      onResumeWorkout={(sessionId) => {
-        setActiveSessionId(sessionId);
-        setView("active_session");
-      }}
-    />
+            });
+        }}
+        onResumeWorkout={(sessionId) => {
+          setActiveSessionId(sessionId);
+          setView("active_session");
+        }}
+      />
+    </div>
   );
 }

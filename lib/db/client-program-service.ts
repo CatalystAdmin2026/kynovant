@@ -28,9 +28,15 @@ import {
   workoutSessions,
   type ClientProgram,
   type ClientProgramStatus,
+  type WorkoutReleasePolicy,
   type WorkoutSession as WorkoutSessionRow,
 } from "./schema-program";
 import { getDateInTimezone, getWeekdayInTimezone } from "@/lib/checkin/schedule";
+import {
+  addCalendarDays,
+  canClientAccessScheduledWorkout,
+  getSundayReleaseWindow,
+} from "@/lib/workout-release-policy";
 import {
   workoutTemplateSections,
   workoutTemplateExercises,
@@ -106,6 +112,17 @@ export type TodayResult =
   | { kind: "no_program" }
   | { kind: "program_complete" }
   | { kind: "not_started"; data: NotStartedData };
+
+export type PortalWorkoutResult =
+  | TodayResult
+  | {
+      kind: "week";
+      data: {
+        startDate: string;
+        endDate: string;
+        workouts: TodayWorkout[];
+      };
+    };
 
 export interface AssignProgramInput {
   clientId: string;
@@ -327,6 +344,7 @@ export async function updateClientProgram(
     status?: ClientProgramStatus;
     endDate?: string | null;
     coachNotes?: string | null;
+    workoutReleasePolicy?: WorkoutReleasePolicy;
   },
 ): Promise<ClientProgram> {
   const db = getDb();
@@ -334,6 +352,9 @@ export async function updateClientProgram(
   if (data.status !== undefined) updates.status = data.status;
   if (data.endDate !== undefined) updates.endDate = data.endDate;
   if (data.coachNotes !== undefined) updates.coachNotes = data.coachNotes;
+  if (data.workoutReleasePolicy !== undefined) {
+    updates.workoutReleasePolicy = data.workoutReleasePolicy;
+  }
 
   const [row] = await db
     .update(clientPrograms)
@@ -858,6 +879,139 @@ export async function getTodayWorkout(
       snapshot,
     },
   };
+}
+
+/**
+ * Resolves one client-owned scheduled workout and applies the assignment's
+ * release policy before returning any workout details. This is shared by the
+ * portal read path and the session-creation authorization boundary.
+ */
+export async function getReleasedWorkoutByDate(
+  clientId: string,
+  scheduledDate: string,
+  dbClient?: DbOrTx,
+): Promise<TodayWorkout | null> {
+  const db = dbClient ?? getDb();
+  const assignment = await getClientActiveProgram(clientId, dbClient);
+  if (!assignment) return null;
+
+  const timezone = await getClientTimezone(clientId, dbClient);
+  const todayDate = getDateInTimezone(new Date(), timezone);
+  if (
+    !canClientAccessScheduledWorkout({
+      policy: assignment.workoutReleasePolicy,
+      scheduledDate,
+      todayDate,
+      assignmentClientId: assignment.clientId,
+      requestingClientId: clientId,
+    })
+  ) {
+    return null;
+  }
+
+  const elapsed = daysBetween(assignment.startDate, scheduledDate);
+  if (elapsed < 0) return null;
+  const weekNumber = Math.floor(elapsed / 7) + 1;
+  const dayOfWeek = parseDateOnlyWeekday(scheduledDate);
+
+  const [tmpl] = await db
+    .select({
+      name: programTemplates.name,
+      totalWeeks: programTemplates.defaultDurationWeeks,
+    })
+    .from(programTemplates)
+    .where(eq(programTemplates.id, assignment.programTemplateId))
+    .limit(1);
+  if (!tmpl || (tmpl.totalWeeks !== null && weekNumber > tmpl.totalWeeks)) return null;
+
+  const [slot] = await db
+    .select({
+      workoutTemplateId: clientProgramWeekDays.workoutTemplateId,
+      workoutName: workoutTemplates.name,
+      estimatedDurationMinutes: workoutTemplates.estimatedDurationMinutes,
+    })
+    .from(clientProgramWeeks)
+    .innerJoin(
+      clientProgramWeekDays,
+      eq(clientProgramWeekDays.clientProgramWeekId, clientProgramWeeks.id),
+    )
+    .innerJoin(
+      workoutTemplates,
+      eq(workoutTemplates.id, clientProgramWeekDays.workoutTemplateId),
+    )
+    .where(
+      and(
+        eq(clientProgramWeeks.clientProgramId, assignment.id),
+        eq(clientProgramWeeks.weekNumber, weekNumber),
+        eq(clientProgramWeekDays.dayOfWeek, dayOfWeek),
+      ),
+    )
+    .limit(1);
+  if (!slot?.workoutTemplateId) return null;
+
+  const [existingSession] = await db
+    .select({ id: workoutSessions.id, status: workoutSessions.status })
+    .from(workoutSessions)
+    .where(
+      and(
+        eq(workoutSessions.clientId, clientId),
+        eq(workoutSessions.clientProgramId, assignment.id),
+        eq(workoutSessions.scheduledDate, scheduledDate),
+        eq(workoutSessions.workoutTemplateId, slot.workoutTemplateId),
+      ),
+    )
+    .orderBy(desc(workoutSessions.createdAt))
+    .limit(1);
+
+  return {
+    clientProgramId: assignment.id,
+    programName: tmpl.name,
+    weekNumber,
+    dayOfWeek,
+    totalWeeks: tmpl.totalWeeks ?? 0,
+    workoutTemplateId: slot.workoutTemplateId,
+    workoutName: slot.workoutName,
+    estimatedDurationMinutes: slot.estimatedDurationMinutes,
+    scheduledDate,
+    existingSessionId: existingSession?.id ?? null,
+    existingSessionStatus: existingSession?.status ?? null,
+    snapshot: await buildWorkoutSnapshot(slot.workoutTemplateId),
+  };
+}
+
+function parseDateOnlyWeekday(value: string): number {
+  return new Date(`${value}T00:00:00Z`).getUTCDay();
+}
+
+/** Portal availability while retaining the legacy tagged result for Daily. */
+export async function getPortalWorkoutResult(
+  clientId: string,
+  dbClient?: DbOrTx,
+): Promise<PortalWorkoutResult> {
+  const activeSession = await getActiveWorkoutSession(clientId, dbClient);
+  if (activeSession) return getTodayWorkout(clientId, dbClient);
+
+  const assignment = await getClientActiveProgram(clientId, dbClient);
+  if (!assignment || assignment.workoutReleasePolicy === "daily") {
+    return getTodayWorkout(clientId, dbClient);
+  }
+
+  const timezone = await getClientTimezone(clientId, dbClient);
+  const todayDate = getDateInTimezone(new Date(), timezone);
+  const window = getSundayReleaseWindow(todayDate);
+  const workouts = (
+    await Promise.all(
+      Array.from({ length: 7 }, (_, offset) =>
+        getReleasedWorkoutByDate(
+          clientId,
+          addCalendarDays(window.startDate, offset),
+          dbClient,
+        ),
+      ),
+    )
+  ).filter((workout): workout is TodayWorkout => workout !== null);
+
+  return { kind: "week", data: { ...window, workouts } };
 }
 
 // ─────────────────────────────────────────────────────────────
