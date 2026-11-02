@@ -1180,7 +1180,7 @@ export async function runStagedGeneration(params: StagedGenerationParams): Promi
         // still holds now that a single guard crossing can be followed
         // by up to dayConcurrency (default 5) SEQUENTIAL saveGenerationDay
         // calls, not just one — worst case, the guard permits starting
-        // a batch with as little as dayTimeoutMs (45s) of budget left,
+        // a batch with as little as dayTimeoutMs (currently 90s) of budget left,
         // so a batch that runs the full timeout lands right at the
         // 240s line before persistence even begins. Concluded no
         // change is needed: each saveGenerationDay call here is a

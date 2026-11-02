@@ -220,21 +220,12 @@ export type GenerationOutcome = GenerationSuccess | GenerationFailure;
 //     (production draft 1e39ca9a-c7d5-4e08-9f96-adefda1ba91a's Week 1
 //     call still ran the full 90,007ms without completing) — proof the
 //     problem was call size/complexity, not this number.
-//   DAY   — the staged path's actual per-call unit now. No production
-//     measurement exists yet (no staging provider credentials were
-//     available when this was written — see the architecture report
-//     for this task); reasoned conservatively from the week evidence
-//     instead: a single day's requested output (DAY_MAX_OUTPUT_TOKENS)
-//     is a small fraction of WEEK_MAX_OUTPUT_TOKENS, and the week call
-//     ran a FULL 90s without completing at 8,000 output tokens against
-//     a ~150-candidate catalog — a day-sized call asks for roughly
-//     1/5-1/7 of that content against a narrowed (~30-60 candidate,
-//     see exercise-candidates.ts's narrowCandidatesForDay) catalog.
-//     45s — the SAME number that proved insufficient for a full WEEK
-//     pre-fix — should be generous for something this much smaller,
-//     but this is an estimate, not a measurement: revisit once real
-//     staged latency data exists (Phase 14/21 of the architecture
-//     report explicitly could not be run in that environment either).
+//   DAY   — production Sonnet 5.5 aborted all five concurrent day calls
+//     at the old 45s ceiling (57-110 candidates, zero completed days).
+//     90s gives these bounded calls more time without changing prompts,
+//     schemas, output limits, or programming rules. The staged run's
+//     240s budget guard uses this resolved timeout to pause safely for
+//     resume before the function's configured 300s ceiling.
 //   DAY_REGEN — largest output cap (DAY_REGEN_MAX_OUTPUT_TOKENS) and,
 //     unlike week/day, always exactly one call outside any sequential
 //     loop — no cumulative-duration concern, so it can afford the most
@@ -242,7 +233,7 @@ export type GenerationOutcome = GenerationSuccess | GenerationFailure;
 //     own comment) — untouched.
 export const SHELL_DEFAULT_TIMEOUT_MS = 60_000;
 export const WEEK_DEFAULT_TIMEOUT_MS = 90_000;
-export const DAY_DEFAULT_TIMEOUT_MS = 45_000;
+export const DAY_DEFAULT_TIMEOUT_MS = 90_000;
 export const DAY_REGEN_DEFAULT_TIMEOUT_MS = 120_000;
 
 // Sized from measured output for realistic content at each scope (see

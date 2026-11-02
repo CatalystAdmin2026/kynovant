@@ -18,6 +18,7 @@ import {
   resolveTimeoutMs,
   SHELL_DEFAULT_TIMEOUT_MS,
   WEEK_DEFAULT_TIMEOUT_MS,
+  DAY_DEFAULT_TIMEOUT_MS,
   DAY_REGEN_DEFAULT_TIMEOUT_MS,
 } from "../provider";
 
@@ -41,6 +42,11 @@ describe("resolveTimeoutMs — per-call-type defaults", () => {
   it("shell/week/day-regen have distinct, independently-chosen defaults (not one blanket constant)", () => {
     expect(SHELL_DEFAULT_TIMEOUT_MS).toBeLessThan(WEEK_DEFAULT_TIMEOUT_MS);
     expect(WEEK_DEFAULT_TIMEOUT_MS).toBeLessThan(DAY_REGEN_DEFAULT_TIMEOUT_MS);
+  });
+
+  it("allows day calls past the observed 45s cutoff within the 240s run budget", () => {
+    expect(DAY_DEFAULT_TIMEOUT_MS).toBe(90_000);
+    expect(DAY_DEFAULT_TIMEOUT_MS).toBeLessThan(240_000);
   });
 
   it("the week default clears the observed 45s production failure cutoff with real margin", () => {
